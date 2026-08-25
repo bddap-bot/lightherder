@@ -65,14 +65,15 @@ struct Tap {
     /// rgb: routing weight x splitter weight x camera gain, per channel.
     /// a: the source monitor's layer index.
     weight: [f32; 4],
-    /// The halo's two source-uv steps: xy for one bloom radius across the
-    /// camera's image, zw for one up it. Worked out here rather than in the
-    /// shader because the tap's affine already carries the camera's zoom and
-    /// turn, and a lens's halo is round in the camera's image — not in the
-    /// monitor's, which the camera may be viewing at any angle.
+    /// The lens: xy and zw are the source-uv steps for one bloom radius
+    /// across and down the camera's image. Worked out here rather than in
+    /// the shader because the tap's affine already carries the camera's zoom
+    /// and turn, and a lens's halo is round in the camera's image — not in
+    /// the monitor's, which the camera may be viewing at any angle.
     halo: [f32; 4],
     /// xy: the source-uv step for one chroma-bleed offset along the
-    /// scanline, mapped the same way. z: the bloom fraction. w: padding.
+    /// scanline, mapped the same way. zw: the fraction of the light the lens
+    /// scatters, and padding.
     bleed: [f32; 4],
 }
 
@@ -91,9 +92,14 @@ struct Uniforms {
     levels: [f32; 4],
     /// x: tap count. y: this monitor's own layer, for the present pass.
     info: [f32; 4],
-    /// x: grain amplitude, summed over the cameras the switcher routes here.
-    /// y: the amplifier's headroom. z: a frame counter, so the grain moves.
-    character: [f32; 4],
+    /// The analog stage's per-monitor lanes, which are not [`Character`]'s
+    /// fields — those are per camera and ride the taps. x: grain amplitude,
+    /// summed over the cameras the switcher routes here. y: the amplifier's
+    /// headroom. z: a frame counter, so the grain moves.
+    analog: [f32; 4],
+    /// NTSC luma, from [`crate::params::luma_row`]. Passed rather than
+    /// written into the shader so there is one copy of it in the crate.
+    luma: [f32; 4],
     taps: [Tap; MAX_TAPS],
 }
 
@@ -199,10 +205,13 @@ impl Feedback {
                         // One buffer, one slot per monitor: the offset picks
                         // the monitor.
                         has_dynamic_offset: true,
-                        // Makes wgpu check this struct's size against the one
-                        // the shader declares, at pipeline creation: a member
-                        // added to one side and not the other fails loudly
-                        // instead of silently misreading every lane after it.
+                        // Checked against the size the shader declares, at
+                        // pipeline creation — but only in one direction:
+                        // wgpu rejects a binding SMALLER than the shader
+                        // wants, so this catches a member added to the WGSL
+                        // and forgotten here. The other way round is on the
+                        // reviewer, and is why every lane above is named on
+                        // both sides.
                         min_binding_size: wgpu::BufferSize::new(
                             std::mem::size_of::<Uniforms>() as u64
                         ),
@@ -390,6 +399,9 @@ impl Feedback {
                         rows[1][1] * dy,
                     ]
                 };
+                // Only the scanline direction is kept for the bleed:
+                // composite band-limits chroma in time, and time along a
+                // scanline is across the camera's image.
                 let halo = step(camera.character.bloom_radius);
                 let bleed = step(camera.character.chroma_bleed);
                 taps[count] = Tap {
@@ -397,8 +409,6 @@ impl Feedback {
                     row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
                     weight: [w * gain[0], w * gain[1], w * gain[2], src as f32],
                     halo,
-                    // Only the scanline direction: composite video band-limits
-                    // chroma in time, and time along a scanline is horizontal.
                     bleed: [bleed[0], bleed[1], camera.character.bloom, 0.0],
                 };
                 count += 1;
@@ -407,12 +417,15 @@ impl Feedback {
             // Every camera the switcher routes here contributes its own
             // grain, scaled by how much of it this monitor is shown. Its
             // splitter does not come into it: the grain is the sensor's and
-            // the cable's, added after the glass.
+            // the cable's, added after the glass. Summed in quadrature,
+            // because two sensors are two independent noise sources and
+            // adding their amplitudes would overstate the pair by 40%.
             let grain: f32 = params.routing[m]
                 .iter()
                 .zip(&params.cameras)
-                .map(|(route, camera)| route * camera.character.noise)
-                .sum();
+                .map(|(route, camera)| (route * camera.character.noise).powi(2))
+                .sum::<f32>()
+                .sqrt();
 
             let chroma = monitor.colour.chroma_matrix();
             let uniforms = Uniforms {
@@ -429,7 +442,11 @@ impl Feedback {
                     monitor.seed_brightness,
                 ],
                 info: [count as f32, m as f32, 0.0, 0.0],
-                character: [grain, monitor.headroom, self.frame as f32, 0.0],
+                analog: [grain, monitor.headroom, self.frame as f32, 0.0],
+                luma: {
+                    let l = crate::params::luma_row();
+                    [l[0], l[1], l[2], 0.0]
+                },
                 taps,
             };
             queue.write_buffer(

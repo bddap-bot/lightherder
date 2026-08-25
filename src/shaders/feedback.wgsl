@@ -11,7 +11,7 @@ struct Tap {
     row1: vec4<f32>,
     // rgb: routing x splitter x gain, per channel. a: source layer.
     weight: vec4<f32>,
-    // Source-uv steps for one bloom radius across (xy) and up (zw) the
+    // Source-uv steps for one bloom radius across (xy) and down (zw) the
     // camera's image. See feedback::Tap.
     halo: vec4<f32>,
     // xy: source-uv step for one chroma-bleed offset along the scanline.
@@ -30,15 +30,15 @@ struct Uniforms {
     // x: tap count. y: this monitor's own layer, for fs_present.
     info: vec4<f32>,
     // x: grain amplitude. y: the amplifier's headroom. z: frame counter.
-    character: vec4<f32>,
+    analog: vec4<f32>,
+    // xyz: FCC NTSC luma, handed over rather than written here so the crate
+    // has one copy of it. The weights sum to one, so adding the same amount
+    // to all three channels moves luma by exactly that and leaves the chroma
+    // subcarrier untouched — which is how the bleed puts one signal's colour
+    // on another's detail without a matrix.
+    luma: vec4<f32>,
     taps: array<Tap, 32>,
 };
-
-// FCC NTSC luma. The weights sum to one, so adding the same amount to all
-// three channels moves luma by exactly that and leaves the chroma subcarrier
-// untouched — which is how the bleed puts one signal's colour on another's
-// detail without a matrix. Same row 0 as params::DECODE.
-const LUMA = vec3<f32>(0.299, 0.587, 0.114);
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var src_tex: texture_2d_array<f32>;
@@ -77,7 +77,7 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
     // monitor to flat white — the half-float target has headroom the eye
     // never gets to see. Both arms are evaluated: the divide by a channel at
     // zero gives an infinity the select discards.
-    let h = u.character.y;
+    let h = u.analog.y;
     let limited = select(
         h - h * h / (4.0 * amplified),
         amplified,
@@ -89,15 +89,16 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
     return pow(max(limited, vec3<f32>(0.0)), vec3<f32>(u.levels.z));
 }
 
-// What one camera sees of one source monitor at one point. Past a monitor's
+// What one camera sees of one source monitor at one point — the sampling,
+// not `Camera::look`, whose splitter weights are already folded into
+// `tap.weight`. Past a monitor's
 // edge the camera sees an unlit room, but a clamped sampler returns the
 // border texel there, which would smear across the frame.
 //
 // textureSampleLevel, not textureSample, throughout this shader: the monitor
 // textures have a single mip level, so the derivatives textureSample computes
-// go nowhere — and not needing them is what lets the character samples below
-// be skipped on a path that has none.
-fn look(uv: vec2<f32>, layer: i32) -> vec3<f32> {
+// go nowhere.
+fn seen_at(uv: vec2<f32>, layer: i32) -> vec3<f32> {
     let inside = all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0));
     return select(
         vec3<f32>(0.0),
@@ -125,25 +126,25 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
         let tap = u.taps[t];
         let src_uv = vec2<f32>(dot(tap.row0.xyz, p), dot(tap.row1.xyz, p));
         let layer = i32(tap.weight.a);
-        let raw = look(src_uv, layer);
+        let raw = seen_at(src_uv, layer);
 
         // The lens scatters some of the light into a ring instead of
         // focusing it. `mix`, not an add: a term that adds light is a term
         // the loop multiplies. A four-point ring is a crude halo, but the
         // loop turns and rescales it every pass, which is what fills it in.
         //
-        // Applied per tap, so a camera looking through a splitter blooms each
-        // monitor separately rather than their blend. The two differ only
-        // where one source is dark and the other is not: everywhere else the
-        // scatter is linear and the sum comes out the same.
+        // Applied per tap, and that costs nothing: every stage below is
+        // affine in the samples, and a camera's taps share one affine and one
+        // set of offsets, so blooming a splitter's two sources separately and
+        // blooming their blend give the same answer exactly.
         let bloom = tap.bleed.z;
         var halo = raw;
         if bloom > 0.0 {
             halo = 0.25
-                * (look(src_uv + tap.halo.xy, layer)
-                    + look(src_uv - tap.halo.xy, layer)
-                    + look(src_uv + tap.halo.zw, layer)
-                    + look(src_uv - tap.halo.zw, layer));
+                * (seen_at(src_uv + tap.halo.xy, layer)
+                    + seen_at(src_uv - tap.halo.xy, layer)
+                    + seen_at(src_uv + tap.halo.zw, layer)
+                    + seen_at(src_uv - tap.halo.zw, layer));
         }
         let lens = mix(raw, halo, bloom);
 
@@ -155,12 +156,12 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
         var signal = lens;
         if any(tap.bleed.xy != vec2<f32>(0.0)) {
             let smeared = mix(
-                (raw + look(src_uv + tap.bleed.xy, layer) + look(src_uv - tap.bleed.xy, layer))
+                (raw + seen_at(src_uv + tap.bleed.xy, layer) + seen_at(src_uv - tap.bleed.xy, layer))
                     / 3.0,
                 halo,
                 bloom,
             );
-            signal = smeared + vec3<f32>(dot(LUMA, lens) - dot(LUMA, smeared));
+            signal = smeared + vec3<f32>(dot(u.luma.xyz, lens) - dot(u.luma.xyz, smeared));
         }
         fed_back += signal * tap.weight.rgb;
     }
@@ -168,7 +169,7 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
     // Grain from the sensors and cables feeding this monitor, in before the
     // front panel because that is where it joins the signal. Monochrome: it
     // is luma noise, and the chroma knobs do nothing to grey.
-    let grain = u.character.x * grain_at(vec2<u32>(in.pos.xy), u32(u.character.z));
+    let grain = u.analog.x * grain_at(vec2<u32>(in.pos.xy), u32(u.analog.z));
 
     let d = length((in.uv - u.seed.xy) / u.seed.zw);
     let seed = u.levels.a * exp(-d * d);

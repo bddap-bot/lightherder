@@ -196,8 +196,7 @@ mod tests {
         assert_eq!(action_for(KeyCode::Space), Some(Action::Clear));
         assert_eq!(action_for(KeyCode::KeyR), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape), Some(Action::Quit));
-        // A key no table claims. Function keys are the only ones this
-        // instrument will never want.
+        // A key no table claims.
         assert_eq!(action_for(KeyCode::F1), None);
     }
 
