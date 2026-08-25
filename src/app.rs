@@ -10,7 +10,7 @@ use winit::window::{Window, WindowId};
 
 use crate::feedback::Feedback;
 use crate::keys::{action_for, Action};
-use crate::params::Params;
+use crate::params::{Focus, Params};
 use crate::present::Present;
 
 /// Every monitor is a fixed size, independent of the window. Resizing the
@@ -34,7 +34,7 @@ pub struct App {
     /// preset's knobs.
     initial: Params,
     /// The camera and monitor the knobs act on.
-    focus: (usize, usize),
+    focus: Focus,
     live: Option<Live>,
 }
 
@@ -45,7 +45,7 @@ pub fn run(params: Params) -> Result<(), winit::error::EventLoopError> {
     event_loop.run_app(&mut App {
         initial: params.clone(),
         params,
-        focus: (0, 0),
+        focus: Focus::default(),
         live: None,
     })
 }
@@ -152,7 +152,7 @@ impl Live {
 
 impl App {
     fn describe(&self) -> String {
-        self.params.describe(self.focus.0, self.focus.1)
+        self.params.describe(self.focus)
     }
 }
 
@@ -196,15 +196,15 @@ impl ApplicationHandler for App {
                 // Repeats are wanted: holding a key sweeps its knob.
                 match action_for(code) {
                     Some(Action::Nudge(knob, delta)) => {
-                        self.params.nudge(knob, delta, self.focus.0, self.focus.1);
+                        self.params.nudge(knob, delta, self.focus);
                         log::info!("{}", self.describe());
                     }
                     Some(Action::NextCamera) => {
-                        self.focus.0 = (self.focus.0 + 1) % self.params.cameras.len();
+                        self.focus.camera = (self.focus.camera + 1) % self.params.cameras.len();
                         log::info!("{}", self.describe());
                     }
                     Some(Action::NextMonitor) => {
-                        self.focus.1 = (self.focus.1 + 1) % self.params.monitors.len();
+                        self.focus.monitor = (self.focus.monitor + 1) % self.params.monitors.len();
                         log::info!("{}", self.describe());
                     }
                     Some(Action::Reset) => {

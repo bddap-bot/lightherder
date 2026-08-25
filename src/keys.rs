@@ -130,7 +130,7 @@ pub fn help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::Params;
+    use crate::params::{Focus, Params};
 
     fn every_key() -> Vec<KeyCode> {
         AXES.iter()
@@ -176,7 +176,7 @@ mod tests {
         let Some(Action::Nudge(knob, delta)) = action_for(KeyCode::Equal) else {
             panic!("= should nudge a knob")
         };
-        p.nudge(knob, delta, 0, 0);
+        p.nudge(knob, delta, Focus::default());
         let zoom = p.cameras[0].framing.zoom;
         assert!((zoom - (before + Knob::Zoom.increment())).abs() < 1e-6);
     }

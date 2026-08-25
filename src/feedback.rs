@@ -31,6 +31,29 @@ const SEED_CENTRE: [f32; 2] = [0.25, 0.0];
 /// through a four-way splitter on top. `config::validate` holds the line.
 pub const MAX_TAPS: usize = 32;
 
+/// The edges of monitor `m`'s pass: (camera, source monitor, routing weight
+/// times splitter weight). The one definition of which edges become taps —
+/// `config::validate` counts these against [`MAX_TAPS`] and [`Feedback::step`]
+/// writes them, so the two cannot drift apart on the zero-weight rule. Note
+/// for the increment that makes routing or look weights live-mutable:
+/// validate-at-load stops bounding the tap count the moment a zero weight can
+/// be swept positive mid-performance, and the bound must move to the nudge.
+pub(crate) fn taps_of(params: &Params, m: usize) -> impl Iterator<Item = (usize, usize, f32)> + '_ {
+    params.routing[m]
+        .iter()
+        .zip(&params.cameras)
+        .enumerate()
+        .filter(|(_, (route, _))| **route > 0.0)
+        .flat_map(|(c, (route, camera))| {
+            camera
+                .look
+                .iter()
+                .enumerate()
+                .filter(|(_, look)| **look > 0.0)
+                .map(move |(src, look)| (c, src, route * look))
+        })
+}
+
 /// One flattened edge of the graph, mirrored in `shaders/feedback.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -312,6 +335,14 @@ impl Feedback {
             self.monitors,
             "the graph's monitor count is baked into the textures at creation"
         );
+        // Everything else the tap flattening assumes — row lengths, weight
+        // signs, the tap cap — is the loader's contract, re-asserted here so
+        // a hand-built Params that skipped `config::load` fails loudly
+        // instead of sampling the wrong layer. Cheap: a few dozen float
+        // compares per frame, no allocation on the success path.
+        if let Err(why) = crate::config::validate(params) {
+            panic!("unvalidated params reached the GPU: {why}");
+        }
         let aspect = self.aspect();
         let seed = self.seed_uv();
 
@@ -323,30 +354,17 @@ impl Feedback {
             .map(|camera| sample_transform(&camera.framing, aspect).rows())
             .collect();
 
-        for (m, (monitor, row)) in params.monitors.iter().zip(&params.routing).enumerate() {
+        for (m, monitor) in params.monitors.iter().enumerate() {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
-            for ((route, camera), rows) in row.iter().zip(&params.cameras).zip(&framings) {
-                if *route <= 0.0 {
-                    continue;
-                }
-                for (src, look) in camera.look.iter().enumerate() {
-                    if *look <= 0.0 {
-                        continue;
-                    }
-                    let w = route * look;
-                    taps[count] = Tap {
-                        row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
-                        row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
-                        weight: [
-                            w * camera.gain[0],
-                            w * camera.gain[1],
-                            w * camera.gain[2],
-                            src as f32,
-                        ],
-                    };
-                    count += 1;
-                }
+            for (c, src, w) in taps_of(params, m) {
+                let (rows, gain) = (&framings[c], params.cameras[c].gain);
+                taps[count] = Tap {
+                    row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
+                    row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
+                    weight: [w * gain[0], w * gain[1], w * gain[2], src as f32],
+                };
+                count += 1;
             }
 
             let chroma = monitor.colour.chroma_matrix();

@@ -65,8 +65,11 @@ impl Present {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
+            // Every cell is the same size, so one fit serves them all — and
+            // cells too small to hold a viewport skip the lot.
+            let fitted = fit(cell, monitors.aspect());
             for m in 0..monitors.monitors() {
-                let Some((x, y, width, height)) = fit(cell, monitors.aspect()) else {
+                let Some((x, y, width, height)) = fitted else {
                     continue;
                 };
                 let (col, row) = (m as u32 % cols, m as u32 / cols);
@@ -136,7 +139,7 @@ mod tests {
 
     #[test]
     fn the_grid_holds_every_monitor_and_stays_square() {
-        for monitors in 1..=8 {
+        for monitors in 1..=crate::config::MAX_MONITORS {
             let (cols, rows) = grid(monitors);
             assert!(cols * rows >= monitors as u32, "{monitors} monitors");
             assert!(cols.abs_diff(rows) <= 1, "{monitors}: {cols}x{rows}");

@@ -158,6 +158,15 @@ impl Default for Params {
     }
 }
 
+/// Which camera and which monitor the knobs act on. Named fields on purpose:
+/// two bare `usize`s in a row would let a swapped pair compile and silently
+/// edit the wrong node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Focus {
+    pub camera: usize,
+    pub monitor: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Knob {
     Zoom,
@@ -290,18 +299,18 @@ impl Knob {
 impl Params {
     /// Turn `knob` on the focused camera or monitor — its side of the graph
     /// decides which of the two indices it follows.
-    pub fn nudge(&mut self, knob: Knob, delta: f32, camera: usize, monitor: usize) {
+    pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
         // The rigid gain knob is the one that is not a single value: clamp its
         // step once against the tightest channel, so hitting the rail slides
         // all three together instead of flattening the colour offsets.
         if knob == Knob::Gain {
-            let step = rigid_gain_step(&self.cameras[camera].gain, delta);
+            let step = rigid_gain_step(&self.cameras[focus.camera].gain, delta);
             for channel in [Knob::GainR, Knob::GainG, Knob::GainB] {
-                self.nudge(channel, step, camera, monitor);
+                self.nudge(channel, step, focus);
             }
             return;
         }
-        let field = self.knob_mut(knob, camera, monitor);
+        let field = self.knob_mut(knob, focus);
         *field = match knob.limit() {
             Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
             Limit::Wrap => wrap_pi(*field + delta),
@@ -309,9 +318,9 @@ impl Params {
     }
 
     /// The value a knob turns, for the knobs that are a single number.
-    fn knob_mut(&mut self, knob: Knob, camera: usize, monitor: usize) -> &mut f32 {
+    fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
         if knob.is_camera() {
-            let cam = &mut self.cameras[camera];
+            let cam = &mut self.cameras[focus.camera];
             match knob {
                 Knob::Zoom => &mut cam.framing.zoom,
                 Knob::Rotation => &mut cam.framing.rotation,
@@ -324,7 +333,7 @@ impl Params {
                 _ => unreachable!("is_camera() said so"),
             }
         } else {
-            let mon = &mut self.monitors[monitor];
+            let mon = &mut self.monitors[focus.monitor];
             match knob {
                 Knob::Seed => &mut mon.seed_brightness,
                 Knob::Hue => &mut mon.colour.hue,
@@ -339,13 +348,13 @@ impl Params {
 
     /// The focused camera and monitor, every knob's value in one line: the
     /// only readout the instrument has.
-    pub fn describe(&self, camera: usize, monitor: usize) -> String {
-        let cam = &self.cameras[camera];
-        let mon = &self.monitors[monitor];
+    pub fn describe(&self, focus: Focus) -> String {
+        let cam = &self.cameras[focus.camera];
+        let mon = &self.monitors[focus.monitor];
         format!(
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  |  \
              mon {}/{}: seed {:.3}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  gamma {:.3}",
-            camera + 1,
+            focus.camera + 1,
             self.cameras.len(),
             cam.framing.zoom,
             cam.framing.rotation,
@@ -354,7 +363,7 @@ impl Params {
             cam.gain[0],
             cam.gain[1],
             cam.gain[2],
-            monitor + 1,
+            focus.monitor + 1,
             self.monitors.len(),
             mon.seed_brightness,
             mon.colour.hue,
@@ -396,7 +405,7 @@ mod tests {
     }
 
     fn nudge(p: &mut Params, knob: Knob, delta: f32) {
-        p.nudge(knob, delta, 0, 0);
+        p.nudge(knob, delta, Focus::default());
     }
 
     #[test]
@@ -476,8 +485,22 @@ mod tests {
         // lands on camera 1 and nowhere else, and a monitor knob on monitor 0.
         let mut params = crate::config::crossed();
         let before = params.clone();
-        params.nudge(Knob::Zoom, 0.01, 1, 0);
-        params.nudge(Knob::Hue, 0.02, 1, 0);
+        params.nudge(
+            Knob::Zoom,
+            0.01,
+            Focus {
+                camera: 1,
+                monitor: 0,
+            },
+        );
+        params.nudge(
+            Knob::Hue,
+            0.02,
+            Focus {
+                camera: 1,
+                monitor: 0,
+            },
+        );
         assert_eq!(params.cameras[0], before.cameras[0]);
         assert_ne!(params.cameras[1].framing, before.cameras[1].framing);
         assert_ne!(params.monitors[0].colour, before.monitors[0].colour);
@@ -521,10 +544,10 @@ mod tests {
         // missing from it is a knob that cannot be played.
         for knob in Knob::ALL {
             let mut params = p();
-            let before = params.describe(0, 0);
+            let before = params.describe(Focus::default());
             nudge(&mut params, knob, 0.05);
             assert_ne!(
-                params.describe(0, 0),
+                params.describe(Focus::default()),
                 before,
                 "{} is not in the log line",
                 knob.name()
@@ -535,8 +558,18 @@ mod tests {
     #[test]
     fn the_log_line_names_the_focus() {
         let params = crate::config::crossed();
-        assert!(params.describe(1, 0).contains("cam 2/2"));
-        assert!(params.describe(1, 0).contains("mon 1/2"));
+        assert!(params
+            .describe(Focus {
+                camera: 1,
+                monitor: 0
+            })
+            .contains("cam 2/2"));
+        assert!(params
+            .describe(Focus {
+                camera: 1,
+                monitor: 0
+            })
+            .contains("mon 1/2"));
     }
 
     /// Settings that between them exercise both signs of the phase, a

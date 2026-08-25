@@ -1267,3 +1267,11 @@ fn the_shipped_presets_settle_without_clipping() {
         }
     }
 }
+
+#[test]
+fn the_single_shim_is_the_single_preset() {
+    // The shim copies the preset's values but hardcodes its wiring; this is
+    // what notices if `single()` ever rewires and leaves the suite testing a
+    // graph the instrument no longer ships.
+    assert_eq!(graph(&Single::default()), lightherder::config::single());
+}
