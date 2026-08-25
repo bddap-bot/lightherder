@@ -2,17 +2,18 @@
 //! the same values a keyboard does.
 
 use crate::affine::Framing;
-use core::ops::RangeInclusive;
 
 /// Everything the feedback pass needs to know for one frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Params {
     pub framing: Framing,
-    /// Per-channel gain applied once per pass. Below 1.0 the image dies out,
-    /// above 1.0 it blooms; the channels differ to colour the trails.
+    /// Per-channel gain applied once per pass. With the seed off, below 1.0
+    /// the image dies out and above 1.0 it blooms; with the seed on the loop
+    /// settles instead, brighter the closer the gain is to 1.0. The channels
+    /// differ to colour the trails.
     pub loop_gain: [f32; 3],
-    /// Brightness of the spot injected at the centre, which is the only thing
-    /// keeping a sub-unity loop alive.
+    /// Brightness of the seed spot, which is the only thing keeping a
+    /// sub-unity loop alive.
     pub seed_brightness: f32,
 }
 
@@ -48,6 +49,13 @@ pub enum Knob {
     Seed,
 }
 
+/// What a knob does when it runs out of room.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Limit {
+    Clamp(f32, f32),
+    Wrap,
+}
+
 impl Knob {
     pub const ALL: [Knob; 9] = [
         Knob::Zoom,
@@ -61,76 +69,85 @@ impl Knob {
         Knob::Seed,
     ];
 
-    /// One key press worth of this knob. Zoom and gain are the sensitive
-    /// ones: a few thousandths decides whether the loop collapses, stands
-    /// still or runs away.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Knob::Zoom => "zoom",
+            Knob::Rotation => "rotation",
+            Knob::TranslateX => "pan x",
+            Knob::TranslateY => "pan y",
+            Knob::Gain => "loop gain",
+            Knob::GainR => "loop gain, red",
+            Knob::GainG => "loop gain, green",
+            Knob::GainB => "loop gain, blue",
+            Knob::Seed => "seed brightness",
+        }
+    }
+
+    /// One key press worth of this knob. Rotation is the coarse one: a
+    /// thousandth of a radian per press would be imperceptible.
     pub const fn increment(self) -> f32 {
         match self {
             Knob::Rotation => 0.005,
+            Knob::Seed => 0.005,
             _ => 0.002,
         }
     }
 
-    /// Hard limits, or `None` for a knob that wraps rather than stopping.
-    pub fn range(self) -> Option<RangeInclusive<f32>> {
+    pub const fn limit(self) -> Limit {
         match self {
             // Zero would divide by zero in the sampling transform.
-            Knob::Zoom => Some(0.25..=4.0),
-            Knob::Rotation => None,
-            Knob::TranslateX | Knob::TranslateY => Some(-1.0..=1.0),
-            Knob::Gain | Knob::GainR | Knob::GainG | Knob::GainB => Some(0.0..=1.2),
-            Knob::Seed => Some(0.0..=0.25),
+            Knob::Zoom => Limit::Clamp(0.25, 4.0),
+            // Spinning one way for long enough must not run the number away.
+            Knob::Rotation => Limit::Wrap,
+            Knob::TranslateX | Knob::TranslateY => Limit::Clamp(-1.0, 1.0),
+            Knob::Gain | Knob::GainR | Knob::GainG | Knob::GainB => Limit::Clamp(0.0, 1.2),
+            Knob::Seed => Limit::Clamp(0.0, 1.0),
         }
     }
 }
 
 impl Params {
     pub fn nudge(&mut self, knob: Knob, delta: f32) {
-        match knob {
-            Knob::Rotation => self.framing.rotation = wrap_pi(self.framing.rotation + delta),
-            // Clamp the step once against the tightest channel, so hitting the
-            // rail slides all three together instead of flattening the colour
-            // offsets the user dialled in.
-            Knob::Gain => {
-                let step = self.rigid_gain_step(delta);
-                for channel in [Knob::GainR, Knob::GainG, Knob::GainB] {
-                    self.nudge(channel, step);
-                }
+        // The rigid gain knob is the one that is not a single value: clamp its
+        // step once against the tightest channel, so hitting the rail slides
+        // all three together instead of flattening the colour offsets.
+        if knob == Knob::Gain {
+            let step = self.rigid_gain_step(delta);
+            for channel in [Knob::GainR, Knob::GainG, Knob::GainB] {
+                self.nudge(channel, step);
             }
-            knob => {
-                if let (Some(field), Some(range)) = (self.knob_mut(knob), knob.range()) {
-                    *field = (*field + delta).clamp(*range.start(), *range.end());
-                }
-            }
+            return;
         }
+        let field = self.knob_mut(knob).expect("only Gain has no single value");
+        *field = match knob.limit() {
+            Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
+            Limit::Wrap => wrap_pi(*field + delta),
+        };
     }
 
     /// The value a knob turns, for the knobs that are a single number.
     fn knob_mut(&mut self, knob: Knob) -> Option<&mut f32> {
         match knob {
             Knob::Zoom => Some(&mut self.framing.zoom),
+            Knob::Rotation => Some(&mut self.framing.rotation),
             Knob::TranslateX => Some(&mut self.framing.translate[0]),
             Knob::TranslateY => Some(&mut self.framing.translate[1]),
             Knob::GainR => Some(&mut self.loop_gain[0]),
             Knob::GainG => Some(&mut self.loop_gain[1]),
             Knob::GainB => Some(&mut self.loop_gain[2]),
             Knob::Seed => Some(&mut self.seed_brightness),
-            Knob::Rotation | Knob::Gain => None,
+            Knob::Gain => None,
         }
     }
 
     fn rigid_gain_step(&self, delta: f32) -> f32 {
-        let range = Knob::Gain.range().expect("gain is bounded");
+        let Limit::Clamp(low, high) = Knob::Gain.limit() else {
+            unreachable!("gain clamps")
+        };
         let headroom = self
             .loop_gain
             .iter()
-            .map(|c| {
-                if delta >= 0.0 {
-                    range.end() - c
-                } else {
-                    c - range.start()
-                }
-            })
+            .map(|c| if delta >= 0.0 { high - c } else { c - low })
             .fold(f32::INFINITY, f32::min)
             .max(0.0);
         delta.abs().min(headroom) * delta.signum()
@@ -182,7 +199,7 @@ mod tests {
         }
         assert_eq!(p.framing.zoom, 4.0);
         assert_eq!(p.loop_gain, [1.2; 3]);
-        assert_eq!(p.seed_brightness, 0.25);
+        assert_eq!(p.seed_brightness, 1.0);
         assert_eq!(p.framing.translate, [1.0, 1.0]);
 
         for _ in 0..10_000 {
@@ -195,7 +212,19 @@ mod tests {
         assert_eq!(p.seed_brightness, 0.0);
         assert_eq!(p.framing.translate, [-1.0, -1.0]);
     }
-
+    #[test]
+    fn the_rigid_gain_knob_moves_the_way_it_is_pushed() {
+        let mut p = Params::default();
+        let before = p.loop_gain;
+        p.nudge(Knob::Gain, -0.01);
+        for (after, before) in p.loop_gain.iter().zip(before) {
+            assert!(*after < before, "down should lower {before}, got {after}");
+        }
+        p.nudge(Knob::Gain, 0.02);
+        for (after, before) in p.loop_gain.iter().zip(before) {
+            assert!(*after > before, "up should raise {before}, got {after}");
+        }
+    }
     #[test]
     fn the_rigid_gain_knob_keeps_its_colour_offsets_at_the_rail() {
         let mut p = Params::default();

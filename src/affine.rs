@@ -80,6 +80,24 @@ pub struct Framing {
     pub translate: [f32; 2],
 }
 
+/// Centred, y-up and normalised to the monitor's height — the space the
+/// framing numbers are expressed in, so a pan of 0.25 means the same fraction
+/// of the monitor's height whatever its shape.
+pub fn uv_to_screen(aspect: f32) -> Affine2 {
+    Affine2 {
+        m: [[aspect, 0.0], [0.0, -1.0]],
+        t: [-0.5 * aspect, 0.5],
+    }
+}
+
+/// The inverse of [`uv_to_screen`].
+pub fn screen_to_uv(aspect: f32) -> Affine2 {
+    Affine2 {
+        m: [[1.0 / aspect, 0.0], [0.0, -1.0]],
+        t: [0.5, 0.5],
+    }
+}
+
 /// UV -> UV map from a destination texel to the source texel the camera saw
 /// there, i.e. the inverse of the framing.
 ///
@@ -87,23 +105,15 @@ pub struct Framing {
 /// height, so rotation stays circular on a non-square monitor and the framing
 /// numbers mean the same thing at any resolution.
 pub fn sample_transform(framing: &Framing, aspect: f32) -> Affine2 {
-    let to_screen = Affine2 {
-        m: [[aspect, 0.0], [0.0, -1.0]],
-        t: [-0.5 * aspect, 0.5],
-    };
-    let from_screen = Affine2 {
-        m: [[1.0 / aspect, 0.0], [0.0, -1.0]],
-        t: [0.5, 0.5],
-    };
     let inv_zoom = 1.0 / framing.zoom;
-    to_screen
+    uv_to_screen(aspect)
         .then(&Affine2::translation(
             -framing.translate[0],
             -framing.translate[1],
         ))
         .then(&Affine2::rotation(-framing.rotation))
         .then(&Affine2::scale(inv_zoom, inv_zoom))
-        .then(&from_screen)
+        .then(&screen_to_uv(aspect))
 }
 
 #[cfg(test)]
@@ -131,6 +141,22 @@ mod tests {
         assert!(close(a.then(&b).apply(p), b.apply(a.apply(p))));
     }
 
+    #[test]
+    fn the_screen_and_uv_maps_are_inverses() {
+        for aspect in [1.0, 16.0 / 9.0, 0.5] {
+            for p in [[0.0, 0.0], [1.0, 1.0], [0.3, 0.7]] {
+                let round_trip = screen_to_uv(aspect).apply(uv_to_screen(aspect).apply(p));
+                assert!(
+                    close(round_trip, p),
+                    "aspect {aspect}: {p:?} -> {round_trip:?}"
+                );
+            }
+        }
+        // The convention itself: the centre of the monitor is the origin, and
+        // screen y is up while uv v is down.
+        assert!(close(uv_to_screen(1.0).apply([0.5, 0.5]), [0.0, 0.0]));
+        assert!(close(uv_to_screen(1.0).apply([0.5, 0.0]), [0.0, 0.5]));
+    }
     #[test]
     fn identity_framing_samples_where_it_draws() {
         let t = sample_transform(&framing(1.0, 0.0, [0.0, 0.0]), 16.0 / 9.0);

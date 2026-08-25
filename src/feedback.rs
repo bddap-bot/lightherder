@@ -5,7 +5,7 @@ use crate::params::Params;
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
-pub const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Radius of the seed spot, in screen units where the monitor is 1.0 tall.
 const SEED_RADIUS: f32 = 0.06;
@@ -167,10 +167,10 @@ impl Feedback {
     /// Where the seed spot lands, in uv. The loop is driven from here, so
     /// anything measuring the instrument needs to know it.
     pub fn seed_uv(&self) -> [f32; 2] {
-        [0.5 + SEED_CENTRE[0] / self.aspect(), 0.5 - SEED_CENTRE[1]]
+        crate::affine::screen_to_uv(self.aspect()).apply(SEED_CENTRE)
     }
 
-    pub fn aspect(&self) -> f32 {
+    pub(crate) fn aspect(&self) -> f32 {
         self.width as f32 / self.height as f32
     }
 
@@ -188,39 +188,28 @@ impl Feedback {
         &self.shader
     }
 
-    /// Blank the monitor, restarting the loop from the seed alone. Only the
-    /// front half needs it: the other is fully overwritten by the next step.
-    pub fn clear(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("clear"),
-        });
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clear monitor"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.views[self.front],
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        queue.submit([encoder.finish()]);
+    /// Blank the monitor, restarting the loop from the seed alone. A pass
+    /// with no gain and no seed writes black over every texel, which is the
+    /// same thing a dedicated clear pass would do.
+    pub fn clear(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.step(
+            device,
+            queue,
+            &Params {
+                loop_gain: [0.0; 3],
+                seed_brightness: 0.0,
+                ..Default::default()
+            },
+        );
     }
 
     /// One trip round the loop: the camera reads the monitor and redraws it.
-    ///
-    /// Submits its own work, because the single uniform buffer holds one set
-    /// of params at a time — two steps sharing an encoder would both run with
-    /// whichever params were written last.
+    /// Self-contained, so no caller threads an encoder — and so no caller can
+    /// batch two steps behind one write of the single uniform buffer.
     pub fn step(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, params: &Params) {
         let aspect = self.aspect();
         let rows = sample_transform(&params.framing, aspect).rows();
+        let seed = self.seed_uv();
         let uniforms = Uniforms {
             row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
             row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
@@ -232,12 +221,7 @@ impl Feedback {
             ],
             // The seed is round on screen, so its uv radius is narrower on the
             // axis the monitor is wider on.
-            seed: [
-                self.seed_uv()[0],
-                self.seed_uv()[1],
-                SEED_RADIUS / aspect,
-                SEED_RADIUS,
-            ],
+            seed: [seed[0], seed[1], SEED_RADIUS / aspect, SEED_RADIUS],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 

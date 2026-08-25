@@ -63,8 +63,10 @@ layout.
 
 Zoom and gain are the sensitive ones. A few thousandths either side of
 `zoom 1.000` is the difference between an image that walks inward, one that
-stands still, and one that blows outward; a gain over 1.0 saturates to flat
-white within a second or two, which is its own effect but not a subtle one.
+stands still, and one that blows outward. A gain over 1.0 stops the trail
+decaying and blows the head of the spiral out into a hard white disc — a
+couple of thousandths over takes a few seconds to get there, further over is
+immediate — and the structure inside it is gone.
 
 ## Tests
 
@@ -77,5 +79,5 @@ render on a real GPU and read the pixels back, checking that the seed lights
 the monitor where it says it does, that the previous frame comes back round,
 that a pan moves the image the way the knob says, that the seed stays round on
 a non-square monitor, and that the default knobs settle without clipping. On a
-machine with no adapter they skip, printing the reason straight to the
-process's stderr.
+machine with no adapter each one prints the reason straight to the process's
+stderr and returns; libtest still counts them as passed.

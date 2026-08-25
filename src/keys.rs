@@ -1,5 +1,5 @@
-//! The keyboard mapped onto the knobs. One table drives both the lookup and
-//! the printed help, so the two cannot drift apart.
+//! The keyboard mapped onto the knobs. One table per shape, driving both the
+//! lookup and the printed help, so the two cannot drift apart.
 
 use winit::keyboard::KeyCode;
 
@@ -14,139 +14,89 @@ pub enum Action {
     Quit,
 }
 
-/// Physical key positions, so the labels below assume a US layout.
-const BINDINGS: &[(KeyCode, &str, Action)] = &[
-    (
-        KeyCode::Minus,
-        "-",
-        Action::Nudge(Knob::Zoom, -Knob::Zoom.increment()),
-    ),
-    (
-        KeyCode::Equal,
-        "=",
-        Action::Nudge(Knob::Zoom, Knob::Zoom.increment()),
-    ),
-    (
-        KeyCode::Comma,
-        ",",
-        Action::Nudge(Knob::Rotation, -Knob::Rotation.increment()),
-    ),
-    (
-        KeyCode::Period,
-        ".",
-        Action::Nudge(Knob::Rotation, Knob::Rotation.increment()),
-    ),
-    (
+/// A knob and the two keys that turn it. Physical key positions, so the
+/// labels assume a US layout.
+struct Axis {
+    knob: Knob,
+    down: (KeyCode, &'static str),
+    up: (KeyCode, &'static str),
+}
+
+const AXES: &[Axis] = &[
+    axis(Knob::Zoom, KeyCode::Minus, "-", KeyCode::Equal, "="),
+    axis(Knob::Rotation, KeyCode::Comma, ",", KeyCode::Period, "."),
+    axis(
+        Knob::TranslateX,
         KeyCode::ArrowLeft,
         "left",
-        Action::Nudge(Knob::TranslateX, -Knob::TranslateX.increment()),
-    ),
-    (
         KeyCode::ArrowRight,
         "right",
-        Action::Nudge(Knob::TranslateX, Knob::TranslateX.increment()),
     ),
-    (
+    axis(
+        Knob::TranslateY,
         KeyCode::ArrowDown,
         "down",
-        Action::Nudge(Knob::TranslateY, -Knob::TranslateY.increment()),
-    ),
-    (
         KeyCode::ArrowUp,
         "up",
-        Action::Nudge(Knob::TranslateY, Knob::TranslateY.increment()),
     ),
-    (
+    axis(
+        Knob::Gain,
         KeyCode::BracketLeft,
         "[",
-        Action::Nudge(Knob::Gain, -Knob::Gain.increment()),
-    ),
-    (
         KeyCode::BracketRight,
         "]",
-        Action::Nudge(Knob::Gain, Knob::Gain.increment()),
     ),
-    (
-        KeyCode::Digit1,
-        "1",
-        Action::Nudge(Knob::GainR, -Knob::GainR.increment()),
-    ),
-    (
-        KeyCode::Digit2,
-        "2",
-        Action::Nudge(Knob::GainR, Knob::GainR.increment()),
-    ),
-    (
-        KeyCode::Digit3,
-        "3",
-        Action::Nudge(Knob::GainG, -Knob::GainG.increment()),
-    ),
-    (
-        KeyCode::Digit4,
-        "4",
-        Action::Nudge(Knob::GainG, Knob::GainG.increment()),
-    ),
-    (
-        KeyCode::Digit5,
-        "5",
-        Action::Nudge(Knob::GainB, -Knob::GainB.increment()),
-    ),
-    (
-        KeyCode::Digit6,
-        "6",
-        Action::Nudge(Knob::GainB, Knob::GainB.increment()),
-    ),
-    (
-        KeyCode::Semicolon,
-        ";",
-        Action::Nudge(Knob::Seed, -Knob::Seed.increment()),
-    ),
-    (
-        KeyCode::Quote,
-        "'",
-        Action::Nudge(Knob::Seed, Knob::Seed.increment()),
-    ),
-    (KeyCode::Space, "space", Action::Clear),
-    (KeyCode::KeyR, "r", Action::Reset),
-    (KeyCode::Escape, "esc", Action::Quit),
+    axis(Knob::GainR, KeyCode::Digit1, "1", KeyCode::Digit2, "2"),
+    axis(Knob::GainG, KeyCode::Digit3, "3", KeyCode::Digit4, "4"),
+    axis(Knob::GainB, KeyCode::Digit5, "5", KeyCode::Digit6, "6"),
+    axis(Knob::Seed, KeyCode::Semicolon, ";", KeyCode::Quote, "'"),
 ];
 
+const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
+    (KeyCode::Space, "space", Action::Clear, "blank the monitor"),
+    (KeyCode::KeyR, "r", Action::Reset, "reset every knob"),
+    (KeyCode::Escape, "esc", Action::Quit, "quit"),
+];
+
+const fn axis(
+    knob: Knob,
+    down: KeyCode,
+    down_label: &'static str,
+    up: KeyCode,
+    up_label: &'static str,
+) -> Axis {
+    Axis {
+        knob,
+        down: (down, down_label),
+        up: (up, up_label),
+    }
+}
+
 pub fn action_for(key: KeyCode) -> Option<Action> {
-    BINDINGS
+    for axis in AXES {
+        if axis.down.0 == key {
+            return Some(Action::Nudge(axis.knob, -axis.knob.increment()));
+        }
+        if axis.up.0 == key {
+            return Some(Action::Nudge(axis.knob, axis.knob.increment()));
+        }
+    }
+    COMMANDS
         .iter()
-        .find(|(bound, _, _)| *bound == key)
-        .map(|(_, _, action)| *action)
+        .find(|(bound, _, _, _)| *bound == key)
+        .map(|(_, _, action, _)| *action)
 }
 
 pub fn help() -> String {
     let mut out = String::from("keys (US layout positions)\n");
-    for (_, label, action) in BINDINGS {
-        out.push_str(&format!("  {label:<8} {}\n", describe(*action)));
+    for axis in AXES {
+        let keys = format!("{} / {}", axis.down.1, axis.up.1);
+        out.push_str(&format!("  {keys:<12} {} down / up\n", axis.knob.name()));
+    }
+    for (_, label, _, what) in COMMANDS {
+        out.push_str(&format!("  {label:<12} {what}\n"));
     }
     out
-}
-
-fn describe(action: Action) -> String {
-    match action {
-        Action::Nudge(knob, delta) => {
-            let direction = if delta < 0.0 { "down" } else { "up" };
-            let what = match knob {
-                Knob::Zoom => "zoom",
-                Knob::Rotation => "rotation",
-                Knob::TranslateX => "pan x",
-                Knob::TranslateY => "pan y",
-                Knob::Gain => "loop gain, all channels",
-                Knob::GainR => "loop gain, red",
-                Knob::GainG => "loop gain, green",
-                Knob::GainB => "loop gain, blue",
-                Knob::Seed => "seed brightness",
-            };
-            format!("{what} {direction}")
-        }
-        Action::Reset => "reset every knob".to_string(),
-        Action::Clear => "blank the monitor".to_string(),
-        Action::Quit => "quit".to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -154,28 +104,40 @@ mod tests {
     use super::*;
     use crate::params::Params;
 
+    fn every_key() -> Vec<KeyCode> {
+        AXES.iter()
+            .flat_map(|a| [a.down.0, a.up.0])
+            .chain(COMMANDS.iter().map(|(key, _, _, _)| *key))
+            .collect()
+    }
+
     #[test]
     fn no_key_is_bound_twice() {
-        for (i, (key, _, _)) in BINDINGS.iter().enumerate() {
-            assert!(
-                !BINDINGS[..i].iter().any(|(other, _, _)| other == key),
-                "{key:?} is bound twice"
-            );
+        let keys = every_key();
+        for (i, key) in keys.iter().enumerate() {
+            assert!(!keys[..i].contains(key), "{key:?} is bound twice");
         }
     }
 
     #[test]
-    fn every_knob_has_a_key_in_both_directions() {
+    fn every_knob_has_an_axis() {
         for knob in Knob::ALL {
-            let deltas: Vec<f32> = BINDINGS
-                .iter()
-                .filter_map(|(_, _, action)| match action {
-                    Action::Nudge(bound, delta) if *bound == knob => Some(*delta),
-                    _ => None,
-                })
-                .collect();
-            assert!(deltas.iter().any(|d| *d > 0.0), "{knob:?} cannot go up");
-            assert!(deltas.iter().any(|d| *d < 0.0), "{knob:?} cannot go down");
+            assert!(AXES.iter().any(|a| a.knob == knob), "{knob:?} has no keys");
+        }
+    }
+
+    #[test]
+    fn the_two_keys_of_an_axis_push_it_opposite_ways() {
+        for axis in AXES {
+            let Some(Action::Nudge(down_knob, down)) = action_for(axis.down.0) else {
+                panic!("{:?} should nudge", axis.down)
+            };
+            let Some(Action::Nudge(up_knob, up)) = action_for(axis.up.0) else {
+                panic!("{:?} should nudge", axis.up)
+            };
+            assert_eq!(down_knob, axis.knob);
+            assert_eq!(up_knob, axis.knob);
+            assert!(down < 0.0 && up > 0.0, "{:?}: {down} and {up}", axis.knob);
         }
     }
 
@@ -191,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn the_other_keys_do_what_they_say() {
+    fn the_commands_do_what_they_say() {
         assert_eq!(action_for(KeyCode::Space), Some(Action::Clear));
         assert_eq!(action_for(KeyCode::KeyR), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape), Some(Action::Quit));
@@ -201,9 +163,15 @@ mod tests {
     #[test]
     fn the_help_names_every_binding() {
         let help = help();
-        assert_eq!(help.lines().count(), BINDINGS.len() + 1);
-        for (_, label, _) in BINDINGS {
-            assert!(help.contains(label), "{label} missing from help");
+        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 1);
+        for axis in AXES {
+            assert!(help.contains(axis.down.1), "{} missing", axis.down.1);
+            assert!(help.contains(axis.up.1), "{} missing", axis.up.1);
+            assert!(
+                help.contains(axis.knob.name()),
+                "{} missing",
+                axis.knob.name()
+            );
         }
     }
 }
