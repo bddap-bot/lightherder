@@ -21,14 +21,33 @@ pub struct Colour {
     /// Black level: light added to every texel, which no gain can do. This is
     /// the knob that lifts a dying loop back off the floor.
     pub brightness: f32,
-    /// Gain about mid-grey. Deliberately not about black: a gain about black
-    /// is what the loop gain already is, and a second one would be the same
-    /// knob twice.
+    /// Gain about mid-grey, which is what gives it a fixed point the loop
+    /// gain has not got. See the shader for why that is the distinction that
+    /// matters.
     pub contrast: f32,
     /// Phosphor transfer exponent. Above 1 the dark end is crushed and the
     /// trails thin out; below 1 they lift and smear.
     pub gamma: f32,
 }
+
+/// FCC NTSC luma and the two colour-difference axes. Row 0 is luma; rows 1
+/// and 2 are the real and imaginary parts of one chroma subcarrier, which is
+/// what lets hue be a phase.
+const DECODE: [[f64; 3]; 3] = [
+    [0.299, 0.587, 0.114],
+    [0.5959, -0.2746, -0.3213],
+    [0.2115, -0.5227, 0.3112],
+];
+
+/// Its exact inverse, to more digits than anyone publishes. The published
+/// four-figure version is off by 1e-4, which sounds like nothing until it
+/// runs inside a loop that feeds itself: a hundred passes of it costs a fifth
+/// of the blue channel.
+const ENCODE: [[f64; 3]; 3] = [
+    [1.0, 0.9560502263958943, 0.6207549413271234],
+    [1.0, -0.27205234368892417, -0.6472057134551779],
+    [1.0, -1.1067043153243328, 1.704421283696311],
+];
 
 impl Colour {
     /// Every stage off, so the pass writes back what the camera gave it.
@@ -40,13 +59,28 @@ impl Colour {
         gamma: 1.0,
     };
 
-    /// The chroma subcarrier as a phasor: hue is its phase and saturation its
-    /// amplitude. Scaling and rotating a 2D vector commute, so one complex
-    /// multiply on `(I, Q)` is both knobs, and the shader never recomputes a
-    /// uniform's sine per fragment.
-    pub fn chroma_phasor(&self) -> [f32; 2] {
-        let (sin, cos) = self.hue.sin_cos();
-        [self.saturation * cos, self.saturation * sin]
+    /// The 3x3 the shader multiplies RGB by: decode, turn the chroma by hue
+    /// and scale it by saturation, encode back. Indexed `m[row][col]`.
+    ///
+    /// Composed here, in f64, once a frame — not left as three steps in the
+    /// shader. Chained in f32 per fragment the three matrices leave a
+    /// ten-thousandth of the signal behind on a value near half scale, which
+    /// is under half a step of the loop's half-float storage until it is not,
+    /// and then the loop ratchets one step down per pass. Composed first, the
+    /// neutral case is exactly the identity and there is nothing to ratchet.
+    pub fn chroma_matrix(&self) -> [[f32; 3]; 3] {
+        let (sin, cos) = (self.hue as f64).sin_cos();
+        let saturation = self.saturation as f64;
+        let (turn, lift) = (saturation * cos, saturation * sin);
+        std::array::from_fn(|row| {
+            // Turning and scaling the subcarrier is one complex multiply, so
+            // it folds into the pair of chroma weights this row encodes with.
+            let (i, q) = (ENCODE[row][1], ENCODE[row][2]);
+            let (i, q) = (i * turn + q * lift, q * turn - i * lift);
+            std::array::from_fn(|col| {
+                (DECODE[0][col] + i * DECODE[1][col] + q * DECODE[2][col]) as f32
+            })
+        })
     }
 }
 
@@ -114,6 +148,8 @@ pub enum Limit {
 }
 
 impl Knob {
+    /// Every `for knob in ALL` test is silently vacuous for a knob missing
+    /// from this list, including the ones that exist to catch omissions.
     pub const ALL: [Knob; 14] = [
         Knob::Zoom,
         Knob::Rotation,
@@ -141,7 +177,7 @@ impl Knob {
             Knob::GainR => "loop gain, red",
             Knob::GainG => "loop gain, green",
             Knob::GainB => "loop gain, blue",
-            Knob::Seed => "seed brightness",
+            Knob::Seed => "seed",
             Knob::Hue => "hue",
             Knob::Saturation => "saturation",
             Knob::Brightness => "brightness",
@@ -150,17 +186,24 @@ impl Knob {
         }
     }
 
-    /// One key press worth of this knob. Rotation is the coarse one: a
-    /// thousandth of a radian per press would be imperceptible.
+    /// One key press worth of this knob. Spelled out rather than defaulted,
+    /// so a knob added later cannot quietly inherit a step nobody chose.
     pub const fn increment(self) -> f32 {
         match self {
-            // Hue is the coarse one: a full turn of the subcarrier is a
-            // gesture rather than a trim, and at the default step it would
-            // take three thousand presses.
+            // A full turn of the subcarrier is a gesture rather than a trim,
+            // and at the default step it would take three thousand presses.
             Knob::Hue => 0.02,
-            Knob::Rotation | Knob::Seed => 0.005,
-            Knob::Saturation | Knob::Contrast | Knob::Gamma => 0.005,
-            _ => 0.002,
+            // Coarse enough to see: a thousandth of a radian, or of a decade
+            // of phosphor curve, is imperceptible.
+            Knob::Rotation | Knob::Seed | Knob::Saturation | Knob::Contrast | Knob::Gamma => 0.005,
+            Knob::Zoom
+            | Knob::TranslateX
+            | Knob::TranslateY
+            | Knob::Gain
+            | Knob::GainR
+            | Knob::GainG
+            | Knob::GainB
+            | Knob::Brightness => 0.002,
         }
     }
 
@@ -388,30 +431,99 @@ mod tests {
         }
     }
 
+    /// Settings that between them exercise both signs of the phase, a
+    /// saturation under 1 and one over.
+    const SOME_COLOURS: [Colour; 4] = [
+        Colour::NEUTRAL,
+        Colour {
+            hue: 1.1,
+            saturation: 0.3,
+            ..Colour::NEUTRAL
+        },
+        Colour {
+            hue: -2.0,
+            saturation: 2.5,
+            ..Colour::NEUTRAL
+        },
+        Colour {
+            saturation: 0.0,
+            ..Colour::NEUTRAL
+        },
+    ];
+
     #[test]
-    fn the_neutral_colour_leaves_the_chroma_alone() {
-        // 1 + 0i: the complex multiply the shader does with this is identity,
-        // which is what makes the whole stage inert at its defaults.
-        let phasor = Colour::NEUTRAL.chroma_phasor();
-        assert!(
-            (phasor[0] - 1.0).abs() < 1e-6 && phasor[1].abs() < 1e-6,
-            "{phasor:?}"
-        );
+    fn the_encode_matrix_is_the_decode_matrix_inverted() {
+        // Transcribed rather than computed, and it is the only reason the
+        // neutral matrix comes out identity, so it gets checked.
+        for (row, weights) in ENCODE.iter().enumerate() {
+            for col in 0..3 {
+                let product: f64 = weights
+                    .iter()
+                    .zip(DECODE)
+                    .map(|(weight, axis)| weight * axis[col])
+                    .sum();
+                let expected = if row == col { 1.0 } else { 0.0 };
+                assert!(
+                    (product - expected).abs() < 1e-12,
+                    "row {row} times column {col} is {product}, not {expected}"
+                );
+            }
+        }
     }
 
     #[test]
-    fn the_chroma_phasor_is_hue_by_saturation() {
-        let colour = Colour {
-            hue: core::f32::consts::FRAC_PI_2,
-            saturation: 0.5,
+    fn the_neutral_chroma_matrix_is_exactly_the_identity() {
+        // Nearly is not enough. The stage runs on every pass of a loop that
+        // feeds itself, so a residual does not stay a residual.
+        for (row, weights) in Colour::NEUTRAL.chroma_matrix().iter().enumerate() {
+            for (col, weight) in weights.iter().enumerate() {
+                let expected = if row == col { 1.0 } else { 0.0 };
+                assert!(
+                    (weight - expected).abs() < 1e-9,
+                    "m[{row}][{col}] is {weight}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_chroma_matrix_holds_grey_and_luma_whatever_the_knobs_say() {
+        // Grey has no chroma to turn, so every row sums to one; and the knobs
+        // move light between the channels without changing how much there is,
+        // so luma survives them. Both hold for every setting, which is what
+        // makes hue a phase rather than a mixing knob.
+        for colour in SOME_COLOURS {
+            let m = colour.chroma_matrix();
+            for row in m {
+                let grey: f32 = row.iter().sum();
+                assert!((grey - 1.0).abs() < 1e-5, "{colour:?}: row {row:?}");
+            }
+            for (col, luma) in DECODE[0].iter().enumerate() {
+                let out: f32 = m
+                    .iter()
+                    .zip(DECODE[0])
+                    .map(|(row, weight)| weight as f32 * row[col])
+                    .sum();
+                assert!(
+                    (out - *luma as f32).abs() < 1e-5,
+                    "{colour:?}: luma weight {col} became {out}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn saturation_at_zero_leaves_luma_and_nothing_else() {
+        let m = Colour {
+            saturation: 0.0,
             ..Colour::NEUTRAL
-        };
-        // A quarter turn puts all of it on the imaginary axis, and the
-        // saturation is its length.
-        let [re, im] = colour.chroma_phasor();
-        assert!(re.abs() < 1e-6, "re {re}");
-        assert!((im - 0.5).abs() < 1e-6, "im {im}");
-        assert!((re.hypot(im) - colour.saturation).abs() < 1e-6);
+        }
+        .chroma_matrix();
+        for row in m {
+            for (weight, luma) in row.iter().zip(DECODE[0]) {
+                assert!((weight - luma as f32).abs() < 1e-5, "row {row:?}");
+            }
+        }
     }
 
     #[test]

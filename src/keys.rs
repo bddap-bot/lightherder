@@ -56,7 +56,7 @@ const AXES: &[Axis] = &[
     axis(Knob::Saturation, KeyCode::KeyD, "d", KeyCode::KeyF, "f"),
     axis(Knob::Brightness, KeyCode::KeyZ, "z", KeyCode::KeyX, "x"),
     axis(Knob::Contrast, KeyCode::KeyC, "c", KeyCode::KeyV, "v"),
-    axis(Knob::Gamma, KeyCode::KeyG, "g", KeyCode::KeyH, "h"),
+    axis(Knob::Gamma, KeyCode::KeyQ, "q", KeyCode::KeyW, "w"),
 ];
 
 const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
@@ -164,7 +164,7 @@ mod tests {
         assert_eq!(action_for(KeyCode::Space), Some(Action::Clear));
         assert_eq!(action_for(KeyCode::KeyR), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape), Some(Action::Quit));
-        assert_eq!(action_for(KeyCode::KeyQ), None);
+        assert_eq!(action_for(KeyCode::KeyN), None);
     }
 
     #[test]

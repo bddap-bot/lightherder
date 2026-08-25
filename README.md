@@ -20,12 +20,16 @@ Before that output is written, it passes the monitor's own front panel: the
 chroma decode, the video amplifier and the phosphor, in that order. The decode
 works in NTSC luma/chroma rather than RGB, which is what makes hue a *phase* —
 the two chroma axes are the real and imaginary parts of one subcarrier, so hue
-turns it and saturation scales it, and luma comes out untouched. Then contrast
+turns it and saturation scales it, and luma comes out untouched. Decode, turn
+and encode compose into one 3x3, which the CPU works out once a frame: chained
+per fragment instead they leave a ten-thousandth of the signal behind on every
+pass, and a loop that feeds itself turns that into a colour cast. Then contrast
 about mid-grey, brightness as a lift, and a power curve for the phosphor. All
 of it is inside the loop, so every knob compounds once per pass: a few
 hundredths of a radian of hue walks the trail through the spectrum, a gamma
-above 1 crushes the dark end and thins it out, a brightness above zero lifts
-the whole frame and floods it.
+above 1 crushes the dark end and thins it out — far enough and it takes the
+seed with it, leaving a black monitor that looks like a loop that has died —
+and a brightness above zero lifts the whole frame and floods it.
 
 Contrast pivots about mid-grey rather than about black on purpose. A gain
 about black is exactly what the loop gain already is, and the front panel is
@@ -74,9 +78,9 @@ layout.
 | `;` `'` | seed brightness |
 | `a` `s` | hue, per pass |
 | `d` `f` | saturation |
-| `z` `x` | brightness |
+| `z` `x` | brightness, i.e. black level |
 | `c` `v` | contrast |
-| `g` `h` | gamma |
+| `q` `w` | gamma |
 | space | blank the monitor |
 | `r` | reset every knob |
 | esc | quit |
