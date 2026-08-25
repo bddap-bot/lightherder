@@ -50,6 +50,13 @@ const AXES: &[Axis] = &[
     axis(Knob::GainG, KeyCode::Digit3, "3", KeyCode::Digit4, "4"),
     axis(Knob::GainB, KeyCode::Digit5, "5", KeyCode::Digit6, "6"),
     axis(Knob::Seed, KeyCode::Semicolon, ";", KeyCode::Quote, "'"),
+    // The colour stage gets the left hand, kept together so a performer can
+    // sweep the front panel without looking.
+    axis(Knob::Hue, KeyCode::KeyA, "a", KeyCode::KeyS, "s"),
+    axis(Knob::Saturation, KeyCode::KeyD, "d", KeyCode::KeyF, "f"),
+    axis(Knob::Brightness, KeyCode::KeyZ, "z", KeyCode::KeyX, "x"),
+    axis(Knob::Contrast, KeyCode::KeyC, "c", KeyCode::KeyV, "v"),
+    axis(Knob::Gamma, KeyCode::KeyG, "g", KeyCode::KeyH, "h"),
 ];
 
 const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[

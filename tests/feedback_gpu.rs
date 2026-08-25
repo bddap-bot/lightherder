@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use lightherder::affine::Framing;
 use lightherder::feedback::Feedback;
-use lightherder::params::Params;
+use lightherder::params::{Colour, Params};
 use lightherder::present::Present;
 
 const SIZE: u32 = 64;
@@ -122,6 +122,13 @@ impl Harness {
         );
     }
 
+    /// The three channels where the seed lands, which is the one place the
+    /// colour tests look.
+    fn spot(&self) -> [f32; 3] {
+        let seed = self.feedback.seed_uv();
+        self.read().rgb_at(seed[0], seed[1])
+    }
+
     fn read(&self) -> Image {
         let (width, height) = self.target_size;
         let mut encoder = self
@@ -177,13 +184,24 @@ struct Image {
 }
 
 impl Image {
-    /// Mean of the RGB channels at a uv position, 0..=255. Values are linear:
-    /// the target format is not sRGB, unlike the window's usual surface.
-    fn at(&self, u: f32, v: f32) -> f32 {
+    /// The three channels at a uv position, 0..=255. Values are linear: the
+    /// target format is not sRGB, unlike the window's usual surface.
+    fn rgb_at(&self, u: f32, v: f32) -> [f32; 3] {
         let x = ((u * self.width as f32) as u32).min(self.width - 1);
         let y = ((v * self.height as f32) as u32).min(self.height - 1);
         let i = ((y * self.width + x) * 4) as usize;
-        (self.pixels[i] as f32 + self.pixels[i + 1] as f32 + self.pixels[i + 2] as f32) / 3.0
+        [
+            self.pixels[i] as f32,
+            self.pixels[i + 1] as f32,
+            self.pixels[i + 2] as f32,
+        ]
+    }
+
+    /// Mean of the three channels, for the tests that only care how much
+    /// light there is and not what colour it is.
+    fn at(&self, u: f32, v: f32) -> f32 {
+        let rgb = self.rgb_at(u, v);
+        (rgb[0] + rgb[1] + rgb[2]) / 3.0
     }
 
     fn brightest(&self) -> f32 {
@@ -270,6 +288,240 @@ fn frozen(params: Params) -> Params {
     }
 }
 
+/// Per-channel loop gain steep enough to leave the white seed strongly
+/// coloured. Hue and saturation do nothing to grey, so the light has to be
+/// coloured before either knob has anything to act on.
+const TINT: [f32; 3] = [1.0, 0.4, 0.1];
+
+/// Lights the seed at half brightness and tints it, leaving the spot at
+/// `(0.5, 0.2, 0.05)`. Half brightness on purpose: red then sits exactly on
+/// the contrast pivot, and a knob that moves light into a channel has
+/// somewhere to put it before the 8-bit target clips.
+fn tinted(h: &mut Harness) -> [f32; 3] {
+    let still = frozen(seeded());
+    h.step(&Params {
+        seed_brightness: 0.5,
+        loop_gain: [0.0; 3],
+        ..still
+    });
+    h.step(&Params {
+        seed_brightness: 0.0,
+        loop_gain: TINT,
+        ..still
+    });
+    h.spot()
+}
+
+/// One more pass with the loop passing light straight through, so the only
+/// thing between the previous frame and this one is the colour stage.
+fn recolour(h: &mut Harness, colour: Colour) -> [f32; 3] {
+    h.step(&Params {
+        seed_brightness: 0.0,
+        loop_gain: [1.0; 3],
+        colour,
+        ..frozen(seeded())
+    });
+    h.spot()
+}
+
+/// NTSC luma — the quantity the chroma knobs claim to leave alone, so the
+/// tests need their own copy of it to check that claim against.
+fn luma(rgb: [f32; 3]) -> f32 {
+    0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+}
+
+fn spread(rgb: [f32; 3]) -> f32 {
+    rgb.iter().fold(0.0, |a: f32, c| a.max(*c)) - rgb.iter().fold(255.0, |a: f32, c| a.min(*c))
+}
+
+#[test]
+fn the_colour_stage_is_inert_at_its_defaults() {
+    // Neutral means neutral: the pass writes back what the camera gave it,
+    // give or take the rounding of a trip through luma and chroma and back.
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+    assert!(spread(before) > 50.0, "nothing to preserve: {before:?}");
+
+    let after = recolour(&mut h, Colour::NEUTRAL);
+    for channel in 0..3 {
+        assert!(
+            (after[channel] - before[channel]).abs() < 3.0,
+            "{before:?} came back as {after:?}"
+        );
+    }
+}
+
+#[test]
+fn saturation_at_zero_greys_without_dimming() {
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+    let after = recolour(
+        &mut h,
+        Colour {
+            saturation: 0.0,
+            ..Colour::NEUTRAL
+        },
+    );
+    assert!(spread(after) < 4.0, "still coloured: {after:?}");
+    // Pulling the chroma to zero must not take any luma with it: what is left
+    // is the grey the colour was carrying all along.
+    assert!(
+        (luma(after) - luma(before)).abs() < 4.0,
+        "{:?} -> {:?}: luma {} -> {}",
+        before,
+        after,
+        luma(before),
+        luma(after)
+    );
+}
+
+#[test]
+fn hue_moves_light_between_the_channels_at_constant_luma() {
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+    // A third of a turn of the subcarrier, which is far enough that no
+    // rounding could be mistaken for it.
+    let after = recolour(
+        &mut h,
+        Colour {
+            hue: core::f32::consts::TAU / 3.0,
+            ..Colour::NEUTRAL
+        },
+    );
+    assert!(
+        after[2] > before[2] + 100.0 && after[0] < before[0] - 40.0,
+        "{before:?} -> {after:?}: the light did not move from red to blue"
+    );
+    // The whole point of turning a phase rather than mixing channels: the
+    // colour changes and the brightness does not.
+    assert!(
+        (luma(after) - luma(before)).abs() < 5.0,
+        "{:?} -> {:?}: luma {} -> {}",
+        before,
+        after,
+        luma(before),
+        luma(after)
+    );
+}
+
+#[test]
+fn brightness_lifts_black_itself() {
+    let Some(mut h) = square() else { return };
+    let lift = 0.2;
+    let before = tinted(&mut h);
+    let after = recolour(
+        &mut h,
+        Colour {
+            brightness: lift,
+            ..Colour::NEUTRAL
+        },
+    );
+    for channel in 0..3 {
+        assert!(
+            (after[channel] - before[channel] - lift * 255.0).abs() < 5.0,
+            "{before:?} -> {after:?}, expected every channel up by {}",
+            lift * 255.0
+        );
+    }
+    // An unlit corner comes up with everything else, which a gain could never
+    // manage: this is a black level, not another multiply.
+    let corner = h.read().rgb_at(0.02, 0.02);
+    assert!(
+        (luma(corner) - lift * 255.0).abs() < 5.0,
+        "black stayed at {corner:?}"
+    );
+}
+
+#[test]
+fn contrast_pivots_about_mid_grey() {
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+    assert!(spread(before) > 50.0, "nothing to push apart: {before:?}");
+
+    let contrast = 1.5;
+    let after = recolour(
+        &mut h,
+        Colour {
+            contrast,
+            ..Colour::NEUTRAL
+        },
+    );
+    // Mid-grey is the fixed point: red, a hair under it, barely moves, while
+    // green far below it is pushed further down. A gain about black — which
+    // is what the loop gain already is — would have raised both instead.
+    // Blue is left out: the pivot pushes it past black, where the clamp is.
+    let pivoted = |v: f32| (v - 127.5) * contrast + 127.5;
+    for channel in 0..2 {
+        assert!(
+            (after[channel] - pivoted(before[channel])).abs() < 5.0,
+            "{:?} -> {:?}: channel {channel} belongs at {}, and a gain about black would have put it at {}",
+            before,
+            after,
+            pivoted(before[channel]),
+            before[channel] * contrast
+        );
+    }
+}
+
+#[test]
+fn gamma_bends_the_response_rather_than_scaling_it() {
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+    let after = recolour(
+        &mut h,
+        Colour {
+            gamma: 2.0,
+            ..Colour::NEUTRAL
+        },
+    );
+    let (bright, dim) = (after[0] / before[0], after[1] / before[1]);
+    assert!(
+        bright < 0.7 && dim < 0.35,
+        "{before:?} -> {after:?}: nothing was dimmed"
+    );
+    // A curve costs the dim level proportionally more than the bright one.
+    // Any single multiply would leave the two ratios equal.
+    assert!(
+        bright > 2.0 * dim,
+        "ratios {bright} and {dim} are too close to be a curve"
+    );
+}
+
+#[test]
+fn the_colour_stage_is_inside_the_loop() {
+    // The knobs are on the monitor being drawn, not on the window showing it,
+    // so a second pass bends an already-bent frame again. Moved into the
+    // present pass the stage would sit at one application forever.
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+    let squared = Colour {
+        gamma: 2.0,
+        ..Colour::NEUTRAL
+    };
+    let once = recolour(&mut h, squared);
+    let twice = recolour(&mut h, squared);
+    // Each pass squares the level it was handed, whatever that level was.
+    let square = |v: f32| v * v / 255.0;
+    assert!(
+        (once[0] - square(before[0])).abs() < 5.0,
+        "{:?} -> {:?}: expected {}",
+        before,
+        once,
+        square(before[0])
+    );
+    assert!(
+        (twice[0] - square(once[0])).abs() < 5.0,
+        "{:?} -> {:?}: expected {}",
+        once,
+        twice,
+        square(once[0])
+    );
+    assert!(
+        twice[0] < once[0] - 20.0,
+        "the second pass changed nothing: {once:?} -> {twice:?}"
+    );
+}
+
 #[test]
 fn the_seed_lights_the_spot_it_says_it_does() {
     let Some(mut h) = square() else { return };
@@ -343,6 +595,7 @@ fn panning_moves_the_image_the_way_the_knobs_say() {
         let params = Params {
             seed_brightness: 0.0,
             loop_gain: [1.0; 3],
+            colour: Colour::NEUTRAL,
             framing: Framing {
                 translate,
                 ..frozen(seeded()).framing
@@ -373,6 +626,7 @@ fn pan_is_applied_in_the_frame_the_camera_moves_in() {
     let params = Params {
         seed_brightness: 0.0,
         loop_gain: [1.0; 3],
+        colour: Colour::NEUTRAL,
         framing: Framing {
             zoom: 2.0,
             rotation: 0.0,
@@ -491,6 +745,7 @@ fn what_the_camera_sees_past_the_monitor_is_black() {
     let pan = |dx: f32| Params {
         seed_brightness: 0.0,
         loop_gain: [1.0; 3],
+        colour: Colour::NEUTRAL,
         framing: Framing {
             translate: [dx, 0.0],
             ..still.framing
