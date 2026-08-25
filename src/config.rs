@@ -4,7 +4,7 @@
 
 use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
-use crate::params::{Camera, Character, Monitor, Params};
+use crate::params::{Camera, Character, Knob, Limit, Monitor, Params};
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
@@ -40,9 +40,10 @@ pub fn single() -> Params {
 /// The same single loop with the signal path turned on: a lens that scatters
 /// a third of the light into a halo, chroma smeared along the scanline, a
 /// little grain, and an amplifier whose rail sits below white so the trail
-/// compresses into the spiral instead of burning out the middle of it. The
-/// gains are [`single`]'s, so the difference between the two presets is the
-/// analog character and nothing else.
+/// compresses into the spiral instead of burning out the middle of it.
+/// Everything else is [`single`]'s, so the difference between the two presets
+/// is the analog character and nothing else — the chroma the bleed smears is
+/// the same age-to-hue gradient the per-channel loop gain already makes.
 pub fn analog() -> Params {
     let mut params = single();
     params.cameras[0].character = Character {
@@ -51,9 +52,6 @@ pub fn analog() -> Params {
         chroma_bleed: 0.02,
         noise: 0.02,
     };
-    // Saturation above unity so there is chroma worth smearing; the rail
-    // then holds the result down where the phosphor can show it.
-    params.monitors[0].colour.saturation = 1.4;
     params.monitors[0].headroom = 0.9;
     params
 }
@@ -214,12 +212,18 @@ pub fn validate(params: &Params) -> Result<(), String> {
                 return Err(format!("camera {i}'s {what} is {value}; it is not signed"));
             }
         }
-        // Above 1.0 `mix` extrapolates away from the halo instead of towards
-        // it, which is a lens that returns more light than it was handed —
-        // and inside a loop that is a multiply, not an artefact.
-        if ch.bloom > 1.0 {
+        // Above its rail `mix` extrapolates away from the halo instead of
+        // towards it, which is a lens returning more light than it was
+        // handed — and inside a loop that is a multiply, not an artefact.
+        // The rail is the knob's, read from it rather than repeated: two
+        // numbers meaning one thing is how a config reaches a state its own
+        // knob cannot return it from.
+        let Limit::Clamp(_, most) = Knob::Bloom.limit() else {
+            unreachable!("bloom clamps")
+        };
+        if ch.bloom > most {
             return Err(format!(
-                "camera {i}'s bloom is {}; a lens scatters at most all of it",
+                "camera {i}'s bloom is {}; a lens scatters at most {most} of it",
                 ch.bloom
             ));
         }
@@ -255,6 +259,16 @@ pub fn validate(params: &Params) -> Result<(), String> {
             return Err(format!(
                 "monitor {i}'s headroom is {}; the amplifier needs some",
                 monitor.headroom
+            ));
+        }
+        // pow(0, g) for g <= 0 is an infinity, and the monitor's corners are
+        // exactly 0 whenever the seed does not reach them. One pass later the
+        // chroma matrix turns that infinity into a NaN, which per the note
+        // above never leaves the loop. The knob's own floor is 0.25.
+        if colour.gamma <= 0.0 {
+            return Err(format!(
+                "monitor {i}'s gamma is {}; black to the power of it is not a number",
+                colour.gamma
             ));
         }
     }
@@ -370,7 +384,7 @@ mod tests {
         assert_eq!(params.cameras[0].character, Character::CLEAN);
         assert_eq!(params.monitors[0].colour, Colour::NEUTRAL);
         assert_eq!(params.monitors[0].seed_brightness, 0.0);
-        assert_eq!(params.monitors[0].headroom, Monitor::WIDE_OPEN);
+        assert_eq!(params.monitors[0].headroom, Monitor::KNEE_AT_WHITE);
     }
 
     #[test]
@@ -385,7 +399,7 @@ mod tests {
                 && params
                     .monitors
                     .iter()
-                    .all(|m| m.headroom == Monitor::WIDE_OPEN);
+                    .all(|m| m.headroom == Monitor::KNEE_AT_WHITE);
             assert_eq!(clean, name != "analog", "{name}");
         }
         // And the one that does have it turns on all four of the things this
@@ -439,6 +453,8 @@ mod tests {
             |p| p.cameras[0].character.noise = -1.0,
             |p| p.monitors[0].headroom = 0.0,
             |p| p.monitors[0].headroom = f32::NAN,
+            |p| p.monitors[0].colour.gamma = 0.0,
+            |p| p.monitors[0].colour.gamma = -1.0,
         ];
         for (i, poison) in poison.iter().enumerate() {
             let mut params = crossed();

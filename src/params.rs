@@ -57,6 +57,13 @@ const ENCODE: [[f64; 3]; 3] = [
     [1.0, -1.1067043153243328, 1.704421283696311],
 ];
 
+/// NTSC luma, in the precision the shader wants it. Row 0 of [`DECODE`] and
+/// nowhere else: the chroma bleed needs it too, and a second copy in WGSL
+/// would be a constant nothing could keep in step with this one.
+pub fn luma_row() -> [f32; 3] {
+    std::array::from_fn(|i| DECODE[0][i] as f32)
+}
+
 impl Colour {
     /// Every stage off, so the pass writes back what the camera gave it.
     pub const NEUTRAL: Colour = Colour {
@@ -184,8 +191,8 @@ pub struct Monitor {
     /// clipping the whole monitor to flat white — which is the difference
     /// between an analog feedback rig and a runaway multiply.
     ///
-    /// The default is above anything a monitor can display, so the rail is
-    /// exactly inert until a performer brings it down onto the signal.
+    /// A real amplifier always has rails, so there is no setting that turns
+    /// this off, and [`Monitor::KNEE_AT_WHITE`] is not one pretending to be.
     pub headroom: f32,
 }
 
@@ -194,15 +201,19 @@ impl Default for Monitor {
         Monitor {
             colour: Colour::NEUTRAL,
             seed_brightness: 0.0,
-            headroom: Monitor::WIDE_OPEN,
+            headroom: Monitor::KNEE_AT_WHITE,
         }
     }
 }
 
 impl Monitor {
-    /// Linear below 1.0, which is everything a monitor can display, so the
-    /// rail only bites once the loop is overdriven.
-    pub const WIDE_OPEN: f32 = 2.0;
+    /// Twice display white. The knee is at half the headroom, so it lands
+    /// exactly on 1.0: nothing a monitor can actually show is touched, and
+    /// the reserve above white — which the half-float bank exists to keep —
+    /// compresses onto 2.0 rather than running. That reserve is a real
+    /// change from before this rail existed, and it is the point of it: the
+    /// loop is bounded now, at every setting of every other knob.
+    pub const KNEE_AT_WHITE: f32 = 2.0;
 }
 
 /// The whole instrument for one frame: every camera, every monitor, and the
@@ -470,8 +481,11 @@ impl Params {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         format!(
+            // Two lines rather than one: at nineteen knobs a single line
+            // wraps in a terminal, and consecutive presses stop lining up —
+            // which was the only thing a single line was buying.
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
-             bloom {:.3}r{:.3}  bleed {:.3}  noise {:.3}  |  \
+             bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}\n\
              mon {}/{}: seed {:.3}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
              gamma {:.3}  headroom {:.3}",
             focus.camera + 1,
@@ -504,12 +518,12 @@ fn rigid_gain_step(gain: &[f32; 3], delta: f32) -> f32 {
     let Limit::Clamp(low, high) = Knob::Gain.limit() else {
         unreachable!("gain clamps")
     };
-    let headroom = gain
+    let travel = gain
         .iter()
         .map(|c| if delta >= 0.0 { high - c } else { c - low })
         .fold(f32::INFINITY, f32::min)
         .max(0.0);
-    delta.abs().min(headroom) * delta.signum()
+    delta.abs().min(travel) * delta.signum()
 }
 
 /// Into `(-pi, pi]`, so a knob spun in one direction never runs away.

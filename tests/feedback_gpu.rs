@@ -269,6 +269,28 @@ impl Image {
         self.brightest_in(0.0, 0.0, 1.0, 1.0)
     }
 
+    /// The brightest one channel gets inside a uv rectangle. Separate from
+    /// [`Image::brightest_in`] because that averages the three, which cannot
+    /// tell a settled picture from one that has lost a channel outright.
+    fn brightest_channel_in(&self, channel: usize, u0: f32, v0: f32, u1: f32, v1: f32) -> f32 {
+        let (x0, x1) = (
+            (u0 * self.width as f32) as u32,
+            (u1 * self.width as f32) as u32,
+        );
+        let (y0, y1) = (
+            (v0 * self.height as f32) as u32,
+            (v1 * self.height as f32) as u32,
+        );
+        let mut peak = 0.0f32;
+        for y in y0..y1.min(self.height) {
+            for x in x0..x1.min(self.width) {
+                let i = ((y * self.width + x) * 4) as usize + channel;
+                peak = peak.max(self.pixels[i] as f32);
+            }
+        }
+        peak
+    }
+
     /// The brightest pixel inside a uv rectangle — one tile of the grid,
     /// when the caller is asking about a single monitor.
     fn brightest_in(&self, u0: f32, v0: f32, u1: f32, v1: f32) -> f32 {
@@ -1078,7 +1100,7 @@ fn silent_monitor() -> Monitor {
     Monitor {
         colour: Colour::NEUTRAL,
         seed_brightness: 0.0,
-        headroom: Monitor::WIDE_OPEN,
+        headroom: Monitor::KNEE_AT_WHITE,
     }
 }
 
@@ -1265,6 +1287,7 @@ fn the_shipped_presets_settle_without_clipping() {
     // every monitor of every preset keeps an image — not flat white, not
     // black.
     for (name, p) in [
+        ("analog", lightherder::config::analog()),
         ("crossed", lightherder::config::crossed()),
         ("insanity", lightherder::config::insanity()),
     ] {
@@ -1284,6 +1307,17 @@ fn the_shipped_presets_settle_without_clipping() {
             let peak = img.brightest_in(u0, v0, u1, v1);
             assert!(peak < 250.0, "{name} monitor {m} settles clipped: {peak}");
             assert!(peak > 30.0, "{name} monitor {m} goes dark: {peak}");
+            // Per channel too, and not because a channel dying is unlikely:
+            // black is an absorbing state under the front panel's floor, so
+            // a chroma stage that pulls one channel under zero once has
+            // ended it for good — and the mean above would still read 111.
+            for channel in 0..3 {
+                let peak = img.brightest_channel_in(channel, u0, v0, u1, v1);
+                assert!(
+                    peak > 10.0,
+                    "{name} monitor {m} loses channel {channel}: {peak}"
+                );
+            }
         }
     }
 }
@@ -1334,7 +1368,7 @@ fn the_character_stage_is_inert_at_its_defaults() {
     assert!(spread(before) > 50.0, "nothing to preserve: {before:?}");
 
     for _ in 0..100 {
-        recharacter(&mut h, Character::CLEAN, Monitor::WIDE_OPEN);
+        recharacter(&mut h, Character::CLEAN, Monitor::KNEE_AT_WHITE);
     }
     let after = h.spot();
     for channel in 0..3 {
@@ -1366,7 +1400,7 @@ fn the_lens_spreads_the_light_without_making_any() {
             bloom_radius: 0.08,
             ..Character::CLEAN
         },
-        Monitor::WIDE_OPEN,
+        Monitor::KNEE_AT_WHITE,
     );
     assert!(
         after.half_extent(seed, true) > width,
@@ -1404,7 +1438,7 @@ fn the_bleed_smears_the_colour_and_leaves_the_luma_where_it_was() {
             chroma_bleed: BLEED,
             ..Character::CLEAN
         },
-        Monitor::WIDE_OPEN,
+        Monitor::KNEE_AT_WHITE,
     );
 
     for step in [-0.03, -0.015, 0.0, 0.015, 0.03] {
@@ -1483,7 +1517,7 @@ fn the_amplifier_bends_onto_its_headroom_instead_of_clipping() {
         h.read()
     };
 
-    let wide = drive(&mut h, Monitor::WIDE_OPEN);
+    let wide = drive(&mut h, Monitor::KNEE_AT_WHITE);
     let peak = wide.at(seed[0], seed[1]);
     assert!(
         (200.0..255.0).contains(&peak),
