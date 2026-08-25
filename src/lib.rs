@@ -1,36 +1,16 @@
 //! A GPU video-feedback instrument: a camera pointed at the monitor it is
 //! drawing to, which is enough to make spirals, tunnels and fractals.
-//!
-//! Adapter and device requests are async because that is the only shape a
-//! browser will accept; a native caller drives them to completion itself.
 
 pub mod affine;
 pub mod app;
 pub mod feedback;
+pub mod keys;
 pub mod params;
 pub mod present;
 
-/// Device and queue with no surface attached, for tests and offline renders.
-/// `None` when the machine exposes no usable adapter at all.
-pub async fn headless_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        })
-        .await
-        .ok()?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("lightherder"),
-            ..Default::default()
-        })
-        .await
-        .ok()?;
-    Some((adapter, device, queue))
-}
+/// Vulkan, Metal, DX12 and WebGPU. Deliberately not `Backends::all()`, which
+/// also brings up a GL context per instance purely to enumerate adapters.
+pub const BACKENDS: wgpu::Backends = wgpu::Backends::PRIMARY;
 
 /// Every pass here draws one full-screen triangle over a bound texture, so
 /// they differ only in fragment entry point and target format.

@@ -9,25 +9,14 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 use crate::feedback::Feedback;
-use crate::params::{action_for, Action, Params};
+use crate::keys::{action_for, Action};
+use crate::params::Params;
 use crate::present::Present;
 
 /// The monitor is a fixed size, independent of the window. Resizing the window
 /// then rescales the view instead of scrambling the loop's state, and the
 /// framing numbers keep meaning the same thing.
 pub const MONITOR_SIZE: (u32, u32) = (1920, 1080);
-
-pub const KEY_HELP: &str = "\
-keys:
-  - / =        zoom out / in
-  , / .        rotate one way / the other
-  arrows       pan
-  [ / ]        loop gain, all channels
-  1 2 3 4 5 6  loop gain per channel (r-, r+, g-, g+, b-, b+)
-  ; / '        seed brightness
-  space        blank the monitor
-  r            reset
-  esc          quit";
 
 struct Live {
     window: Arc<Window>,
@@ -37,7 +26,6 @@ struct Live {
     config: wgpu::SurfaceConfiguration,
     feedback: Feedback,
     present: Present,
-    clear_next_frame: bool,
 }
 
 #[derive(Default)]
@@ -60,11 +48,11 @@ impl Live {
                 .expect("create window"),
         );
 
-        // The display handle lets backends that need one (GLES) come up; the
-        // window handles for the surface itself travel with `create_surface`.
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())),
-        );
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: crate::BACKENDS,
+            // Some backends need a display handle before any surface exists.
+            ..wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()))
+        });
         let surface = instance
             .create_surface(window.clone())
             .expect("create surface");
@@ -93,8 +81,10 @@ impl Live {
         let format = config.format;
         surface.configure(&device, &config);
 
+        // wgpu zero-initialises textures, so the monitor starts black without
+        // an explicit clear.
         let feedback = Feedback::new(&device, MONITOR_SIZE.0, MONITOR_SIZE.1);
-        let present = Present::new(&device, feedback.layout(), format);
+        let present = Present::new(&device, &feedback, format);
 
         Live {
             window,
@@ -104,7 +94,6 @@ impl Live {
             config,
             feedback,
             present,
-            clear_next_frame: true,
         }
     }
 
@@ -138,20 +127,15 @@ impl Live {
         let target = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("frame"),
-            });
 
-        if std::mem::take(&mut self.clear_next_frame) {
-            self.feedback.clear(&mut encoder);
-        }
-        self.feedback.step(&self.queue, &mut encoder, params);
-        self.present
-            .draw(&mut encoder, &target, self.feedback.bind_group());
-
-        self.queue.submit([encoder.finish()]);
+        self.feedback.step(&self.device, &self.queue, params);
+        self.present.draw(
+            &self.device,
+            &self.queue,
+            &target,
+            (self.config.width, self.config.height),
+            &self.feedback,
+        );
         self.queue.present(frame);
     }
 }
@@ -161,9 +145,7 @@ impl ApplicationHandler for App {
         if self.live.is_some() {
             return;
         }
-        // The one place this program blocks. A browser build cannot, and
-        // replaces this with a spawn that hands the ready `Live` back through
-        // a user event; nothing else in the render path needs to change.
+        // The one place this program blocks.
         let live = pollster::block_on(Live::new(event_loop));
         log::info!("monitor {}x{}", MONITOR_SIZE.0, MONITOR_SIZE.1);
         log::info!("{}", self.params.describe());
@@ -200,7 +182,7 @@ impl ApplicationHandler for App {
                         log::info!("reset: {}", self.params.describe());
                     }
                     Some(Action::Clear) => {
-                        live.clear_next_frame = true;
+                        live.feedback.clear(&live.device, &live.queue);
                         log::info!("cleared");
                     }
                     Some(Action::Quit) => event_loop.exit(),

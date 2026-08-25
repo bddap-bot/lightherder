@@ -36,9 +36,10 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
     let p = vec3<f32>(in.uv, 1.0);
     let src_uv = vec2<f32>(dot(u.row0.xyz, p), dot(u.row1.xyz, p));
 
-    // Past the monitor's edge the camera sees an unlit room. The sampler
-    // clamps instead, which would smear the border across the frame, so
-    // discard those samples rather than pick a border colour.
+    // Past the monitor's edge the camera sees an unlit room, but a clamped
+    // sampler returns the border texel there, which would smear across the
+    // frame. The sample is taken unconditionally so control flow stays
+    // uniform, then thrown away.
     let inside = all(src_uv >= vec2<f32>(0.0)) && all(src_uv <= vec2<f32>(1.0));
     let sampled = textureSample(src_tex, src_samp, src_uv).rgb * u.gain.rgb;
     let fed_back = select(vec3<f32>(0.0), sampled, inside);
