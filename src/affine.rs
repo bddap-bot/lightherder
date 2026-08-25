@@ -160,10 +160,32 @@ mod tests {
 
     #[test]
     fn translation_moves_the_image_with_its_sign() {
-        let t = sample_transform(&framing(1.0, 0.0, [0.25, 0.0]), 1.0);
         // Centre now shows what used to be a quarter-width to its left, i.e.
         // the image slid right.
+        let t = sample_transform(&framing(1.0, 0.0, [0.25, 0.0]), 1.0);
         assert!(close(t.apply([0.5, 0.5]), [0.25, 0.5]));
+
+        // And up, which is v downward: screen units are y-up and texture v is
+        // not, so this pins a flip a uv-space pan would get backwards.
+        let t = sample_transform(&framing(1.0, 0.0, [0.0, 0.25]), 1.0);
+        assert!(
+            close(t.apply([0.5, 0.5]), [0.5, 0.75]),
+            "{:?}",
+            t.apply([0.5, 0.5])
+        );
+    }
+
+    #[test]
+    fn pan_is_not_scaled_by_the_zoom_it_composes_with() {
+        // Pan is what the camera does before it magnifies, so a quarter-width
+        // pan is a quarter width on screen at any zoom. Composing the two the
+        // other way round would put the centre at 0.625 instead.
+        let t = sample_transform(&framing(2.0, 0.0, [0.25, 0.0]), 1.0);
+        assert!(
+            close(t.apply([0.75, 0.5]), [0.5, 0.5]),
+            "{:?}",
+            t.apply([0.75, 0.5])
+        );
     }
 
     #[test]

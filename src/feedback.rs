@@ -1,20 +1,25 @@
 //! The feedback loop itself: one monitor, one camera pointed at it.
-//!
-//! Later increments turn this into a graph of many monitors and cameras with a
-//! routing matrix between them. The shape that survives is the one here: a
-//! monitor is a pair of textures, and a camera is a pass that reads one and
-//! writes the other.
 
 use crate::affine::sample_transform;
-use crate::params::{Params, SEED_RADIUS};
+use crate::params::Params;
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
 pub const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// Radius of the seed spot, in screen units where the monitor is 1.0 tall.
+const SEED_RADIUS: f32 = 0.06;
+
+/// Where the seed sits, in the same screen units. Off-centre on purpose: a
+/// radially symmetric spot at the centre is a fixed point of rotation, so a
+/// centred seed would make the rotation knob do nothing visible.
+const SEED_CENTRE: [f32; 2] = [0.25, 0.0];
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
+    /// Rows of the sampling affine. The unused fourth component is what a
+    /// uniform's 16-byte alignment costs; there is no missing term.
     row0: [f32; 4],
     row1: [f32; 4],
     gain: [f32; 4],
@@ -25,12 +30,13 @@ pub struct Feedback {
     width: u32,
     height: u32,
     /// The monitor. Two textures because a pass cannot sample the target it is
-    /// writing; the camera reads `[front]` and writes `[1 - front]`.
+    /// writing.
     views: [wgpu::TextureView; 2],
     bind_groups: [wgpu::BindGroup; 2],
     front: usize,
     uniforms: wgpu::Buffer,
     layout: wgpu::BindGroupLayout,
+    shader: wgpu::ShaderModule,
     pipeline: wgpu::RenderPipeline,
 }
 
@@ -63,8 +69,9 @@ impl Feedback {
         });
 
         // Linear filtering is what makes the loop smooth rather than a stack of
-        // hard-edged copies, and clamping keeps out-of-range samples cheap to
-        // detect in the shader.
+        // hard-edged copies. The address mode barely matters: WebGPU offers no
+        // clamp-to-border, so the shader supplies the black outside the
+        // monitor itself.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("camera"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -152,80 +159,92 @@ impl Feedback {
             front: 0,
             uniforms,
             layout,
+            shader,
             pipeline,
         }
     }
 
-    pub fn size(&self) -> (u32, u32) {
-        (self.width, self.height)
+    /// Where the seed spot lands, in uv. The loop is driven from here, so
+    /// anything measuring the instrument needs to know it.
+    pub fn seed_uv(&self) -> [f32; 2] {
+        [0.5 + SEED_CENTRE[0] / self.aspect(), 0.5 - SEED_CENTRE[1]]
     }
 
-    fn aspect(&self) -> f32 {
+    pub fn aspect(&self) -> f32 {
         self.width as f32 / self.height as f32
     }
 
-    /// The monitor as it currently stands, for anyone who wants to look at it.
-    pub fn view(&self) -> &wgpu::TextureView {
-        &self.views[self.front]
-    }
-
-    /// Binds the current monitor as a sampled texture, for a pipeline built
-    /// against [`Feedback::layout`].
-    pub fn bind_group(&self) -> &wgpu::BindGroup {
+    /// Binds the monitor as it currently stands, for a pipeline built against
+    /// [`Feedback::layout`].
+    pub(crate) fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind_groups[self.front]
     }
 
-    pub fn layout(&self) -> &wgpu::BindGroupLayout {
+    pub(crate) fn layout(&self) -> &wgpu::BindGroupLayout {
         &self.layout
     }
 
-    /// Blank both halves of the monitor, restarting the loop from the seed.
-    pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
-        for view in &self.views {
-            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear monitor"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
+    pub(crate) fn shader(&self) -> &wgpu::ShaderModule {
+        &self.shader
+    }
+
+    /// Blank the monitor, restarting the loop from the seed alone. Only the
+    /// front half needs it: the other is fully overwritten by the next step.
+    pub fn clear(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("clear"),
+        });
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear monitor"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.views[self.front],
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        queue.submit([encoder.finish()]);
     }
 
     /// One trip round the loop: the camera reads the monitor and redraws it.
-    pub fn step(
-        &mut self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        params: &Params,
-    ) {
+    ///
+    /// Submits its own work, because the single uniform buffer holds one set
+    /// of params at a time — two steps sharing an encoder would both run with
+    /// whichever params were written last.
+    pub fn step(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, params: &Params) {
         let aspect = self.aspect();
         let rows = sample_transform(&params.framing, aspect).rows();
         let uniforms = Uniforms {
             row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
             row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
             gain: [
-                params.decay[0],
-                params.decay[1],
-                params.decay[2],
-                params.seed_gain,
+                params.loop_gain[0],
+                params.loop_gain[1],
+                params.loop_gain[2],
+                params.seed_brightness,
             ],
             // The seed is round on screen, so its uv radius is narrower on the
             // axis the monitor is wider on.
-            seed: [0.5, 0.5, SEED_RADIUS / aspect, SEED_RADIUS],
+            seed: [
+                self.seed_uv()[0],
+                self.seed_uv()[1],
+                SEED_RADIUS / aspect,
+                SEED_RADIUS,
+            ],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 
         let back = 1 - self.front;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("step"),
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("camera"),
@@ -247,6 +266,7 @@ impl Feedback {
             pass.set_bind_group(0, &self.bind_groups[self.front], &[]);
             pass.draw(0..3, 0..1);
         }
+        queue.submit([encoder.finish()]);
         self.front = back;
     }
 }
