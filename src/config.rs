@@ -8,8 +8,9 @@ use crate::params::{Camera, Colour, Monitor, Params};
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
+/// Cameras have no cap of their own: they only reach the GPU as taps, and
+/// [`MAX_TAPS`] already bounds those.
 pub const MAX_MONITORS: usize = 8;
-pub const MAX_CAMERAS: usize = 8;
 
 /// The classic rig: one camera aimed straight at the one monitor it draws to.
 /// The values are the bootstrap stage's defaults — the camera pulls back a
@@ -129,46 +130,84 @@ pub fn load(arg: &str) -> Result<Params, String> {
     Ok(params)
 }
 
-/// Everything the GPU side assumes about a graph's shape, checked once at
-/// load so the render loop never has to.
+/// Everything the GPU side assumes about a graph, checked at load — and
+/// re-asserted by `Feedback::step`, so the success path must stay
+/// allocation-free. Beyond the shape, every number a file can supply is
+/// required finite: a NaN written into a loop that feeds itself never leaves,
+/// and the knobs cannot repair it — `clamp` passes NaN through, and Reset
+/// restores the same poisoned initial.
 pub fn validate(params: &Params) -> Result<(), String> {
     let (m, c) = (params.monitors.len(), params.cameras.len());
     if !(1..=MAX_MONITORS).contains(&m) {
-        return Err(format!("{m} monitors; between 1 and {MAX_MONITORS}"));
+        return Err(format!("{m} monitors; needs between 1 and {MAX_MONITORS}"));
     }
-    if !(1..=MAX_CAMERAS).contains(&c) {
-        return Err(format!("{c} cameras; between 1 and {MAX_CAMERAS}"));
+    if c == 0 {
+        return Err("no cameras; nothing would ever reach a monitor".into());
     }
-    let weights = |name: &str, row: &[f32], len: usize| -> Result<(), String> {
+    let weights = |row: &[f32], len: usize| -> Result<(), String> {
         if row.len() != len {
-            return Err(format!("{name} has {} entries; needs {len}", row.len()));
+            return Err(format!("has {} entries; needs {len}", row.len()));
         }
         match row.iter().find(|w| !w.is_finite() || **w < 0.0) {
-            Some(w) => Err(format!("{name} contains {w}; weights are finite and >= 0")),
+            Some(w) => Err(format!("contains {w}; weights are finite and >= 0")),
             None => Ok(()),
         }
     };
+    let finite = |value: f32, what: &str| -> Result<(), String> {
+        if value.is_finite() {
+            Ok(())
+        } else {
+            Err(format!("{what} is {value}; every number is finite"))
+        }
+    };
     for (i, camera) in params.cameras.iter().enumerate() {
-        weights(&format!("camera {i}'s look"), &camera.look, m)?;
+        weights(&camera.look, m).map_err(|e| format!("camera {i}'s look {e}"))?;
+        weights(&camera.gain, 3).map_err(|e| format!("camera {i}'s gain {e}"))?;
+        let f = &camera.framing;
+        for (value, what) in [
+            (f.zoom, "zoom"),
+            (f.rotation, "rotation"),
+            (f.translate[0], "pan x"),
+            (f.translate[1], "pan y"),
+        ] {
+            finite(value, what).map_err(|e| format!("camera {i}'s {e}"))?;
+        }
+        // The sampling transform divides by the zoom, and a camera that sees
+        // nothing but one texel smeared to infinity helps nobody either.
+        if f.zoom == 0.0 {
+            return Err(format!("camera {i}'s zoom is 0; it would divide by it"));
+        }
     }
     if params.routing.len() != m {
         return Err(format!(
-            "routing has {} rows; one per monitor needs {m}",
+            "routing has {} rows; needs one per monitor, {m}",
             params.routing.len()
         ));
     }
     for (i, row) in params.routing.iter().enumerate() {
-        weights(&format!("routing row {i}"), row, c)?;
+        weights(row, c).map_err(|e| format!("routing row {i} {e}"))?;
     }
-    // The flattened camera-times-look products are what the shader iterates,
-    // and its uniform array is a fixed size.
-    for (i, row) in params.routing.iter().enumerate() {
-        let taps: usize = row
-            .iter()
-            .zip(&params.cameras)
-            .filter(|(route, _)| **route > 0.0)
-            .map(|(_, camera)| camera.look.iter().filter(|w| **w > 0.0).count())
-            .sum();
+    for (i, monitor) in params.monitors.iter().enumerate() {
+        let colour = &monitor.colour;
+        for (value, what) in [
+            (monitor.seed_brightness, "seed brightness"),
+            (colour.hue, "hue"),
+            (colour.saturation, "saturation"),
+            (colour.brightness, "brightness"),
+            (colour.contrast, "contrast"),
+            (colour.gamma, "gamma"),
+        ] {
+            finite(value, what).map_err(|e| format!("monitor {i}'s {e}"))?;
+        }
+        if monitor.seed_brightness < 0.0 {
+            return Err(format!("monitor {i}'s seed brightness is negative"));
+        }
+    }
+    // The flattened routing-times-look products are what the shader
+    // iterates, and its uniform array is a fixed size. Counted by the same
+    // function that builds them.
+    for i in 0..m {
+        let taps = crate::feedback::taps_of(params, i).count();
         if taps > MAX_TAPS {
             return Err(format!(
                 "monitor {i} is fed by {taps} taps; at most {MAX_TAPS}"
@@ -290,6 +329,28 @@ mod tests {
         assert!(validate(&empty).is_err());
 
         assert!(load("no-such-preset").is_err());
+    }
+
+    #[test]
+    fn a_graph_with_a_poisoned_number_is_refused() {
+        // TOML accepts `nan` and `inf` literals, and a NaN inside a loop
+        // that feeds itself never leaves: the knobs clamp with `clamp`,
+        // which passes NaN through, and Reset restores the same initial.
+        // Refusing at load is the only door.
+        let poison: &[fn(&mut Params)] = &[
+            |p| p.cameras[0].gain[0] = f32::NAN,
+            |p| p.cameras[0].gain[1] = -1.0,
+            |p| p.cameras[0].framing.zoom = 0.0,
+            |p| p.cameras[0].framing.rotation = f32::INFINITY,
+            |p| p.monitors[0].colour.gamma = f32::NAN,
+            |p| p.monitors[0].seed_brightness = -0.5,
+            |p| p.routing[0][1] = f32::INFINITY,
+        ];
+        for (i, poison) in poison.iter().enumerate() {
+            let mut params = crossed();
+            poison(&mut params);
+            assert!(validate(&params).is_err(), "poison {i} passed");
+        }
     }
 
     #[test]
