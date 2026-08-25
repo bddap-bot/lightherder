@@ -6,8 +6,10 @@ to. Rust + wgpu, no CPU pixel work in the loop.
 
 A graph of monitors and cameras: a routing matrix mixes any camera onto any
 monitor, beam splitters let one camera watch a blend of monitors, and each
-monitor keeps its own colour controls. Later increments add analog character,
-external inputs, kinetics, MIDI control, and a browser build.
+monitor keeps its own colour controls. Each path carries its own analog
+character — the lens's bloom, composite chroma bleed, grain — and each monitor
+its own amplifier rail. Later increments add external inputs, kinetics, MIDI
+control, and a browser build.
 
 ## How it works
 
@@ -58,6 +60,45 @@ Contrast pivots about mid-grey rather than about black on purpose. A gain
 about black is exactly what the loop gain already is, and the front panel is
 not the place for a second one.
 
+## Analog character
+
+Four things a real rig does that a clean multiply does not, each hung where
+the physics puts it and each per node rather than per instrument — which is
+the point. One loop in a graph can glow and smear while the one beside it
+stays sharp, and that is most of what makes two structures read as two.
+
+Three of them belong to the camera's signal path. **Bloom** is the lens
+scattering a fraction of the light into a halo instead of focusing it: a
+redistribution, never an addition, because a term that adds light is a term
+the loop multiplies. **Chroma bleed** is composite bandwidth — NTSC carries
+colour on a subcarrier with a fraction of luma's bandwidth, so the colour
+arrives smeared along the scanline while the detail it belongs to does not.
+**Grain** is the sensor and the cable, monochrome and signed and present in
+the dark, which is what keeps a loop that has decayed to black from staying
+there.
+
+The fourth belongs to the monitor: **headroom**, where its video amplifier
+runs out of rails. Below half of it the signal is untouched; above, it bends
+asymptotically onto it, the two arms meeting at the knee in both value and
+slope. This is the difference between an analog feedback rig and a runaway
+multiply — push the loop gain past unity with the rail wide open and the
+middle of the spiral becomes a flat white disc, bring the rail down onto the
+signal and the same overdrive compresses into a structure you can still see.
+
+Bloom and bleed ride the taps that were already there, so no intermediate
+texture appears. Their offsets are worked out on the CPU through each tap's
+own affine: a halo is round in the *camera's* image and a bleed runs along
+the *camera's* scanline, whatever angle or zoom that camera is watching from.
+The bleed needs no matrix — NTSC's luma weights sum to one, so adding the
+same amount to all three channels moves luma by exactly that and leaves the
+subcarrier alone, and "this point's luma, the neighbourhood's colour" is one
+dot product. A path with no character takes no extra samples at all.
+
+None of it is on in the presets that shipped before it: a clean path and a
+wide-open rail are an exact identity, guarded over a hundred passes for the
+same reason the colour stage is. The `analog` preset is the single loop with
+all four turned up.
+
 A soft spot seeds the loop, since a loop with gain below 1.0 and nothing
 feeding it decays to black. The spot sits off-centre on purpose: a radially
 symmetric spot in the middle is a fixed point of rotation, so a centred seed
@@ -75,6 +116,7 @@ in.
 
 ```
 nix-shell --run "cargo run --release"                    # the single loop
+nix-shell --run "cargo run --release analog"             # the same, with the signal path on
 nix-shell --run "cargo run --release crossed"            # two crossed structures
 nix-shell --run "cargo run --release insanity"           # four, all-to-all
 nix-shell --run "cargo run --release my-graph.toml"      # your own
@@ -115,26 +157,34 @@ layout.
 | arrows | pan |
 | `[` `]` | loop gain, all channels at once |
 | `1`…`6` | loop gain per channel (r-, r+, g-, g+, b-, b+) |
+| `g` `h` | bloom, i.e. how much the lens scatters |
+| `j` `k` | bloom radius |
+| `y` `u` | chroma bleed |
+| `i` `o` | grain |
 | `;` `'` | seed brightness |
 | `a` `s` | hue, per pass |
 | `d` `f` | saturation |
 | `z` `x` | brightness, i.e. black level |
 | `c` `v` | contrast |
 | `q` `w` | gamma |
+| `e` `t` | headroom, i.e. where the amplifier's rails are |
 | `n` | focus the next camera |
 | `m` | focus the next monitor |
 | space | blank every monitor |
 | `r` | reset every knob |
 | esc | quit |
 
-The knobs act on the focused camera (framing and gain) and the focused
-monitor (seed and colour); `n` and `m` walk the two focuses through the
-graph, and the log line names them. Routing and splitter weights are config,
-not knobs — the MIDI increment puts them under fingers.
+The knobs act on the focused camera (framing, gain and character) and the
+focused monitor (seed, colour and headroom); `n` and `m` walk the two focuses
+through the graph, and the log line names them. Routing and splitter weights
+are config, not knobs — the MIDI increment puts them under fingers.
 
-The colour knobs start neutral, so the instrument out of the box is the loop
-described above and nothing else. Turn one against it: `s` held down is the
-quickest way to see what a stage inside the loop does.
+The colour and character knobs start neutral, so the instrument out of the box
+is the loop described above and nothing else. Turn one against it: `s` held
+down is the quickest way to see what a stage inside the loop does, and `h`
+held down is the quickest way to see what the loop does to a stage — a lens
+that scatters a tenth of the light per pass has spread it everywhere by the
+tenth pass.
 
 Zoom and gain are the sensitive ones. A few thousandths either side of
 `zoom 1.000` is the difference between an image that walks inward, one that
@@ -162,6 +212,11 @@ a seed sent across the crossed wiring bounces between the monitors without
 leaving a copy behind, mix weights deliver exactly the fraction they name, a
 beam splitter delivers light from a monitor its routing row never touches,
 insanity mode puts a quarter of one seed on all four monitors at once, and
-the shipped presets settle without clipping. On a
+the shipped presets settle without clipping. So does the character stage: the
+lens widens the spot without changing how much light is in the frame, the
+bleed carries colour sideways while leaving luma where it was, the grain
+differs frame to frame and arrives on an unlit monitor, the rail bends a peak
+onto the curve it claims while leaving everything under its knee alone, and
+two paths in one graph take their character separately. On a
 machine with no adapter each one prints the reason straight to the process's
 stderr and returns; libtest still counts them as passed.
