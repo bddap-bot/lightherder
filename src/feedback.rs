@@ -15,6 +15,8 @@ const SEED_RADIUS: f32 = 0.06;
 /// centred seed would make the rotation knob do nothing visible.
 const SEED_CENTRE: [f32; 2] = [0.25, 0.0];
 
+/// Mirrored by hand in `shaders/feedback.wgsl`, which documents what each
+/// lane carries. The sizes are held together by `min_binding_size` below.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -24,8 +26,10 @@ struct Uniforms {
     row1: [f32; 4],
     gain: [f32; 4],
     seed: [f32; 4],
-    colour: [f32; 4],
-    phosphor: [f32; 4],
+    /// Columns, each padded to 16 bytes: that is what a WGSL `mat3x3<f32>`
+    /// is, and it is column-major where [`Colour::chroma_matrix`] is not.
+    chroma: [[f32; 4]; 3],
+    levels: [f32; 4],
 }
 
 pub struct Feedback {
@@ -100,7 +104,13 @@ impl Feedback {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: None,
+                        // Makes wgpu check this struct's size against the one
+                        // the shader declares, at pipeline creation: a member
+                        // added to one side and not the other fails loudly
+                        // instead of silently misreading every lane after it.
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Uniforms>() as u64
+                        ),
                     },
                     count: None,
                 },
@@ -212,7 +222,7 @@ impl Feedback {
         let aspect = self.aspect();
         let rows = sample_transform(&params.framing, aspect).rows();
         let seed = self.seed_uv();
-        let chroma = params.colour.chroma_phasor();
+        let chroma = params.colour.chroma_matrix();
         let uniforms = Uniforms {
             row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
             row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
@@ -225,13 +235,15 @@ impl Feedback {
             // The seed is round on screen, so its uv radius is narrower on the
             // axis the monitor is wider on.
             seed: [seed[0], seed[1], SEED_RADIUS / aspect, SEED_RADIUS],
-            colour: [
-                chroma[0],
-                chroma[1],
+            chroma: std::array::from_fn(|col| {
+                [chroma[0][col], chroma[1][col], chroma[2][col], 0.0]
+            }),
+            levels: [
                 params.colour.brightness,
                 params.colour.contrast,
+                params.colour.gamma,
+                0.0,
             ],
-            phosphor: [params.colour.gamma, 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 

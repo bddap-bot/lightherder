@@ -336,17 +336,25 @@ fn spread(rgb: [f32; 3]) -> f32 {
 
 #[test]
 fn the_colour_stage_is_inert_at_its_defaults() {
-    // Neutral means neutral: the pass writes back what the camera gave it,
-    // give or take the rounding of a trip through luma and chroma and back.
+    // Neutral means neutral, and it has to keep meaning it: the stage runs
+    // every pass forever, so anything less than an exact identity compounds
+    // into a colour cast. One pass hides that; a hundred does not. Composed
+    // on the CPU this does not move at all, so the tolerance is a level
+    // rather than a fudge: the published four-digit inverse walks off by 12
+    // levels of blue, and chaining the two matrices per fragment instead of
+    // composing them first walks red off by 4.
     let Some(mut h) = square() else { return };
     let before = tinted(&mut h);
     assert!(spread(before) > 50.0, "nothing to preserve: {before:?}");
 
-    let after = recolour(&mut h, Colour::NEUTRAL);
+    let mut after = before;
+    for _ in 0..100 {
+        after = recolour(&mut h, Colour::NEUTRAL);
+    }
     for channel in 0..3 {
         assert!(
-            (after[channel] - before[channel]).abs() < 3.0,
-            "{before:?} came back as {after:?}"
+            (after[channel] - before[channel]).abs() < 1.0,
+            "{before:?} walked to {after:?} in a hundred neutral passes"
         );
     }
 }
@@ -484,6 +492,130 @@ fn gamma_bends_the_response_rather_than_scaling_it() {
     assert!(
         bright > 2.0 * dim,
         "ratios {bright} and {dim} are too close to be a curve"
+    );
+}
+
+#[test]
+fn the_amplifier_lifts_after_it_expands() {
+    // Turning one knob at a time leaves the other stages at identity, where
+    // every order of them looks alike. Contrast and brightness together is
+    // the case that can tell them apart: lifting before the expansion would
+    // scale the lift too, and land a fifth of full scale higher.
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+
+    let (brightness, contrast) = (0.2, 2.0);
+    let after = recolour(
+        &mut h,
+        Colour {
+            brightness,
+            contrast,
+            ..Colour::NEUTRAL
+        },
+    );
+    let expected = (before[0] - 127.5) * contrast + 127.5 + brightness * 255.0;
+    assert!(
+        (after[0] - expected).abs() < 5.0,
+        "{:?} -> {:?}: red belongs at {expected}, and lifting first would put it at {}",
+        before,
+        after,
+        (before[0] - 127.5 + brightness * 255.0) * contrast + 127.5
+    );
+}
+
+#[test]
+fn the_phosphor_curve_comes_last() {
+    // Same argument one stage along: the curve bends what the amplifier
+    // produced, not the other way round.
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+
+    let (brightness, contrast, gamma) = (0.2, 2.0, 2.0);
+    let after = recolour(
+        &mut h,
+        Colour {
+            brightness,
+            contrast,
+            gamma,
+            ..Colour::NEUTRAL
+        },
+    );
+    let amplify = |v: f32| (v - 127.5) * contrast + 127.5 + brightness * 255.0;
+    let curve = |v: f32| 255.0 * (v / 255.0).powf(gamma);
+    assert!(
+        (after[0] - curve(amplify(before[0]))).abs() < 6.0,
+        "{:?} -> {:?}: red belongs at {}, and curving first would put it at {}",
+        before,
+        after,
+        curve(amplify(before[0])),
+        amplify(curve(before[0]))
+    );
+}
+
+#[test]
+fn the_knobs_colour_the_seed_too() {
+    // The front panel is on the monitor, not on the camera, so it acts on
+    // everything the monitor displays. With the loop dark the seed is the
+    // only thing on it, and the curve has to reach it there.
+    let Some(mut h) = square() else { return };
+    let dark_loop = Params {
+        seed_brightness: 0.5,
+        loop_gain: [0.0; 3],
+        ..frozen(seeded())
+    };
+    h.step(&dark_loop);
+    let plain = h.spot();
+
+    h.step(&Params {
+        colour: Colour {
+            gamma: 2.0,
+            ..Colour::NEUTRAL
+        },
+        ..dark_loop
+    });
+    let curved = h.spot();
+    let expected = plain[0] * plain[0] / 255.0;
+    assert!(
+        (curved[0] - expected).abs() < 5.0,
+        "seed {} -> {}, expected {expected}: the panel did not reach it",
+        plain[0],
+        curved[0]
+    );
+}
+
+#[test]
+fn a_level_pushed_below_black_comes_back_black() {
+    // Contrast carries a dark channel under zero, and the phosphor curve is a
+    // pow(), which has no answer for a negative base. Without the floor the
+    // pass writes not-a-number into a loop that feeds itself forever.
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+    assert!(before[2] > 5.0, "blue was already black: {before:?}");
+
+    let after = recolour(
+        &mut h,
+        Colour {
+            contrast: 1.5,
+            gamma: 2.0,
+            ..Colour::NEUTRAL
+        },
+    );
+    assert!(after[2] < 2.0, "blue came back as {}", after[2]);
+    assert!(after[0] > 20.0, "the frame died with it: {after:?}");
+
+    // Black, and still a number: lifting the black level brings it back.
+    // Not-a-number would have stayed not-a-number for the rest of the run.
+    let lift = 0.3;
+    let lifted = recolour(
+        &mut h,
+        Colour {
+            brightness: lift,
+            ..Colour::NEUTRAL
+        },
+    );
+    assert!(
+        (lifted[2] - lift * 255.0).abs() < 8.0,
+        "blue did not come back: {lifted:?}"
     );
 }
 

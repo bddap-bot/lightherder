@@ -10,12 +10,12 @@ struct Uniforms {
     gain: vec4<f32>,
     // xy: seed centre in uv. zw: seed radii in uv, already aspect-corrected.
     seed: vec4<f32>,
-    // xy: the chroma subcarrier as a phasor, hue in its phase and saturation
-    // in its length. z: brightness. w: contrast.
-    colour: vec4<f32>,
-    // x: phosphor gamma. The rest is what a uniform member's 16-byte
-    // alignment costs; there is no missing term.
-    phosphor: vec4<f32>,
+    // Decodes RGB to luma and chroma, turns the chroma by hue and scales it
+    // by saturation, and encodes back. See params::Colour::chroma_matrix.
+    chroma: mat3x3<f32>,
+    // x: brightness. y: contrast. z: phosphor gamma. w is where the next
+    // front-panel knob goes.
+    levels: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -40,33 +40,18 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VsOut {
 // The monitor's front panel, in the order an analog signal meets it: chroma
 // decode, video amplifier, phosphor.
 fn analog_colour(rgb: vec3<f32>) -> vec3<f32> {
-    // NTSC luma and colour-difference axes. Working here rather than in RGB is
-    // what makes hue a phase: the two chroma axes are the real and imaginary
-    // parts of one subcarrier, so turning it is a complex multiply and luma
-    // comes out untouched.
-    let yiq = vec3<f32>(
-        dot(rgb, vec3<f32>(0.299, 0.587, 0.114)),
-        dot(rgb, vec3<f32>(0.5959, -0.2746, -0.3213)),
-        dot(rgb, vec3<f32>(0.2115, -0.5227, 0.3112)),
-    );
-    let iq = vec2<f32>(
-        yiq.y * u.colour.x - yiq.z * u.colour.y,
-        yiq.y * u.colour.y + yiq.z * u.colour.x,
-    );
-    let decoded = vec3<f32>(
-        yiq.x + dot(iq, vec2<f32>(0.9563, 0.6210)),
-        yiq.x + dot(iq, vec2<f32>(-0.2721, -0.6474)),
-        yiq.x + dot(iq, vec2<f32>(-1.1070, 1.7046)),
-    );
+    let decoded = u.chroma * rgb;
 
-    // Contrast pivots about mid-grey. Pivoting about black instead would make
-    // it a second loop gain, which is a knob this instrument already has.
-    let amplified = (decoded - vec3<f32>(0.5)) * u.colour.w + vec3<f32>(0.5 + u.colour.z);
+    // A gain about mid-grey, which is algebraically a gain plus a lift. What
+    // makes it worth its own knob is the fixed point: the loop gain is a gain
+    // about black applied before the seed is added, so no setting of it holds
+    // mid-grey still.
+    let amplified = (decoded - vec3<f32>(0.5)) * u.levels.y + vec3<f32>(0.5 + u.levels.x);
 
     // A phosphor emits no negative light, and pow() of a negative is not a
     // number, so the floor here is physics and hygiene at once. Nothing
     // clamps the top: the loop keeps its half-float headroom.
-    return pow(max(amplified, vec3<f32>(0.0)), vec3<f32>(u.phosphor.x));
+    return pow(max(amplified, vec3<f32>(0.0)), vec3<f32>(u.levels.z));
 }
 
 @fragment
