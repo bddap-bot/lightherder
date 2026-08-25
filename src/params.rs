@@ -1,16 +1,18 @@
 //! The knobs on the instrument. No windowing, no GPU — a MIDI surface drives
 //! the same values a keyboard does.
 
+use serde::{Deserialize, Serialize};
+
 use crate::affine::Framing;
 
 /// The colour controls on one monitor's front panel, in the order an analog
-/// signal meets them: chroma decode, video amplifier, phosphor. One monitor
-/// for now; the multi-monitor stage gives each its own.
+/// signal meets them: chroma decode, video amplifier, phosphor.
 ///
 /// None of these is the loop gain wearing a hat. The gain is a per-channel
 /// multiply of the light coming *back*, and is what puts any chroma into a
 /// white seed's trail at all; these turn the chroma that is already there.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Colour {
     /// Phase of the chroma subcarrier, in radians. Turning it a little each
     /// pass walks a feedback trail through the spectrum.
@@ -28,6 +30,12 @@ pub struct Colour {
     /// Phosphor transfer exponent. Above 1 the dark end is crushed and the
     /// trails thin out; below 1 they lift and smear.
     pub gamma: f32,
+}
+
+impl Default for Colour {
+    fn default() -> Self {
+        Colour::NEUTRAL
+    }
 }
 
 /// FCC NTSC luma and the two colour-difference axes. Row 0 is luma; rows 1
@@ -84,40 +92,69 @@ impl Colour {
     }
 }
 
-/// Everything the feedback pass needs to know for one frame.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Params {
+/// One camera in the graph: what it sees, how it frames it, and how much of
+/// the light it hands on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Camera {
+    /// How this camera's view is magnified, turned and shifted relative to
+    /// what it looks at.
+    #[serde(default = "Framing::identity")]
     pub framing: Framing,
-    /// Per-channel gain applied once per pass. With the seed off, below 1.0
-    /// the image dies out and above 1.0 it blooms; with the seed on the loop
-    /// settles instead, brighter the closer the gain is to 1.0. The channels
-    /// differ to colour the trails.
-    pub loop_gain: [f32; 3],
-    /// Brightness of the seed spot, which is the only thing keeping a
-    /// sub-unity loop alive.
-    pub seed_brightness: f32,
+    /// Per-channel gain applied to everything this camera sees. With the
+    /// seed off, an effective per-monitor gain below 1.0 dies out and above
+    /// 1.0 blooms; with the seed on the loop settles instead, brighter the
+    /// closer to 1.0. The channels differ to colour the trails.
+    #[serde(default = "unity_gain")]
+    pub gain: [f32; 3],
+    /// The beam splitter in front of the lens: how much of each monitor this
+    /// camera sees, indexed by monitor. `[1.0]`-style one-hots are a camera
+    /// aimed straight at one monitor; two non-zero entries are a camera
+    /// looking through beam-splitter glass at a pair.
+    pub look: Vec<f32>,
+}
+
+fn unity_gain() -> [f32; 3] {
+    [1.0; 3]
+}
+
+/// One monitor in the graph: its front panel and its seed spot.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Monitor {
     pub colour: Colour,
+    /// Brightness of this monitor's seed spot, which is the only thing
+    /// keeping a sub-unity loop alive.
+    pub seed_brightness: f32,
+}
+
+impl Default for Monitor {
+    fn default() -> Self {
+        Monitor {
+            colour: Colour::NEUTRAL,
+            seed_brightness: 0.0,
+        }
+    }
+}
+
+/// The whole instrument for one frame: every camera, every monitor, and the
+/// switcher routing the first onto the second. This is both the live state
+/// the knobs mutate and the on-disk config format — one struct, so the two
+/// cannot drift.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Params {
+    pub cameras: Vec<Camera>,
+    pub monitors: Vec<Monitor>,
+    /// The routing matrix: `routing[m][c]` is how much of camera `c`'s output
+    /// monitor `m` displays. A permutation matrix is a plain switcher; rows
+    /// with several non-zero entries mix cameras on one monitor.
+    pub routing: Vec<Vec<f32>>,
 }
 
 impl Default for Params {
-    /// A framing that already moves: the camera pulls back a little and turns
-    /// a little each pass, so the seed leaves a spiral of shrinking copies
-    /// behind it. Gains sit just under unity, spread across the channels so
-    /// the trail cools from white to blue as it winds in.
     fn default() -> Self {
-        Params {
-            framing: Framing {
-                zoom: 0.994,
-                rotation: 0.05,
-                translate: [0.0, 0.0],
-            },
-            loop_gain: [0.980, 0.986, 0.992],
-            seed_brightness: 0.10,
-            // The colour stage starts out of the way. What it does is seen by
-            // turning one knob against a loop that already works, and the
-            // spiral this default renders is that loop.
-            colour: Colour::NEUTRAL,
-        }
+        crate::config::single()
     }
 }
 
@@ -186,6 +223,27 @@ impl Knob {
         }
     }
 
+    /// Whether the knob lives on a camera or on a monitor, which is what
+    /// decides which focus it follows.
+    pub const fn is_camera(self) -> bool {
+        match self {
+            Knob::Zoom
+            | Knob::Rotation
+            | Knob::TranslateX
+            | Knob::TranslateY
+            | Knob::Gain
+            | Knob::GainR
+            | Knob::GainG
+            | Knob::GainB => true,
+            Knob::Seed
+            | Knob::Hue
+            | Knob::Saturation
+            | Knob::Brightness
+            | Knob::Contrast
+            | Knob::Gamma => false,
+        }
+    }
+
     /// One key press worth of this knob. Spelled out rather than defaulted,
     /// so a knob added later cannot quietly inherit a step nobody chose.
     pub const fn increment(self) -> f32 {
@@ -230,18 +288,20 @@ impl Knob {
 }
 
 impl Params {
-    pub fn nudge(&mut self, knob: Knob, delta: f32) {
+    /// Turn `knob` on the focused camera or monitor — its side of the graph
+    /// decides which of the two indices it follows.
+    pub fn nudge(&mut self, knob: Knob, delta: f32, camera: usize, monitor: usize) {
         // The rigid gain knob is the one that is not a single value: clamp its
         // step once against the tightest channel, so hitting the rail slides
         // all three together instead of flattening the colour offsets.
         if knob == Knob::Gain {
-            let step = self.rigid_gain_step(delta);
+            let step = rigid_gain_step(&self.cameras[camera].gain, delta);
             for channel in [Knob::GainR, Knob::GainG, Knob::GainB] {
-                self.nudge(channel, step);
+                self.nudge(channel, step, camera, monitor);
             }
             return;
         }
-        let field = self.knob_mut(knob).expect("only Gain has no single value");
+        let field = self.knob_mut(knob, camera, monitor);
         *field = match knob.limit() {
             Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
             Limit::Wrap => wrap_pi(*field + delta),
@@ -249,57 +309,73 @@ impl Params {
     }
 
     /// The value a knob turns, for the knobs that are a single number.
-    fn knob_mut(&mut self, knob: Knob) -> Option<&mut f32> {
-        match knob {
-            Knob::Zoom => Some(&mut self.framing.zoom),
-            Knob::Rotation => Some(&mut self.framing.rotation),
-            Knob::TranslateX => Some(&mut self.framing.translate[0]),
-            Knob::TranslateY => Some(&mut self.framing.translate[1]),
-            Knob::GainR => Some(&mut self.loop_gain[0]),
-            Knob::GainG => Some(&mut self.loop_gain[1]),
-            Knob::GainB => Some(&mut self.loop_gain[2]),
-            Knob::Seed => Some(&mut self.seed_brightness),
-            Knob::Hue => Some(&mut self.colour.hue),
-            Knob::Saturation => Some(&mut self.colour.saturation),
-            Knob::Brightness => Some(&mut self.colour.brightness),
-            Knob::Contrast => Some(&mut self.colour.contrast),
-            Knob::Gamma => Some(&mut self.colour.gamma),
-            Knob::Gain => None,
+    fn knob_mut(&mut self, knob: Knob, camera: usize, monitor: usize) -> &mut f32 {
+        if knob.is_camera() {
+            let cam = &mut self.cameras[camera];
+            match knob {
+                Knob::Zoom => &mut cam.framing.zoom,
+                Knob::Rotation => &mut cam.framing.rotation,
+                Knob::TranslateX => &mut cam.framing.translate[0],
+                Knob::TranslateY => &mut cam.framing.translate[1],
+                Knob::GainR => &mut cam.gain[0],
+                Knob::GainG => &mut cam.gain[1],
+                Knob::GainB => &mut cam.gain[2],
+                Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
+                _ => unreachable!("is_camera() said so"),
+            }
+        } else {
+            let mon = &mut self.monitors[monitor];
+            match knob {
+                Knob::Seed => &mut mon.seed_brightness,
+                Knob::Hue => &mut mon.colour.hue,
+                Knob::Saturation => &mut mon.colour.saturation,
+                Knob::Brightness => &mut mon.colour.brightness,
+                Knob::Contrast => &mut mon.colour.contrast,
+                Knob::Gamma => &mut mon.colour.gamma,
+                _ => unreachable!("is_camera() said not"),
+            }
         }
     }
 
-    fn rigid_gain_step(&self, delta: f32) -> f32 {
-        let Limit::Clamp(low, high) = Knob::Gain.limit() else {
-            unreachable!("gain clamps")
-        };
-        let headroom = self
-            .loop_gain
-            .iter()
-            .map(|c| if delta >= 0.0 { high - c } else { c - low })
-            .fold(f32::INFINITY, f32::min)
-            .max(0.0);
-        delta.abs().min(headroom) * delta.signum()
-    }
-
-    pub fn describe(&self) -> String {
+    /// The focused camera and monitor, every knob's value in one line: the
+    /// only readout the instrument has.
+    pub fn describe(&self, camera: usize, monitor: usize) -> String {
+        let cam = &self.cameras[camera];
+        let mon = &self.monitors[monitor];
         format!(
-            "zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  seed {:.3}  \
-             hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  gamma {:.3}",
-            self.framing.zoom,
-            self.framing.rotation,
-            self.framing.translate[0],
-            self.framing.translate[1],
-            self.loop_gain[0],
-            self.loop_gain[1],
-            self.loop_gain[2],
-            self.seed_brightness,
-            self.colour.hue,
-            self.colour.saturation,
-            self.colour.brightness,
-            self.colour.contrast,
-            self.colour.gamma,
+            "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  |  \
+             mon {}/{}: seed {:.3}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  gamma {:.3}",
+            camera + 1,
+            self.cameras.len(),
+            cam.framing.zoom,
+            cam.framing.rotation,
+            cam.framing.translate[0],
+            cam.framing.translate[1],
+            cam.gain[0],
+            cam.gain[1],
+            cam.gain[2],
+            monitor + 1,
+            self.monitors.len(),
+            mon.seed_brightness,
+            mon.colour.hue,
+            mon.colour.saturation,
+            mon.colour.brightness,
+            mon.colour.contrast,
+            mon.colour.gamma,
         )
     }
+}
+
+fn rigid_gain_step(gain: &[f32; 3], delta: f32) -> f32 {
+    let Limit::Clamp(low, high) = Knob::Gain.limit() else {
+        unreachable!("gain clamps")
+    };
+    let headroom = gain
+        .iter()
+        .map(|c| if delta >= 0.0 { high - c } else { c - low })
+        .fold(f32::INFINITY, f32::min)
+        .max(0.0);
+    delta.abs().min(headroom) * delta.signum()
 }
 
 /// Into `(-pi, pi]`, so a knob spun in one direction never runs away.
@@ -314,86 +390,110 @@ mod tests {
     use super::*;
     use core::f32::consts::PI;
 
+    /// The single-loop preset, which is where one of every knob lives.
+    fn p() -> Params {
+        Params::default()
+    }
+
+    fn nudge(p: &mut Params, knob: Knob, delta: f32) {
+        p.nudge(knob, delta, 0, 0);
+    }
+
     #[test]
     fn every_knob_moves_something() {
         for knob in Knob::ALL {
-            let mut p = Params::default();
-            p.nudge(knob, 0.01);
-            assert_ne!(p, Params::default(), "{knob:?} did nothing");
+            let mut params = p();
+            nudge(&mut params, knob, 0.01);
+            assert_ne!(params, p(), "{knob:?} did nothing");
         }
     }
 
     #[test]
     fn knobs_stop_at_their_limits() {
-        let mut p = Params::default();
+        let mut params = p();
         for _ in 0..10_000 {
             for knob in Knob::ALL {
-                p.nudge(knob, 1.0);
+                nudge(&mut params, knob, 1.0);
             }
         }
-        assert_eq!(p.framing.zoom, 4.0);
-        assert_eq!(p.loop_gain, [1.2; 3]);
-        assert_eq!(p.seed_brightness, 1.0);
-        assert_eq!(p.framing.translate, [1.0, 1.0]);
-        assert_eq!(p.colour.saturation, 4.0);
-        assert_eq!(p.colour.brightness, 0.5);
-        assert_eq!(p.colour.contrast, 4.0);
-        assert_eq!(p.colour.gamma, 4.0);
+        let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
+        assert_eq!(cam.framing.zoom, 4.0);
+        assert_eq!(cam.gain, [1.2; 3]);
+        assert_eq!(cam.framing.translate, [1.0, 1.0]);
+        assert_eq!(mon.seed_brightness, 1.0);
+        assert_eq!(mon.colour.saturation, 4.0);
+        assert_eq!(mon.colour.brightness, 0.5);
+        assert_eq!(mon.colour.contrast, 4.0);
+        assert_eq!(mon.colour.gamma, 4.0);
 
         for _ in 0..10_000 {
             for knob in Knob::ALL {
-                p.nudge(knob, -1.0);
+                nudge(&mut params, knob, -1.0);
             }
         }
-        assert_eq!(p.framing.zoom, 0.25);
-        assert_eq!(p.loop_gain, [0.0; 3]);
-        assert_eq!(p.seed_brightness, 0.0);
-        assert_eq!(p.framing.translate, [-1.0, -1.0]);
-        assert_eq!(p.colour.saturation, 0.0);
-        assert_eq!(p.colour.brightness, -0.5);
-        assert_eq!(p.colour.contrast, 0.0);
-        assert_eq!(p.colour.gamma, 0.25);
+        let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
+        assert_eq!(cam.framing.zoom, 0.25);
+        assert_eq!(cam.gain, [0.0; 3]);
+        assert_eq!(cam.framing.translate, [-1.0, -1.0]);
+        assert_eq!(mon.seed_brightness, 0.0);
+        assert_eq!(mon.colour.saturation, 0.0);
+        assert_eq!(mon.colour.brightness, -0.5);
+        assert_eq!(mon.colour.contrast, 0.0);
+        assert_eq!(mon.colour.gamma, 0.25);
     }
+
     #[test]
     fn the_rigid_gain_knob_moves_the_way_it_is_pushed() {
-        let mut p = Params::default();
-        let before = p.loop_gain;
-        p.nudge(Knob::Gain, -0.01);
-        for (after, before) in p.loop_gain.iter().zip(before) {
+        let mut params = p();
+        let before = params.cameras[0].gain;
+        nudge(&mut params, Knob::Gain, -0.01);
+        for (after, before) in params.cameras[0].gain.iter().zip(before) {
             assert!(*after < before, "down should lower {before}, got {after}");
         }
-        p.nudge(Knob::Gain, 0.02);
-        for (after, before) in p.loop_gain.iter().zip(before) {
+        nudge(&mut params, Knob::Gain, 0.02);
+        for (after, before) in params.cameras[0].gain.iter().zip(before) {
             assert!(*after > before, "up should raise {before}, got {after}");
         }
     }
+
     #[test]
     fn the_rigid_gain_knob_keeps_its_colour_offsets_at_the_rail() {
-        let mut p = Params::default();
-        let spread = [
-            p.loop_gain[1] - p.loop_gain[0],
-            p.loop_gain[2] - p.loop_gain[1],
-        ];
+        let mut params = p();
+        let gain = params.cameras[0].gain;
+        let spread = [gain[1] - gain[0], gain[2] - gain[1]];
         for _ in 0..10_000 {
-            p.nudge(Knob::Gain, 0.01);
+            nudge(&mut params, Knob::Gain, 0.01);
         }
-        assert_eq!(
-            p.loop_gain[2], 1.2,
-            "the leading channel should reach the top"
-        );
-        assert!((p.loop_gain[1] - p.loop_gain[0] - spread[0]).abs() < 1e-4);
-        assert!((p.loop_gain[2] - p.loop_gain[1] - spread[1]).abs() < 1e-4);
+        let gain = params.cameras[0].gain;
+        assert_eq!(gain[2], 1.2, "the leading channel should reach the top");
+        assert!((gain[1] - gain[0] - spread[0]).abs() < 1e-4);
+        assert!((gain[2] - gain[1] - spread[1]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_knob_follows_its_own_side_of_the_graph() {
+        // Two cameras and two monitors: a camera knob nudged at focus (1, 0)
+        // lands on camera 1 and nowhere else, and a monitor knob on monitor 0.
+        let mut params = crate::config::crossed();
+        let before = params.clone();
+        params.nudge(Knob::Zoom, 0.01, 1, 0);
+        params.nudge(Knob::Hue, 0.02, 1, 0);
+        assert_eq!(params.cameras[0], before.cameras[0]);
+        assert_ne!(params.cameras[1].framing, before.cameras[1].framing);
+        assert_ne!(params.monitors[0].colour, before.monitors[0].colour);
+        assert_eq!(params.monitors[1], before.monitors[1]);
     }
 
     #[test]
     fn rotation_wraps_instead_of_running_away() {
-        let mut p = Params::default();
-        p.framing.rotation = 0.0;
+        let mut params = p();
+        params.cameras[0].framing.rotation = 0.0;
         for _ in 0..10_000 {
-            p.nudge(Knob::Rotation, 0.5);
-            assert!(p.framing.rotation > -PI && p.framing.rotation <= PI);
+            nudge(&mut params, Knob::Rotation, 0.5);
+            let rotation = params.cameras[0].framing.rotation;
+            assert!(rotation > -PI && rotation <= PI);
         }
-        assert!((p.framing.rotation - wrap_pi(5000.0)).abs() < 1e-2);
+        assert!((params.cameras[0].framing.rotation - wrap_pi(5000.0)).abs() < 1e-2);
     }
 
     #[test]
@@ -406,12 +506,13 @@ mod tests {
 
     #[test]
     fn a_channel_knob_moves_only_its_channel() {
-        let mut p = Params::default();
-        let before = p.loop_gain;
-        p.nudge(Knob::GainG, 0.1);
-        assert_eq!(p.loop_gain[0], before[0]);
-        assert_eq!(p.loop_gain[2], before[2]);
-        assert!((p.loop_gain[1] - (before[1] + 0.1)).abs() < 1e-6);
+        let mut params = p();
+        let before = params.cameras[0].gain;
+        nudge(&mut params, Knob::GainG, 0.1);
+        let gain = params.cameras[0].gain;
+        assert_eq!(gain[0], before[0]);
+        assert_eq!(gain[2], before[2]);
+        assert!((gain[1] - (before[1] + 0.1)).abs() < 1e-6);
     }
 
     #[test]
@@ -419,16 +520,23 @@ mod tests {
         // The log line is the only readout the instrument has, so a knob
         // missing from it is a knob that cannot be played.
         for knob in Knob::ALL {
-            let mut p = Params::default();
-            let before = p.describe();
-            p.nudge(knob, 0.05);
+            let mut params = p();
+            let before = params.describe(0, 0);
+            nudge(&mut params, knob, 0.05);
             assert_ne!(
-                p.describe(),
+                params.describe(0, 0),
                 before,
                 "{} is not in the log line",
                 knob.name()
             );
         }
+    }
+
+    #[test]
+    fn the_log_line_names_the_focus() {
+        let params = crate::config::crossed();
+        assert!(params.describe(1, 0).contains("cam 2/2"));
+        assert!(params.describe(1, 0).contains("mon 1/2"));
     }
 
     /// Settings that between them exercise both signs of the phase, a
@@ -528,24 +636,11 @@ mod tests {
 
     #[test]
     fn hue_wraps_instead_of_running_away() {
-        let mut p = Params::default();
+        let mut params = p();
         for _ in 0..10_000 {
-            p.nudge(Knob::Hue, 0.5);
-            assert!(p.colour.hue > -PI && p.colour.hue <= PI);
-        }
-    }
-
-    #[test]
-    fn the_default_loop_is_contracting() {
-        // A gain at or above 1.0 blooms without bound. The image is what
-        // finally clips, which only the GPU tests can see, but a runaway
-        // default is visible from here.
-        for gain in Params::default().loop_gain {
-            assert!(gain < 1.0, "default gain {gain} never settles");
-            assert!(
-                gain > 0.9,
-                "default gain {gain} leaves no trail worth seeing"
-            );
+            nudge(&mut params, Knob::Hue, 0.5);
+            let hue = params.monitors[0].colour.hue;
+            assert!(hue > -PI && hue <= PI);
         }
     }
 }

@@ -70,7 +70,8 @@ impl Affine2 {
 
 /// Framing of a camera pointed at a monitor: how the monitor's image is
 /// magnified, turned and shifted on its way back onto that monitor.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Framing {
     /// >1 magnifies the image once per pass.
     pub zoom: f32,
@@ -78,6 +79,25 @@ pub struct Framing {
     pub rotation: f32,
     /// Shift per pass, in screen units where the monitor is 1.0 tall.
     pub translate: [f32; 2],
+}
+
+impl Framing {
+    /// A camera that reproduces its subject exactly: no zoom, no turn, no
+    /// shift. The serde default, so a config can frame only the cameras that
+    /// move.
+    pub fn identity() -> Framing {
+        Framing {
+            zoom: 1.0,
+            rotation: 0.0,
+            translate: [0.0, 0.0],
+        }
+    }
+}
+
+impl Default for Framing {
+    fn default() -> Framing {
+        Framing::identity()
+    }
 }
 
 /// Centred, y-up and normalised to the monitor's height — the space the

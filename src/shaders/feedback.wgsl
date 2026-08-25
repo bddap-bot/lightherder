@@ -1,25 +1,33 @@
-// One camera watching one monitor. `fs_camera` writes the monitor's next
-// frame; `fs_present` copies the monitor to the window.
+// The feedback graph's passes. `fs_camera` writes one monitor's next frame
+// from its taps into the bank of previous frames; `fs_present` copies one
+// monitor to a viewport of the window.
 
-struct Uniforms {
+// One flattened edge of the graph: a camera's view of one source monitor,
+// scaled by everything between them. See feedback::Tap.
+struct Tap {
     // Rows of the uv -> uv map from a texel being written to the texel the
     // camera saw there. See affine::sample_transform.
     row0: vec4<f32>,
     row1: vec4<f32>,
-    // rgb: per-channel loop gain. a: seed brightness.
-    gain: vec4<f32>,
+    // rgb: routing x splitter x gain, per channel. a: source layer.
+    weight: vec4<f32>,
+};
+
+struct Uniforms {
     // xy: seed centre in uv. zw: seed radii in uv, already aspect-corrected.
     seed: vec4<f32>,
     // Decodes RGB to luma and chroma, turns the chroma by hue and scales it
     // by saturation, and encodes back. See params::Colour::chroma_matrix.
     chroma: mat3x3<f32>,
-    // x: brightness. y: contrast. z: phosphor gamma. w is where the next
-    // front-panel knob goes.
+    // x: brightness. y: contrast. z: phosphor gamma. w: seed brightness.
     levels: vec4<f32>,
+    // x: tap count. y: this monitor's own layer, for fs_present.
+    info: vec4<f32>,
+    taps: array<Tap, 32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_tex: texture_2d_array<f32>;
 @group(0) @binding(2) var src_samp: sampler;
 
 struct VsOut {
@@ -57,25 +65,33 @@ fn analog_colour(rgb: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
     let p = vec3<f32>(in.uv, 1.0);
-    let src_uv = vec2<f32>(dot(u.row0.xyz, p), dot(u.row1.xyz, p));
 
-    // Past the monitor's edge the camera sees an unlit room, but a clamped
-    // sampler returns the border texel there, which would smear across the
-    // frame. The sample is taken unconditionally so control flow stays
-    // uniform, then thrown away.
-    let inside = all(src_uv >= vec2<f32>(0.0)) && all(src_uv <= vec2<f32>(1.0));
-    let sampled = textureSample(src_tex, src_samp, src_uv).rgb * u.gain.rgb;
-    let fed_back = select(vec3<f32>(0.0), sampled, inside);
+    // The loop bound comes from a uniform, so control flow stays uniform and
+    // textureSample keeps its derivatives.
+    var fed_back = vec3<f32>(0.0);
+    let count = u32(u.info.x);
+    for (var t = 0u; t < count; t++) {
+        let tap = u.taps[t];
+        let src_uv = vec2<f32>(dot(tap.row0.xyz, p), dot(tap.row1.xyz, p));
+
+        // Past a monitor's edge the camera sees an unlit room, but a clamped
+        // sampler returns the border texel there, which would smear across
+        // the frame. The sample is taken unconditionally so control flow
+        // stays uniform, then thrown away.
+        let inside = all(src_uv >= vec2<f32>(0.0)) && all(src_uv <= vec2<f32>(1.0));
+        let sampled = textureSample(src_tex, src_samp, src_uv, i32(tap.weight.a)).rgb;
+        fed_back += select(vec3<f32>(0.0), sampled * tap.weight.rgb, inside);
+    }
 
     let d = length((in.uv - u.seed.xy) / u.seed.zw);
-    let seed = u.gain.a * exp(-d * d);
+    let seed = u.levels.a * exp(-d * d);
 
-    // The knobs are on the monitor, not on the camera, so they colour
+    // The knobs are on the monitor, not on the cameras, so they colour
     // everything the monitor displays — the seed spot included.
     return vec4<f32>(analog_colour(fed_back + vec3<f32>(seed)), 1.0);
 }
 
 @fragment
 fn fs_present(in: VsOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(textureSample(src_tex, src_samp, in.uv).rgb, 1.0);
+    return vec4<f32>(textureSample(src_tex, src_samp, in.uv, i32(u.info.y)).rgb, 1.0);
 }
