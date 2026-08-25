@@ -8,8 +8,9 @@ A graph of monitors and cameras: a routing matrix mixes any camera onto any
 monitor, beam splitters let one camera watch a blend of monitors, and each
 monitor keeps its own colour controls. Each path carries its own analog
 character — the lens's bloom, composite chroma bleed, grain — and each monitor
-its own amplifier rail. Later increments add external inputs, kinetics, MIDI
-control, and a browser build.
+its own amplifier rail. Cameras can also be aimed at things that are not
+monitors: test patterns, video files, capture devices. Later increments add
+kinetics, MIDI control, and a browser build.
 
 ## How it works
 
@@ -24,7 +25,7 @@ The wiring between them is a graph. A routing matrix says how much of each
 camera every monitor displays, and each camera's beam splitter says how much
 of each monitor it sees. Both are just weights, and sampling is linear, so
 the whole path from a monitor's next frame back to the bank of previous
-frames flattens on the CPU into a handful of *taps* — (source monitor,
+frames flattens on the CPU into a handful of *taps* — (source layer,
 sampling transform, weight) — and each monitor is one render pass summing
 its taps. There is no intermediate blend texture because none is needed. All
 monitors step from the same previous frames, the simultaneous capture a rig
@@ -99,6 +100,41 @@ wide-open rail are an exact identity, guarded over a hundred passes for the
 same reason the colour stage is. The `analog` preset is the single loop with
 all four turned up.
 
+## External inputs
+
+A camera can be aimed at something that is not a monitor. An input is a
+further layer of the same source bank, so `look` indexes the monitors and
+then the inputs, and everything already built acts on it unchanged — the
+switcher routes it, a beam splitter blends it with a monitor, the camera's
+zoom and turn frame it, the lens blooms it. Nothing in the shader knows which
+kind of source it sampled. What an input is *not* is part of the loop: no
+camera draws to one, so it takes no routing column, and it is light entering
+the graph rather than light going round it — the same role the seed spot has.
+
+```toml
+inputs = [
+  { pattern = "bars" },                                # or "grid"
+  { file = "clip.mp4" },                               # looped, at its own rate
+  { capture = { format = "v4l2", device = "/dev/video0" } },
+]
+```
+
+Patterns are drawn in-process and are still: motion is the camera's job. The
+other two are one implementation — an `ffmpeg` reading something and writing
+raw RGBA down a pipe, scaled and letterboxed to the monitor size — so
+anything ffmpeg can open is an input. That includes its own generators
+(`{ format = "lavfi", device = "testsrc2" }`) and a screen
+(`{ format = "x11grab", device = ":0.0" }`), which is why only two patterns
+are built in: the two that must work with no ffmpeg on the box. A source that
+has not produced its first frame by the time the window would open is an
+error on the terminal, not a black layer.
+
+Injection level is just the camera's gain, and near unity a little goes a
+long way. The `external` preset hands over a hundredth of what its camera
+sees, into a loop at 0.985 with the seed switched off: the trickle goes round
+seventy times before it fades, so every photon on that monitor came in from
+outside.
+
 A soft spot seeds the loop, since a loop with gain below 1.0 and nothing
 feeding it decays to black. The spot sits off-centre on purpose: a radially
 symmetric spot in the middle is a fixed point of rotation, so a centred seed
@@ -119,6 +155,7 @@ nix-shell --run "cargo run --release"                    # the single loop
 nix-shell --run "cargo run --release analog"             # the same, with the signal path on
 nix-shell --run "cargo run --release crossed"            # two crossed structures
 nix-shell --run "cargo run --release insanity"           # four, all-to-all
+nix-shell --run "cargo run --release external"           # a test pattern driving the loop
 nix-shell --run "cargo run --release my-graph.toml"      # your own
 ```
 
@@ -131,9 +168,9 @@ monitors = [{ seed_brightness = 0.1 }]
 routing = [[0.98]]
 ```
 
-`look` is the camera's beam splitter (a weight per monitor), `routing[m][c]`
-is how much of camera `c` monitor `m` shows, and anything omitted — framing,
-gain, colour — is neutral.
+`look` is the camera's beam splitter — a weight per source, the monitors
+first and then any `inputs`. `routing[m][c]` is how much of camera `c` monitor
+`m` shows, and anything omitted — framing, gain, colour — is neutral.
 
 The `shell.nix` pins nixpkgs and puts the Vulkan loader and windowing
 libraries on `LD_LIBRARY_PATH`, which wgpu and winit open at run time. Without
@@ -217,6 +254,15 @@ lens widens the spot without changing how much light is in the frame, the
 bleed carries colour sideways while leaving luma where it was, the grain
 differs frame to frame and arrives on an unlit monitor, the rail bends a peak
 onto the curve it claims while leaving everything under its knee alone, and
-two paths in one graph take their character separately. On a
-machine with no adapter each one prints the reason straight to the process's
-stderr and returns; libtest still counts them as passed.
+two paths in one graph take their character separately. External inputs get
+the same: what was written to an input's layer is what a camera aimed at it
+sees, it is current in whichever bank the cameras read, blanking the monitors
+leaves it alone, and a splitter and a zoom act on it exactly as on a monitor.
+On a machine with no adapter each one prints the reason straight to the
+process's stderr and returns; libtest still counts them as passed.
+
+The input decoding is tested without a GPU: the drawn patterns against the
+colours they name, and — where there is an `ffmpeg` to run — a capture source
+against what ffmpeg was told to generate, and a real file written, decoded,
+scaled and letterboxed. With no ffmpeg those two print a skip, on the same
+terms as the GPU tests.
