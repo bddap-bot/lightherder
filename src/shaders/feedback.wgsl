@@ -10,6 +10,12 @@ struct Uniforms {
     gain: vec4<f32>,
     // xy: seed centre in uv. zw: seed radii in uv, already aspect-corrected.
     seed: vec4<f32>,
+    // xy: the chroma subcarrier as a phasor, hue in its phase and saturation
+    // in its length. z: brightness. w: contrast.
+    colour: vec4<f32>,
+    // x: phosphor gamma. The rest is what a uniform member's 16-byte
+    // alignment costs; there is no missing term.
+    phosphor: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -31,6 +37,38 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VsOut {
     return out;
 }
 
+// The monitor's front panel, in the order an analog signal meets it: chroma
+// decode, video amplifier, phosphor.
+fn analog_colour(rgb: vec3<f32>) -> vec3<f32> {
+    // NTSC luma and colour-difference axes. Working here rather than in RGB is
+    // what makes hue a phase: the two chroma axes are the real and imaginary
+    // parts of one subcarrier, so turning it is a complex multiply and luma
+    // comes out untouched.
+    let yiq = vec3<f32>(
+        dot(rgb, vec3<f32>(0.299, 0.587, 0.114)),
+        dot(rgb, vec3<f32>(0.5959, -0.2746, -0.3213)),
+        dot(rgb, vec3<f32>(0.2115, -0.5227, 0.3112)),
+    );
+    let iq = vec2<f32>(
+        yiq.y * u.colour.x - yiq.z * u.colour.y,
+        yiq.y * u.colour.y + yiq.z * u.colour.x,
+    );
+    let decoded = vec3<f32>(
+        yiq.x + dot(iq, vec2<f32>(0.9563, 0.6210)),
+        yiq.x + dot(iq, vec2<f32>(-0.2721, -0.6474)),
+        yiq.x + dot(iq, vec2<f32>(-1.1070, 1.7046)),
+    );
+
+    // Contrast pivots about mid-grey. Pivoting about black instead would make
+    // it a second loop gain, which is a knob this instrument already has.
+    let amplified = (decoded - vec3<f32>(0.5)) * u.colour.w + vec3<f32>(0.5 + u.colour.z);
+
+    // A phosphor emits no negative light, and pow() of a negative is not a
+    // number, so the floor here is physics and hygiene at once. Nothing
+    // clamps the top: the loop keeps its half-float headroom.
+    return pow(max(amplified, vec3<f32>(0.0)), vec3<f32>(u.phosphor.x));
+}
+
 @fragment
 fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
     let p = vec3<f32>(in.uv, 1.0);
@@ -47,7 +85,9 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
     let d = length((in.uv - u.seed.xy) / u.seed.zw);
     let seed = u.gain.a * exp(-d * d);
 
-    return vec4<f32>(fed_back + vec3<f32>(seed), 1.0);
+    // The knobs are on the monitor, not on the camera, so they colour
+    // everything the monitor displays — the seed spot included.
+    return vec4<f32>(analog_colour(fed_back + vec3<f32>(seed)), 1.0);
 }
 
 @fragment

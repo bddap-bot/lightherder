@@ -24,6 +24,8 @@ struct Uniforms {
     row1: [f32; 4],
     gain: [f32; 4],
     seed: [f32; 4],
+    colour: [f32; 4],
+    phosphor: [f32; 4],
 }
 
 pub struct Feedback {
@@ -210,6 +212,7 @@ impl Feedback {
         let aspect = self.aspect();
         let rows = sample_transform(&params.framing, aspect).rows();
         let seed = self.seed_uv();
+        let chroma = params.colour.chroma_phasor();
         let uniforms = Uniforms {
             row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
             row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
@@ -222,6 +225,13 @@ impl Feedback {
             // The seed is round on screen, so its uv radius is narrower on the
             // axis the monitor is wider on.
             seed: [seed[0], seed[1], SEED_RADIUS / aspect, SEED_RADIUS],
+            colour: [
+                chroma[0],
+                chroma[1],
+                params.colour.brightness,
+                params.colour.contrast,
+            ],
+            phosphor: [params.colour.gamma, 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 

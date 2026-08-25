@@ -3,6 +3,53 @@
 
 use crate::affine::Framing;
 
+/// The colour controls on one monitor's front panel, in the order an analog
+/// signal meets them: chroma decode, video amplifier, phosphor. One monitor
+/// for now; the multi-monitor stage gives each its own.
+///
+/// None of these is the loop gain wearing a hat. The gain is a per-channel
+/// multiply of the light coming *back*, and is what puts any chroma into a
+/// white seed's trail at all; these turn the chroma that is already there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Colour {
+    /// Phase of the chroma subcarrier, in radians. Turning it a little each
+    /// pass walks a feedback trail through the spectrum.
+    pub hue: f32,
+    /// Amplitude of the chroma subcarrier. 0 is monochrome; above 1 pushes
+    /// colours past the gamut the camera handed over.
+    pub saturation: f32,
+    /// Black level: light added to every texel, which no gain can do. This is
+    /// the knob that lifts a dying loop back off the floor.
+    pub brightness: f32,
+    /// Gain about mid-grey. Deliberately not about black: a gain about black
+    /// is what the loop gain already is, and a second one would be the same
+    /// knob twice.
+    pub contrast: f32,
+    /// Phosphor transfer exponent. Above 1 the dark end is crushed and the
+    /// trails thin out; below 1 they lift and smear.
+    pub gamma: f32,
+}
+
+impl Colour {
+    /// Every stage off, so the pass writes back what the camera gave it.
+    pub const NEUTRAL: Colour = Colour {
+        hue: 0.0,
+        saturation: 1.0,
+        brightness: 0.0,
+        contrast: 1.0,
+        gamma: 1.0,
+    };
+
+    /// The chroma subcarrier as a phasor: hue is its phase and saturation its
+    /// amplitude. Scaling and rotating a 2D vector commute, so one complex
+    /// multiply on `(I, Q)` is both knobs, and the shader never recomputes a
+    /// uniform's sine per fragment.
+    pub fn chroma_phasor(&self) -> [f32; 2] {
+        let (sin, cos) = self.hue.sin_cos();
+        [self.saturation * cos, self.saturation * sin]
+    }
+}
+
 /// Everything the feedback pass needs to know for one frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Params {
@@ -15,6 +62,7 @@ pub struct Params {
     /// Brightness of the seed spot, which is the only thing keeping a
     /// sub-unity loop alive.
     pub seed_brightness: f32,
+    pub colour: Colour,
 }
 
 impl Default for Params {
@@ -31,6 +79,10 @@ impl Default for Params {
             },
             loop_gain: [0.980, 0.986, 0.992],
             seed_brightness: 0.10,
+            // The colour stage starts out of the way. What it does is seen by
+            // turning one knob against a loop that already works, and the
+            // spiral this default renders is that loop.
+            colour: Colour::NEUTRAL,
         }
     }
 }
@@ -47,6 +99,11 @@ pub enum Knob {
     GainG,
     GainB,
     Seed,
+    Hue,
+    Saturation,
+    Brightness,
+    Contrast,
+    Gamma,
 }
 
 /// What a knob does when it runs out of room.
@@ -57,7 +114,7 @@ pub enum Limit {
 }
 
 impl Knob {
-    pub const ALL: [Knob; 9] = [
+    pub const ALL: [Knob; 14] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -67,6 +124,11 @@ impl Knob {
         Knob::GainG,
         Knob::GainB,
         Knob::Seed,
+        Knob::Hue,
+        Knob::Saturation,
+        Knob::Brightness,
+        Knob::Contrast,
+        Knob::Gamma,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -80,6 +142,11 @@ impl Knob {
             Knob::GainG => "loop gain, green",
             Knob::GainB => "loop gain, blue",
             Knob::Seed => "seed brightness",
+            Knob::Hue => "hue",
+            Knob::Saturation => "saturation",
+            Knob::Brightness => "brightness",
+            Knob::Contrast => "contrast",
+            Knob::Gamma => "gamma",
         }
     }
 
@@ -87,8 +154,12 @@ impl Knob {
     /// thousandth of a radian per press would be imperceptible.
     pub const fn increment(self) -> f32 {
         match self {
-            Knob::Rotation => 0.005,
-            Knob::Seed => 0.005,
+            // Hue is the coarse one: a full turn of the subcarrier is a
+            // gesture rather than a trim, and at the default step it would
+            // take three thousand presses.
+            Knob::Hue => 0.02,
+            Knob::Rotation | Knob::Seed => 0.005,
+            Knob::Saturation | Knob::Contrast | Knob::Gamma => 0.005,
             _ => 0.002,
         }
     }
@@ -102,6 +173,15 @@ impl Knob {
             Knob::TranslateX | Knob::TranslateY => Limit::Clamp(-1.0, 1.0),
             Knob::Gain | Knob::GainR | Knob::GainG | Knob::GainB => Limit::Clamp(0.0, 1.2),
             Knob::Seed => Limit::Clamp(0.0, 1.0),
+            // A phase: it comes back round instead of running away.
+            Knob::Hue => Limit::Wrap,
+            Knob::Saturation | Knob::Contrast => Limit::Clamp(0.0, 4.0),
+            // Potent inside a loop, so the rails are close: a tenth of a unit
+            // added every pass floods the monitor to white in under a second.
+            Knob::Brightness => Limit::Clamp(-0.5, 0.5),
+            // Zero would flatten every level to 1.0, and a phosphor curve
+            // worth playing lives nowhere near either rail.
+            Knob::Gamma => Limit::Clamp(0.25, 4.0),
         }
     }
 }
@@ -136,6 +216,11 @@ impl Params {
             Knob::GainG => Some(&mut self.loop_gain[1]),
             Knob::GainB => Some(&mut self.loop_gain[2]),
             Knob::Seed => Some(&mut self.seed_brightness),
+            Knob::Hue => Some(&mut self.colour.hue),
+            Knob::Saturation => Some(&mut self.colour.saturation),
+            Knob::Brightness => Some(&mut self.colour.brightness),
+            Knob::Contrast => Some(&mut self.colour.contrast),
+            Knob::Gamma => Some(&mut self.colour.gamma),
             Knob::Gain => None,
         }
     }
@@ -155,7 +240,8 @@ impl Params {
 
     pub fn describe(&self) -> String {
         format!(
-            "zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  seed {:.3}",
+            "zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  seed {:.3}  \
+             hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  gamma {:.3}",
             self.framing.zoom,
             self.framing.rotation,
             self.framing.translate[0],
@@ -164,6 +250,11 @@ impl Params {
             self.loop_gain[1],
             self.loop_gain[2],
             self.seed_brightness,
+            self.colour.hue,
+            self.colour.saturation,
+            self.colour.brightness,
+            self.colour.contrast,
+            self.colour.gamma,
         )
     }
 }
@@ -201,6 +292,10 @@ mod tests {
         assert_eq!(p.loop_gain, [1.2; 3]);
         assert_eq!(p.seed_brightness, 1.0);
         assert_eq!(p.framing.translate, [1.0, 1.0]);
+        assert_eq!(p.colour.saturation, 4.0);
+        assert_eq!(p.colour.brightness, 0.5);
+        assert_eq!(p.colour.contrast, 4.0);
+        assert_eq!(p.colour.gamma, 4.0);
 
         for _ in 0..10_000 {
             for knob in Knob::ALL {
@@ -211,6 +306,10 @@ mod tests {
         assert_eq!(p.loop_gain, [0.0; 3]);
         assert_eq!(p.seed_brightness, 0.0);
         assert_eq!(p.framing.translate, [-1.0, -1.0]);
+        assert_eq!(p.colour.saturation, 0.0);
+        assert_eq!(p.colour.brightness, -0.5);
+        assert_eq!(p.colour.contrast, 0.0);
+        assert_eq!(p.colour.gamma, 0.25);
     }
     #[test]
     fn the_rigid_gain_knob_moves_the_way_it_is_pushed() {
@@ -270,6 +369,58 @@ mod tests {
         assert_eq!(p.loop_gain[0], before[0]);
         assert_eq!(p.loop_gain[2], before[2]);
         assert!((p.loop_gain[1] - (before[1] + 0.1)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_log_line_shows_every_knob() {
+        // The log line is the only readout the instrument has, so a knob
+        // missing from it is a knob that cannot be played.
+        for knob in Knob::ALL {
+            let mut p = Params::default();
+            let before = p.describe();
+            p.nudge(knob, 0.05);
+            assert_ne!(
+                p.describe(),
+                before,
+                "{} is not in the log line",
+                knob.name()
+            );
+        }
+    }
+
+    #[test]
+    fn the_neutral_colour_leaves_the_chroma_alone() {
+        // 1 + 0i: the complex multiply the shader does with this is identity,
+        // which is what makes the whole stage inert at its defaults.
+        let phasor = Colour::NEUTRAL.chroma_phasor();
+        assert!(
+            (phasor[0] - 1.0).abs() < 1e-6 && phasor[1].abs() < 1e-6,
+            "{phasor:?}"
+        );
+    }
+
+    #[test]
+    fn the_chroma_phasor_is_hue_by_saturation() {
+        let colour = Colour {
+            hue: core::f32::consts::FRAC_PI_2,
+            saturation: 0.5,
+            ..Colour::NEUTRAL
+        };
+        // A quarter turn puts all of it on the imaginary axis, and the
+        // saturation is its length.
+        let [re, im] = colour.chroma_phasor();
+        assert!(re.abs() < 1e-6, "re {re}");
+        assert!((im - 0.5).abs() < 1e-6, "im {im}");
+        assert!((re.hypot(im) - colour.saturation).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hue_wraps_instead_of_running_away() {
+        let mut p = Params::default();
+        for _ in 0..10_000 {
+            p.nudge(Knob::Hue, 0.5);
+            assert!(p.colour.hue > -PI && p.colour.hue <= PI);
+        }
     }
 
     #[test]
