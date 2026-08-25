@@ -8,8 +8,12 @@ use crate::params::Knob;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     Nudge(Knob, f32),
+    /// Move the camera knobs' focus to the next camera in the graph.
+    NextCamera,
+    /// Move the monitor knobs' focus to the next monitor.
+    NextMonitor,
     Reset,
-    /// Blank the monitor, so the loop restarts from the seed alone.
+    /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
     Quit,
 }
@@ -60,7 +64,24 @@ const AXES: &[Axis] = &[
 ];
 
 const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
-    (KeyCode::Space, "space", Action::Clear, "blank the monitor"),
+    (
+        KeyCode::KeyN,
+        "n",
+        Action::NextCamera,
+        "focus the next camera",
+    ),
+    (
+        KeyCode::KeyM,
+        "m",
+        Action::NextMonitor,
+        "focus the next monitor",
+    ),
+    (
+        KeyCode::Space,
+        "space",
+        Action::Clear,
+        "blank every monitor",
+    ),
     (KeyCode::KeyR, "r", Action::Reset, "reset every knob"),
     (KeyCode::Escape, "esc", Action::Quit, "quit"),
 ];
@@ -151,20 +172,23 @@ mod tests {
     #[test]
     fn a_key_press_reaches_the_value_it_names() {
         let mut p = Params::default();
-        let before = p.framing.zoom;
+        let before = p.cameras[0].framing.zoom;
         let Some(Action::Nudge(knob, delta)) = action_for(KeyCode::Equal) else {
             panic!("= should nudge a knob")
         };
-        p.nudge(knob, delta);
-        assert!((p.framing.zoom - (before + Knob::Zoom.increment())).abs() < 1e-6);
+        p.nudge(knob, delta, 0, 0);
+        let zoom = p.cameras[0].framing.zoom;
+        assert!((zoom - (before + Knob::Zoom.increment())).abs() < 1e-6);
     }
 
     #[test]
     fn the_commands_do_what_they_say() {
+        assert_eq!(action_for(KeyCode::KeyN), Some(Action::NextCamera));
+        assert_eq!(action_for(KeyCode::KeyM), Some(Action::NextMonitor));
         assert_eq!(action_for(KeyCode::Space), Some(Action::Clear));
         assert_eq!(action_for(KeyCode::KeyR), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape), Some(Action::Quit));
-        assert_eq!(action_for(KeyCode::KeyN), None);
+        assert_eq!(action_for(KeyCode::KeyT), None);
     }
 
     #[test]

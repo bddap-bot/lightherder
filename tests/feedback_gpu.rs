@@ -11,8 +11,49 @@ use std::sync::OnceLock;
 
 use lightherder::affine::Framing;
 use lightherder::feedback::Feedback;
-use lightherder::params::{Colour, Params};
+use lightherder::params::{Camera, Colour, Monitor, Params};
 use lightherder::present::Present;
+
+/// The bootstrap stage's one-camera-one-monitor params, kept as this suite's
+/// shorthand: most of what it checks — the colour stage, the framing, the
+/// seed — needs only the single loop, and reads better without graph
+/// plumbing. [`graph`] turns it into the real thing.
+#[derive(Clone, Copy)]
+struct Single {
+    framing: Framing,
+    loop_gain: [f32; 3],
+    seed_brightness: f32,
+    colour: Colour,
+}
+
+impl Default for Single {
+    /// The single preset's values, taken from it rather than copied, so the
+    /// shorthand cannot drift from the instrument.
+    fn default() -> Single {
+        let p = lightherder::config::single();
+        Single {
+            framing: p.cameras[0].framing,
+            loop_gain: p.cameras[0].gain,
+            seed_brightness: p.monitors[0].seed_brightness,
+            colour: p.monitors[0].colour,
+        }
+    }
+}
+
+fn graph(s: &Single) -> Params {
+    Params {
+        cameras: vec![Camera {
+            framing: s.framing,
+            gain: s.loop_gain,
+            look: vec![1.0],
+        }],
+        monitors: vec![Monitor {
+            colour: s.colour,
+            seed_brightness: s.seed_brightness,
+        }],
+        routing: vec![vec![1.0]],
+    }
+}
 
 const SIZE: u32 = 64;
 const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -49,7 +90,8 @@ fn gpu() -> &'static Result<(wgpu::Device, wgpu::Queue), NoGpu> {
     })
 }
 
-/// A monitor, a camera, and somewhere to read the result back from.
+/// A bank of monitors, the cameras wired to them, and somewhere to read the
+/// result back from.
 struct Harness {
     device: &'static wgpu::Device,
     queue: &'static wgpu::Queue,
@@ -62,7 +104,7 @@ struct Harness {
 }
 
 impl Harness {
-    fn new(monitor: (u32, u32), target_size: (u32, u32)) -> Harness {
+    fn new(monitor: (u32, u32), target_size: (u32, u32), monitors: usize) -> Harness {
         // Read-back is the point of this harness, and a texture-to-buffer
         // copy demands 256-byte rows.
         assert!(
@@ -72,7 +114,7 @@ impl Harness {
         );
         let (device, queue) = gpu().as_ref().expect("checked by harness()");
 
-        let feedback = Feedback::new(device, monitor.0, monitor.1);
+        let feedback = Feedback::new(device, monitor.0, monitor.1, monitors);
         let present = Present::new(device, &feedback, TARGET_FORMAT);
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("readback target"),
@@ -107,7 +149,11 @@ impl Harness {
         }
     }
 
-    fn step(&mut self, params: &Params) {
+    fn step(&mut self, params: &Single) {
+        self.step_graph(&graph(params));
+    }
+
+    fn step_graph(&mut self, params: &Params) {
         self.feedback.step(self.device, self.queue, params);
         self.present();
     }
@@ -205,10 +251,29 @@ impl Image {
     }
 
     fn brightest(&self) -> f32 {
-        self.pixels
-            .chunks_exact(4)
-            .map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0)
-            .fold(0.0, f32::max)
+        self.brightest_in(0.0, 0.0, 1.0, 1.0)
+    }
+
+    /// The brightest pixel inside a uv rectangle — one tile of the grid,
+    /// when the caller is asking about a single monitor.
+    fn brightest_in(&self, u0: f32, v0: f32, u1: f32, v1: f32) -> f32 {
+        let (x0, x1) = (
+            (u0 * self.width as f32) as u32,
+            (u1 * self.width as f32) as u32,
+        );
+        let (y0, y1) = (
+            (v0 * self.height as f32) as u32,
+            (v1 * self.height as f32) as u32,
+        );
+        let mut peak = 0.0f32;
+        for y in y0..y1.min(self.height) {
+            for x in x0..x1.min(self.width) {
+                let i = ((y * self.width + x) * 4) as usize;
+                let p = &self.pixels[i..i + 3];
+                peak = peak.max((p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0);
+            }
+        }
+        peak
     }
 
     /// Where the brightest pixel is, in uv — an oracle for "the loop put its
@@ -254,9 +319,9 @@ impl Image {
 
 /// `None` means this machine has no GPU to test with, which is not a failure.
 /// A machine that has one and cannot open it is a failure, and panics.
-fn harness(monitor: (u32, u32), target: (u32, u32)) -> Option<Harness> {
+fn graph_harness(monitor: (u32, u32), target: (u32, u32), monitors: usize) -> Option<Harness> {
     match gpu() {
-        Ok(_) => Some(Harness::new(monitor, target)),
+        Ok(_) => Some(Harness::new(monitor, target, monitors)),
         Err(NoGpu::NoAdapter(why)) => {
             let _ = writeln!(std::io::stderr(), "SKIPPED: no adapter: {why}");
             None
@@ -265,20 +330,25 @@ fn harness(monitor: (u32, u32), target: (u32, u32)) -> Option<Harness> {
     }
 }
 
+/// The single loop, which is all most of this suite needs.
+fn harness(monitor: (u32, u32), target: (u32, u32)) -> Option<Harness> {
+    graph_harness(monitor, target, 1)
+}
+
 fn square() -> Option<Harness> {
     harness((SIZE, SIZE), (SIZE, SIZE))
 }
 
-fn seeded() -> Params {
-    Params {
+fn seeded() -> Single {
+    Single {
         seed_brightness: 1.0,
         ..Default::default()
     }
 }
 
 /// Params whose camera does not move, so a lit spot stays where it was put.
-fn frozen(params: Params) -> Params {
-    Params {
+fn frozen(params: Single) -> Single {
+    Single {
         framing: Framing {
             zoom: 1.0,
             rotation: 0.0,
@@ -299,12 +369,12 @@ const TINT: [f32; 3] = [1.0, 0.4, 0.1];
 /// somewhere to put it before the 8-bit target clips.
 fn tinted(h: &mut Harness) -> [f32; 3] {
     let still = frozen(seeded());
-    h.step(&Params {
+    h.step(&Single {
         seed_brightness: 0.5,
         loop_gain: [0.0; 3],
         ..still
     });
-    h.step(&Params {
+    h.step(&Single {
         seed_brightness: 0.0,
         loop_gain: TINT,
         ..still
@@ -315,7 +385,7 @@ fn tinted(h: &mut Harness) -> [f32; 3] {
 /// One more pass with the loop passing light straight through, so the only
 /// thing between the previous frame and this one is the colour stage.
 fn recolour(h: &mut Harness, colour: Colour) -> [f32; 3] {
-    h.step(&Params {
+    h.step(&Single {
         seed_brightness: 0.0,
         loop_gain: [1.0; 3],
         colour,
@@ -558,7 +628,7 @@ fn the_knobs_colour_the_seed_too() {
     // everything the monitor displays. With the loop dark the seed is the
     // only thing on it, and the curve has to reach it there.
     let Some(mut h) = square() else { return };
-    let dark_loop = Params {
+    let dark_loop = Single {
         seed_brightness: 0.5,
         loop_gain: [0.0; 3],
         ..frozen(seeded())
@@ -566,7 +636,7 @@ fn the_knobs_colour_the_seed_too() {
     h.step(&dark_loop);
     let plain = h.spot();
 
-    h.step(&Params {
+    h.step(&Single {
         colour: Colour {
             gamma: 2.0,
             ..Colour::NEUTRAL
@@ -679,7 +749,7 @@ fn the_image_survives_the_seed_being_switched_off() {
     h.step(&seeded());
     let mut previous = h.read().at(seed[0], seed[1]);
 
-    let params = Params {
+    let params = Single {
         seed_brightness: 0.0,
         loop_gain: [0.9; 3],
         ..frozen(seeded())
@@ -701,7 +771,7 @@ fn zero_gain_ends_the_loop_in_one_pass() {
     h.step(&seeded());
     assert!(h.read().at(seed[0], seed[1]) > 200.0);
 
-    let params = Params {
+    let params = Single {
         seed_brightness: 0.0,
         loop_gain: [0.0; 3],
         ..frozen(seeded())
@@ -724,7 +794,7 @@ fn panning_moves_the_image_the_way_the_knobs_say() {
         let seed = h.feedback.seed_uv();
         h.step(&seeded());
 
-        let params = Params {
+        let params = Single {
             seed_brightness: 0.0,
             loop_gain: [1.0; 3],
             colour: Colour::NEUTRAL,
@@ -755,7 +825,7 @@ fn pan_is_applied_in_the_frame_the_camera_moves_in() {
     let Some(mut h) = square() else { return };
     h.step(&seeded());
 
-    let params = Params {
+    let params = Single {
         seed_brightness: 0.0,
         loop_gain: [1.0; 3],
         colour: Colour::NEUTRAL,
@@ -786,7 +856,7 @@ fn the_seed_is_round_on_a_wide_monitor() {
         return;
     };
     let seed = h.feedback.seed_uv();
-    h.step(&Params {
+    h.step(&Single {
         loop_gain: [0.0; 3],
         ..seeded()
     });
@@ -807,11 +877,11 @@ fn the_default_knobs_settle_without_clipping() {
     // and every bit of structure is lost; too dark and there is nothing to
     // see at all.
     let Some(mut h) = square() else { return };
-    let params = Params::default();
+    let params = graph(&Single::default());
     for _ in 0..400 {
         h.feedback.step(h.device, h.queue, &params);
     }
-    h.step(&params);
+    h.step_graph(&params);
 
     let img = h.read();
     let peak = img.brightest();
@@ -845,7 +915,7 @@ fn the_gain_is_applied_once_per_pass() {
     let mut previous = h.read().at(seed[0], seed[1]);
 
     let gain = 0.8;
-    let params = Params {
+    let params = Single {
         seed_brightness: 0.0,
         loop_gain: [gain; 3],
         ..frozen(seeded())
@@ -874,7 +944,7 @@ fn what_the_camera_sees_past_the_monitor_is_black() {
     // what distinguishes "outside reads black" from "outside is whatever the
     // sampler clamped to".
     let still = frozen(seeded());
-    let pan = |dx: f32| Params {
+    let pan = |dx: f32| Single {
         seed_brightness: 0.0,
         loop_gain: [1.0; 3],
         colour: Colour::NEUTRAL,
@@ -914,7 +984,7 @@ fn a_window_of_the_wrong_shape_gets_bars_rather_than_a_stretch() {
     let Some(mut h) = harness((SIZE, SIZE), (SIZE * 4, SIZE)) else {
         return;
     };
-    h.step(&Params {
+    h.step(&Single {
         loop_gain: [0.0; 3],
         ..seeded()
     });
@@ -946,7 +1016,7 @@ fn the_seed_sits_where_the_convention_says_it_does() {
     let Some(mut h) = harness((SIZE * 4, SIZE * 2), (SIZE * 4, SIZE * 2)) else {
         return;
     };
-    h.step(&Params {
+    h.step(&Single {
         loop_gain: [0.0; 3],
         ..seeded()
     });
@@ -956,4 +1026,244 @@ fn the_seed_sits_where_the_convention_says_it_does() {
         (found[0] - 0.625).abs() < 0.02 && (found[1] - 0.5).abs() < 0.02,
         "seed at {found:?}, expected [0.625, 0.5]"
     );
+}
+
+// ---- The graph itself: routing, splitters, mixing, and the tiled window ----
+
+/// uv on monitor `m` -> uv in the tiled read-back target. Only exact for a
+/// target sized as the grid times the monitor, which the graph tests use.
+fn tile(monitors: usize, m: usize, u: f32, v: f32) -> (f32, f32) {
+    let (cols, rows) = lightherder::present::grid(monitors);
+    let (col, row) = (m as u32 % cols, m as u32 / cols);
+    (
+        (col as f32 + u) / cols as f32,
+        (row as f32 + v) / rows as f32,
+    )
+}
+
+fn one_hot(len: usize, hot: usize) -> Vec<f32> {
+    let mut look = vec![0.0; len];
+    look[hot] = 1.0;
+    look
+}
+
+fn plain_camera(look: Vec<f32>) -> Camera {
+    Camera {
+        framing: Framing::identity(),
+        gain: [1.0; 3],
+        look,
+    }
+}
+
+fn silent_monitor() -> Monitor {
+    Monitor {
+        colour: Colour::NEUTRAL,
+        seed_brightness: 0.0,
+    }
+}
+
+#[test]
+fn the_routing_matrix_sends_each_camera_across() {
+    // The crossed two-structure wiring, distilled: camera j is aimed straight
+    // at monitor j but routed to the other monitor, so a seed lit on monitor
+    // 0 must appear on monitor 1 one pass later, and bounce back the pass
+    // after — and never sit still where it was.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2) else {
+        return;
+    };
+    let mut p = Params {
+        cameras: vec![plain_camera(one_hot(2, 0)), plain_camera(one_hot(2, 1))],
+        monitors: vec![
+            Monitor {
+                seed_brightness: 1.0,
+                ..silent_monitor()
+            },
+            silent_monitor(),
+        ],
+        routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
+    };
+    let seed = h.feedback.seed_uv();
+    let at = |img: &Image, m: usize| {
+        let (u, v) = tile(2, m, seed[0], seed[1]);
+        img.at(u, v)
+    };
+
+    h.step_graph(&p);
+    let img = h.read();
+    assert!(at(&img, 0) > 200.0, "the seed never lit: {}", at(&img, 0));
+    assert!(
+        at(&img, 1) < 2.0,
+        "monitor 1 lit before anything crossed: {}",
+        at(&img, 1)
+    );
+
+    p.monitors[0].seed_brightness = 0.0;
+    h.step_graph(&p);
+    let img = h.read();
+    assert!(
+        at(&img, 1) > 200.0,
+        "the seed did not cross: {}",
+        at(&img, 1)
+    );
+    assert!(
+        at(&img, 0) < 2.0,
+        "monitor 0 kept light its routing row does not grant: {}",
+        at(&img, 0)
+    );
+
+    h.step_graph(&p);
+    let img = h.read();
+    assert!(
+        at(&img, 0) > 200.0,
+        "the seed did not cross back: {}",
+        at(&img, 0)
+    );
+    assert!(
+        at(&img, 1) < 2.0,
+        "or it left a copy behind: {}",
+        at(&img, 1)
+    );
+}
+
+#[test]
+fn mix_weights_scale_each_camera_s_contribution() {
+    // Two cameras on one monitor, mixed 2:1. Their framings differ — one
+    // holds still, one pans the image aside — so the two contributions land
+    // in different places and each weight can be read off on its own.
+    let Some(mut h) = square() else { return };
+    let mut p = Params {
+        cameras: vec![
+            plain_camera(vec![1.0]),
+            Camera {
+                framing: Framing {
+                    translate: [0.25, 0.0],
+                    ..Framing::identity()
+                },
+                ..plain_camera(vec![1.0])
+            },
+        ],
+        monitors: vec![Monitor {
+            seed_brightness: 1.0,
+            ..silent_monitor()
+        }],
+        routing: vec![vec![0.0, 0.0]],
+    };
+    h.step_graph(&p);
+    let seed = h.feedback.seed_uv();
+    let base = h.read().at(seed[0], seed[1]);
+    assert!(base > 200.0, "the seed never lit: {base}");
+
+    p.monitors[0].seed_brightness = 0.0;
+    p.routing[0] = vec![0.5, 0.25];
+    h.step_graph(&p);
+    let img = h.read();
+    let (held, panned) = (img.at(seed[0], seed[1]), img.at(seed[0] + 0.25, seed[1]));
+    assert!(
+        (held / base - 0.5).abs() < 0.04,
+        "weight 0.5 delivered {held} of {base}"
+    );
+    assert!(
+        (panned / base - 0.25).abs() < 0.04,
+        "weight 0.25 delivered {panned} of {base}"
+    );
+}
+
+#[test]
+fn a_beam_splitter_blends_two_monitors_into_one_camera() {
+    // One camera looking through 50/50 splitter glass at both monitors,
+    // feeding monitor 0. Light monitor 1 alone: half its light arrives on
+    // monitor 0, which no routing row could do — the blend happens in front
+    // of the lens.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2) else {
+        return;
+    };
+    let mut p = Params {
+        cameras: vec![plain_camera(vec![0.5, 0.5])],
+        monitors: vec![
+            silent_monitor(),
+            Monitor {
+                seed_brightness: 1.0,
+                ..silent_monitor()
+            },
+        ],
+        routing: vec![vec![1.0], vec![0.0]],
+    };
+    let seed = h.feedback.seed_uv();
+    h.step_graph(&p);
+    let (u, v) = tile(2, 1, seed[0], seed[1]);
+    let bright = h.read().at(u, v);
+    assert!(bright > 200.0, "the seed never lit: {bright}");
+
+    p.monitors[1].seed_brightness = 0.0;
+    h.step_graph(&p);
+    let img = h.read();
+    let (u, v) = tile(2, 0, seed[0], seed[1]);
+    assert!(
+        (img.at(u, v) - bright / 2.0).abs() < 8.0,
+        "the splitter delivered {} of {bright}",
+        img.at(u, v)
+    );
+}
+
+#[test]
+fn insanity_mode_composes_every_monitor_from_one_seed() {
+    // All-to-all: each of four monitors shows a quarter of every camera, so
+    // one seeded monitor puts a quarter of its light on all four — itself
+    // included — a pass later.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), 4) else {
+        return;
+    };
+    let mut p = Params {
+        cameras: (0..4).map(|c| plain_camera(one_hot(4, c))).collect(),
+        monitors: (0..4)
+            .map(|m| Monitor {
+                seed_brightness: if m == 0 { 1.0 } else { 0.0 },
+                ..silent_monitor()
+            })
+            .collect(),
+        routing: vec![vec![0.25; 4]; 4],
+    };
+    h.step_graph(&p);
+    p.monitors[0].seed_brightness = 0.0;
+    h.step_graph(&p);
+
+    let seed = h.feedback.seed_uv();
+    let img = h.read();
+    for m in 0..4 {
+        let (u, v) = tile(4, m, seed[0], seed[1]);
+        assert!(
+            (img.at(u, v) - 255.0 / 4.0).abs() < 10.0,
+            "monitor {m} shows {}, not a quarter of the seed",
+            img.at(u, v)
+        );
+    }
+}
+
+#[test]
+fn the_shipped_presets_settle_without_clipping() {
+    // Same bar the single default is held to, per monitor: left running,
+    // every monitor of every preset keeps an image — not flat white, not
+    // black.
+    for (name, p) in [
+        ("crossed", lightherder::config::crossed()),
+        ("insanity", lightherder::config::insanity()),
+    ] {
+        let n = p.monitors.len();
+        let (cols, rows) = lightherder::present::grid(n);
+        let Some(mut h) = graph_harness((SIZE, SIZE), (cols * SIZE, rows * SIZE), n) else {
+            return;
+        };
+        for _ in 0..399 {
+            h.feedback.step(h.device, h.queue, &p);
+        }
+        h.step_graph(&p);
+        let img = h.read();
+        for m in 0..n {
+            let (u0, v0) = tile(n, m, 0.0, 0.0);
+            let (u1, v1) = tile(n, m, 1.0, 1.0);
+            let peak = img.brightest_in(u0, v0, u1, v1);
+            assert!(peak < 250.0, "{name} monitor {m} settles clipped: {peak}");
+            assert!(peak > 30.0, "{name} monitor {m} goes dark: {peak}");
+        }
+    }
 }

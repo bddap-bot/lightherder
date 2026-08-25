@@ -1,8 +1,10 @@
-//! A GPU video-feedback instrument: a camera pointed at the monitor it is
-//! drawing to, which is enough to make spirals, tunnels and fractals.
+//! A GPU video-feedback instrument: cameras pointed at the monitors they are
+//! drawing to, which is enough to make spirals, tunnels and fractals — and,
+//! wired into a graph, monitors composed of each other's past.
 
 pub mod affine;
 pub mod app;
+pub mod config;
 pub mod feedback;
 pub mod keys;
 pub mod params;

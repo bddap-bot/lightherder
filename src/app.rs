@@ -13,9 +13,9 @@ use crate::keys::{action_for, Action};
 use crate::params::Params;
 use crate::present::Present;
 
-/// The monitor is a fixed size, independent of the window. Resizing the window
-/// then rescales the view instead of scrambling the loop's state, and the
-/// framing numbers keep meaning the same thing.
+/// Every monitor is a fixed size, independent of the window. Resizing the
+/// window then rescales the view instead of scrambling the loops' state, and
+/// the framing numbers keep meaning the same thing.
 pub const MONITOR_SIZE: (u32, u32) = (1920, 1080);
 
 struct Live {
@@ -28,20 +28,30 @@ struct Live {
     present: Present,
 }
 
-#[derive(Default)]
 pub struct App {
     params: Params,
+    /// What Reset restores: the graph as it was loaded, not the single
+    /// preset's knobs.
+    initial: Params,
+    /// The camera and monitor the knobs act on.
+    focus: (usize, usize),
     live: Option<Live>,
 }
 
-pub fn run() -> Result<(), winit::error::EventLoopError> {
+/// `params` is the loaded graph, already validated by `config::load`.
+pub fn run(params: Params) -> Result<(), winit::error::EventLoopError> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut App::default())
+    event_loop.run_app(&mut App {
+        initial: params.clone(),
+        params,
+        focus: (0, 0),
+        live: None,
+    })
 }
 
 impl Live {
-    async fn new(event_loop: &ActiveEventLoop) -> Live {
+    async fn new(event_loop: &ActiveEventLoop, monitors: usize) -> Live {
         let window = Arc::new(
             event_loop
                 .create_window(Window::default_attributes().with_title("lightherder"))
@@ -81,9 +91,9 @@ impl Live {
         let format = config.format;
         surface.configure(&device, &config);
 
-        // wgpu zero-initialises textures, so the monitor starts black without
+        // wgpu zero-initialises textures, so the monitors start black without
         // an explicit clear.
-        let feedback = Feedback::new(&device, MONITOR_SIZE.0, MONITOR_SIZE.1);
+        let feedback = Feedback::new(&device, MONITOR_SIZE.0, MONITOR_SIZE.1, monitors);
         let present = Present::new(&device, &feedback, format);
 
         Live {
@@ -140,15 +150,27 @@ impl Live {
     }
 }
 
+impl App {
+    fn describe(&self) -> String {
+        self.params.describe(self.focus.0, self.focus.1)
+    }
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.live.is_some() {
             return;
         }
         // The one place this program blocks.
-        let live = pollster::block_on(Live::new(event_loop));
-        log::info!("monitor {}x{}", MONITOR_SIZE.0, MONITOR_SIZE.1);
-        log::info!("{}", self.params.describe());
+        let live = pollster::block_on(Live::new(event_loop, self.params.monitors.len()));
+        log::info!(
+            "{} monitors of {}x{}, {} cameras",
+            self.params.monitors.len(),
+            MONITOR_SIZE.0,
+            MONITOR_SIZE.1,
+            self.params.cameras.len()
+        );
+        log::info!("{}", self.describe());
         live.window.request_redraw();
         self.live = Some(live);
     }
@@ -174,12 +196,20 @@ impl ApplicationHandler for App {
                 // Repeats are wanted: holding a key sweeps its knob.
                 match action_for(code) {
                     Some(Action::Nudge(knob, delta)) => {
-                        self.params.nudge(knob, delta);
-                        log::info!("{}", self.params.describe());
+                        self.params.nudge(knob, delta, self.focus.0, self.focus.1);
+                        log::info!("{}", self.describe());
+                    }
+                    Some(Action::NextCamera) => {
+                        self.focus.0 = (self.focus.0 + 1) % self.params.cameras.len();
+                        log::info!("{}", self.describe());
+                    }
+                    Some(Action::NextMonitor) => {
+                        self.focus.1 = (self.focus.1 + 1) % self.params.monitors.len();
+                        log::info!("{}", self.describe());
                     }
                     Some(Action::Reset) => {
-                        self.params = Params::default();
-                        log::info!("reset: {}", self.params.describe());
+                        self.params = self.initial.clone();
+                        log::info!("reset: {}", self.describe());
                     }
                     Some(Action::Clear) => {
                         live.feedback.clear(&live.device, &live.queue);
