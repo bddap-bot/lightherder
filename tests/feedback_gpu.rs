@@ -1535,23 +1535,27 @@ fn the_amplifier_bends_onto_its_headroom_instead_of_clipping() {
         "no shoulder to read: {was_dim}"
     );
 
-    // One rail, and it is the one value at which `h - h^2/4x` cannot be told
-    // from `h - h/4x` or `h - 1/4x`. A second rail is what closes that, and
-    // a second rail at 0.6 does not agree with this arithmetic — see the
-    // stage's issue comment; the discrepancy is unexplained and is a real
-    // question about the shader, not about the test.
-    const RAIL: f32 = 1.0;
-    let railed = drive(&mut h, RAIL);
-    // Above the knee: h - h^2/4x, the arm the shader takes.
+    // The arm the shader takes above the knee, `h - h^2/4x`, read at two
+    // rails. At h = 1.0 that expression cannot be told from `h - h/4x` or
+    // `h - 1/4x` — all three coincide there, so a single reading would pass
+    // for two wrong curves. The lower rail is what separates them, which is
+    // the difference between guarding the rail's shape and guarding a point.
     let x = peak / 255.0;
-    let expected = 255.0 * (RAIL - RAIL * RAIL / (4.0 * x));
-    let got = railed.at(seed[0], seed[1]);
-    assert!(
-        (got - expected).abs() < 3.0,
-        "peak {peak} should bend to {expected:.1}, got {got}"
-    );
+    let bends_onto = |img: &Image, rail: f32| {
+        let expected = 255.0 * (rail - rail * rail / (4.0 * x));
+        let got = img.at(seed[0], seed[1]);
+        assert!(
+            (got - expected).abs() < 3.0,
+            "peak {peak} at rail {rail} should bend to {expected:.1}, got {got}"
+        );
+    };
+    let railed = drive(&mut h, 1.0);
+    bends_onto(&railed, 1.0);
+    bends_onto(&drive(&mut h, 0.6), 0.6);
+
     // Below the knee: untouched, which is what makes the rail a rail and not
-    // a gain knob wearing one's hat.
+    // a gain knob wearing one's hat. Read at the higher rail, the one whose
+    // knee the dim point is definitely under.
     let now_dim = railed.at(dim.0, dim.1);
     assert!(
         (now_dim - was_dim).abs() < 2.0,
