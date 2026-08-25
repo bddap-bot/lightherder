@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use lightherder::affine::Framing;
 use lightherder::feedback::Feedback;
-use lightherder::params::{Camera, Colour, Monitor, Params};
+use lightherder::params::{Camera, Character, Colour, Monitor, Params};
 use lightherder::present::Present;
 
 /// The bootstrap stage's one-camera-one-monitor params, kept as this suite's
@@ -22,8 +22,10 @@ use lightherder::present::Present;
 struct Single {
     framing: Framing,
     loop_gain: [f32; 3],
+    character: Character,
     seed_brightness: f32,
     colour: Colour,
+    headroom: f32,
 }
 
 impl Default for Single {
@@ -34,8 +36,10 @@ impl Default for Single {
         Single {
             framing: p.cameras[0].framing,
             loop_gain: p.cameras[0].gain,
+            character: p.cameras[0].character,
             seed_brightness: p.monitors[0].seed_brightness,
             colour: p.monitors[0].colour,
+            headroom: p.monitors[0].headroom,
         }
     }
 }
@@ -45,11 +49,13 @@ fn graph(s: &Single) -> Params {
         cameras: vec![Camera {
             framing: s.framing,
             gain: s.loop_gain,
+            character: s.character,
             look: vec![1.0],
         }],
         monitors: vec![Monitor {
             colour: s.colour,
             seed_brightness: s.seed_brightness,
+            headroom: s.headroom,
         }],
         routing: vec![vec![1.0]],
     }
@@ -248,6 +254,15 @@ impl Image {
     fn at(&self, u: f32, v: f32) -> f32 {
         let rgb = self.rgb_at(u, v);
         (rgb[0] + rgb[1] + rgb[2]) / 3.0
+    }
+
+    /// Every channel of every texel added up: the oracle for whether
+    /// something moved the light around or made more of it.
+    fn total(&self) -> f64 {
+        self.pixels
+            .chunks_exact(4)
+            .map(|p| f64::from(p[0]) + f64::from(p[1]) + f64::from(p[2]))
+            .sum()
     }
 
     fn brightest(&self) -> f32 {
@@ -802,6 +817,7 @@ fn panning_moves_the_image_the_way_the_knobs_say() {
                 translate,
                 ..frozen(seeded()).framing
             },
+            ..Default::default()
         };
         h.step(&params);
 
@@ -834,6 +850,7 @@ fn pan_is_applied_in_the_frame_the_camera_moves_in() {
             rotation: 0.0,
             translate: [-0.3, 0.0],
         },
+        ..Default::default()
     };
     h.step(&params);
 
@@ -952,6 +969,7 @@ fn what_the_camera_sees_past_the_monitor_is_black() {
             translate: [dx, 0.0],
             ..still.framing
         },
+        ..Default::default()
     };
     h.step(&pan(0.25));
     let img = h.read();
@@ -1051,6 +1069,7 @@ fn plain_camera(look: Vec<f32>) -> Camera {
     Camera {
         framing: Framing::identity(),
         gain: [1.0; 3],
+        character: Character::CLEAN,
         look,
     }
 }
@@ -1059,6 +1078,7 @@ fn silent_monitor() -> Monitor {
     Monitor {
         colour: Colour::NEUTRAL,
         seed_brightness: 0.0,
+        headroom: Monitor::WIDE_OPEN,
     }
 }
 
@@ -1274,4 +1294,278 @@ fn the_single_shim_is_the_single_preset() {
     // what notices if `single()` ever rewires and leaves the suite testing a
     // graph the instrument no longer ships.
     assert_eq!(graph(&Single::default()), lightherder::config::single());
+}
+
+// ---- Analog character: the signal path, and the amplifier's rails --------
+
+/// One pass with the loop passing light straight through, so the only thing
+/// between the previous frame and this one is the path's character. The
+/// mirror of [`recolour`], for the other half of the front panel.
+fn recharacter(h: &mut Harness, character: Character, headroom: f32) -> Image {
+    h.step(&Single {
+        seed_brightness: 0.0,
+        loop_gain: [1.0; 3],
+        character,
+        headroom,
+        ..frozen(seeded())
+    });
+    h.read()
+}
+
+/// A lit spot and nothing moving: the frame every character test starts from.
+fn still_spot(h: &mut Harness) -> Image {
+    h.step(&Single {
+        seed_brightness: 1.0,
+        loop_gain: [0.0; 3],
+        ..frozen(seeded())
+    });
+    h.read()
+}
+
+#[test]
+fn the_character_stage_is_inert_at_its_defaults() {
+    // A clean path and a wide-open rail have to be an exact identity, not
+    // nearly one: they run on every pass of a loop that feeds itself, so a
+    // residual is not a residual for long. A hundred passes is what tells
+    // "exact" apart from "close" — the same reason the colour stage gets a
+    // hundred rather than one.
+    let Some(mut h) = square() else { return };
+    let before = tinted(&mut h);
+    assert!(spread(before) > 50.0, "nothing to preserve: {before:?}");
+
+    for _ in 0..100 {
+        recharacter(&mut h, Character::CLEAN, Monitor::WIDE_OPEN);
+    }
+    let after = h.spot();
+    for channel in 0..3 {
+        assert!(
+            (after[channel] - before[channel]).abs() < 1.0,
+            "{before:?} walked to {after:?} in a hundred clean passes"
+        );
+    }
+}
+
+#[test]
+fn the_lens_spreads_the_light_without_making_any() {
+    // Scatter is a redistribution. Anything that adds light instead is a
+    // term the loop multiplies, and a few passes later it owns the monitor.
+    let Some(mut h) = square() else { return };
+    let seed = h.feedback.seed_uv();
+    let before = still_spot(&mut h);
+    let (peak, width, light) = (
+        before.at(seed[0], seed[1]),
+        before.half_extent(seed, true),
+        before.total(),
+    );
+    assert!(peak > 200.0, "nothing to spread: {peak}");
+
+    let after = recharacter(
+        &mut h,
+        Character {
+            bloom: 0.8,
+            bloom_radius: 0.08,
+            ..Character::CLEAN
+        },
+        Monitor::WIDE_OPEN,
+    );
+    assert!(
+        after.half_extent(seed, true) > width,
+        "the spot is no wider: {width} px either way"
+    );
+    assert!(after.at(seed[0], seed[1]) < peak, "the middle did not give");
+    // Sampling and 8-bit read-back cost a little at the edges; making light
+    // would cost far more than that, in the other direction.
+    let ratio = after.total() / light;
+    assert!(
+        (0.92..=1.02).contains(&ratio),
+        "the lens changed the total light by {:.1}%",
+        (ratio - 1.0) * 100.0
+    );
+}
+
+#[test]
+fn the_bleed_smears_the_colour_and_leaves_the_luma_where_it_was() {
+    // Composite carries chroma on a subcarrier with a fraction of luma's
+    // bandwidth: the colour arrives blurred and the detail does not. Luma is
+    // preserved exactly wherever no channel is driven under black, which is
+    // the whole lit spot — the colour crawl out in the dark is the clipping,
+    // and is the artefact rather than a failure of the claim.
+    let Some(mut h) = square() else { return };
+    let seed = h.feedback.seed_uv();
+    let before_spot = tinted(&mut h);
+    assert!(spread(before_spot) > 50.0, "no colour to smear");
+    let before = h.read();
+
+    // A square monitor, so a screen-unit offset is the same offset in uv.
+    const BLEED: f32 = 0.05;
+    let after = recharacter(
+        &mut h,
+        Character {
+            chroma_bleed: BLEED,
+            ..Character::CLEAN
+        },
+        Monitor::WIDE_OPEN,
+    );
+
+    for step in [-0.03, -0.015, 0.0, 0.015, 0.03] {
+        let (u, v) = (seed[0] + step, seed[1]);
+        let (was, now) = (before.rgb_at(u, v), after.rgb_at(u, v));
+        assert!(
+            (luma(now) - luma(was)).abs() < 2.0,
+            "luma moved at {step:+}: {was:?} -> {now:?}"
+        );
+    }
+
+    // And out past the spot's edge, where there was nothing but a trace of
+    // colour, there is now the neighbour's.
+    let (u, v) = (seed[0] + BLEED, seed[1]);
+    assert!(
+        spread(after.rgb_at(u, v)) > spread(before.rgb_at(u, v)) + 4.0,
+        "colour did not travel: {:?} -> {:?}",
+        before.rgb_at(u, v),
+        after.rgb_at(u, v)
+    );
+}
+
+#[test]
+fn the_grain_moves_every_frame_and_only_when_it_is_asked_for() {
+    // Grain is what keeps a loop that has decayed to black from staying
+    // there, so it has to arrive with no light at all — and it has to be
+    // different every frame, or it is a fixed pattern the loop will bake in.
+    let Some(mut h) = square() else { return };
+    let dark = Single {
+        seed_brightness: 0.0,
+        loop_gain: [0.0; 3],
+        ..frozen(seeded())
+    };
+    h.step(&dark);
+    let clean = h.read();
+    h.step(&dark);
+    assert_eq!(
+        clean.pixels,
+        h.read().pixels,
+        "a clean path is not still frame to frame"
+    );
+    assert_eq!(clean.brightest(), 0.0, "an unlit monitor is not black");
+
+    let noisy = Single {
+        character: Character {
+            noise: 0.2,
+            ..Character::CLEAN
+        },
+        ..dark
+    };
+    h.step(&noisy);
+    let first = h.read();
+    h.step(&noisy);
+    let second = h.read();
+    // Half the grain is negative and the phosphor floors it, so the peak is
+    // the positive half of a 0.2 swing.
+    assert!(first.brightest() > 20.0, "no grain: {}", first.brightest());
+    assert_ne!(first.pixels, second.pixels, "the grain is a fixed pattern");
+}
+
+#[test]
+fn the_amplifier_bends_onto_its_headroom_instead_of_clipping() {
+    // The rail's whole job is that an overdriven loop compresses into a
+    // structure rather than clipping the monitor to flat white. Its curve is
+    // checked against the wide-open reading it is derived from, so this
+    // measures the shape and not a number someone typed twice.
+    let Some(mut h) = square() else { return };
+    let seed = h.feedback.seed_uv();
+    let drive = |h: &mut Harness, headroom: f32| {
+        h.step(&Single {
+            seed_brightness: 1.0,
+            loop_gain: [0.0; 3],
+            headroom,
+            ..frozen(seeded())
+        });
+        h.read()
+    };
+
+    let wide = drive(&mut h, Monitor::WIDE_OPEN);
+    let peak = wide.at(seed[0], seed[1]);
+    assert!(
+        (200.0..255.0).contains(&peak),
+        "the seed must be bright and unclipped to say anything: {peak}"
+    );
+    // A dim point, deliberately under the knee of the rail below.
+    let dim = (seed[0] + 0.07, seed[1]);
+    let was_dim = wide.at(dim.0, dim.1);
+    assert!(
+        (10.0..100.0).contains(&was_dim),
+        "no shoulder to read: {was_dim}"
+    );
+
+    const RAIL: f32 = 1.0;
+    let railed = drive(&mut h, RAIL);
+    // Above the knee: h - h^2/4x, the arm the shader takes.
+    let x = peak / 255.0;
+    let expected = 255.0 * (RAIL - RAIL * RAIL / (4.0 * x));
+    let got = railed.at(seed[0], seed[1]);
+    assert!(
+        (got - expected).abs() < 3.0,
+        "peak {peak} should bend to {expected:.1}, got {got}"
+    );
+    // Below it: untouched, which is what makes the rail a rail and not a
+    // gain knob wearing one's hat.
+    let now_dim = railed.at(dim.0, dim.1);
+    assert!(
+        (now_dim - was_dim).abs() < 2.0,
+        "the rail reached under its knee: {was_dim} -> {now_dim}"
+    );
+}
+
+#[test]
+fn character_is_tunable_per_path() {
+    // The reason it hangs on the camera rather than on the instrument: one
+    // path in a graph glows while the one beside it stays sharp. Two
+    // monitors, each its own loop, differing in nothing but their lens.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2) else {
+        return;
+    };
+    let mut p = Params {
+        cameras: vec![plain_camera(one_hot(2, 0)), plain_camera(one_hot(2, 1))],
+        monitors: vec![
+            Monitor {
+                seed_brightness: 1.0,
+                ..silent_monitor()
+            },
+            Monitor {
+                seed_brightness: 1.0,
+                ..silent_monitor()
+            },
+        ],
+        routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+    };
+    h.step_graph(&p);
+    let lit = h.read();
+    let tiles = |img: &Image| {
+        (
+            img.brightest_in(0.0, 0.0, 0.5, 1.0),
+            img.brightest_in(0.5, 0.0, 1.0, 1.0),
+        )
+    };
+    let (left, right) = tiles(&lit);
+    assert!((left - right).abs() < 1.0, "the two loops start apart");
+    assert!(left > 200.0, "nothing lit: {left}");
+
+    for monitor in &mut p.monitors {
+        monitor.seed_brightness = 0.0;
+    }
+    p.cameras[1].character = Character {
+        bloom: 0.9,
+        bloom_radius: 0.1,
+        ..Character::CLEAN
+    };
+    h.step_graph(&p);
+    let (clean, bloomed) = tiles(&h.read());
+    assert!(
+        (clean - left).abs() < 2.0,
+        "the clean path changed too: {left} -> {clean}"
+    );
+    assert!(
+        bloomed < clean - 20.0,
+        "the lens on camera 2 did nothing: {clean} vs {bloomed}"
+    );
 }

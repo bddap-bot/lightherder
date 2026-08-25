@@ -92,6 +92,55 @@ impl Colour {
     }
 }
 
+/// What one camera's signal path does to the light on its way to the
+/// switcher: the lens in front of the sensor, and the composite cable behind
+/// it. It lives on the camera rather than globally because a graph's paths
+/// are not alike — one loop can glow and smear while its neighbour stays
+/// clean, which is most of what makes two structures read as two.
+///
+/// The monitor's end of the same story is its [`Monitor::headroom`]: these
+/// are the signal's imperfections, that one is the amplifier's.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Character {
+    /// Fraction of the light the lens scatters into a halo instead of
+    /// focusing. Redistributed, not added: a term that adds light is a term
+    /// the loop multiplies, and a few passes later it owns the monitor.
+    pub bloom: f32,
+    /// Radius of that halo in the camera's own image, in screen units where
+    /// the monitor is 1.0 tall. In the camera's image, so a camera that
+    /// zooms or turns takes its halo with it.
+    pub bloom_radius: f32,
+    /// How far colour smears along the scanline, same units. Composite video
+    /// carries chroma on a subcarrier with a fraction of luma's bandwidth,
+    /// so the colour arrives blurred while the detail it belongs to does not.
+    pub chroma_bleed: f32,
+    /// Amplitude of the grain the sensor and the cable add. Signed and
+    /// monochrome — it is luma noise — and added whether or not any light
+    /// arrived, which is what keeps a loop that has decayed to black from
+    /// staying there.
+    pub noise: f32,
+}
+
+impl Character {
+    /// A perfect lens, unlimited bandwidth and no grain: the path hands on
+    /// exactly what the camera saw. The radius is not zero because it is
+    /// only an aim point — nothing reads it until `bloom` is turned up, and
+    /// a radius of zero would make that knob look broken.
+    pub const CLEAN: Character = Character {
+        bloom: 0.0,
+        bloom_radius: 0.03,
+        chroma_bleed: 0.0,
+        noise: 0.0,
+    };
+}
+
+impl Default for Character {
+    fn default() -> Character {
+        Character::CLEAN
+    }
+}
+
 /// One camera in the graph: what it sees, how it frames it, and how much of
 /// the light it hands on.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -107,6 +156,9 @@ pub struct Camera {
     /// closer to 1.0. The channels differ to colour the trails.
     #[serde(default = "unity_gain")]
     pub gain: [f32; 3],
+    /// What this path does to the light besides scale it.
+    #[serde(default)]
+    pub character: Character,
     /// The beam splitter in front of the lens: how much of each monitor this
     /// camera sees, indexed by monitor. `[1.0]`-style one-hots are a camera
     /// aimed straight at one monitor; two non-zero entries are a camera
@@ -126,6 +178,15 @@ pub struct Monitor {
     /// Brightness of this monitor's seed spot, which is the only thing
     /// keeping a sub-unity loop alive.
     pub seed_brightness: f32,
+    /// Where this monitor's video amplifier runs out of rails. The signal is
+    /// untouched below half of it and bends asymptotically onto it above, so
+    /// a loop driven past unity gain compresses into a structure instead of
+    /// clipping the whole monitor to flat white — which is the difference
+    /// between an analog feedback rig and a runaway multiply.
+    ///
+    /// The default is above anything a monitor can display, so the rail is
+    /// exactly inert until a performer brings it down onto the signal.
+    pub headroom: f32,
 }
 
 impl Default for Monitor {
@@ -133,8 +194,15 @@ impl Default for Monitor {
         Monitor {
             colour: Colour::NEUTRAL,
             seed_brightness: 0.0,
+            headroom: Monitor::WIDE_OPEN,
         }
     }
+}
+
+impl Monitor {
+    /// Linear below 1.0, which is everything a monitor can display, so the
+    /// rail only bites once the loop is overdriven.
+    pub const WIDE_OPEN: f32 = 2.0;
 }
 
 /// The whole instrument for one frame: every camera, every monitor, and the
@@ -178,12 +246,18 @@ pub enum Knob {
     GainR,
     GainG,
     GainB,
+    /// The lens's scatter, and how wide it scatters.
+    Bloom,
+    BloomRadius,
+    ChromaBleed,
+    Noise,
     Seed,
     Hue,
     Saturation,
     Brightness,
     Contrast,
     Gamma,
+    Headroom,
 }
 
 /// What a knob does when it runs out of room.
@@ -196,7 +270,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 14] = [
+    pub const ALL: [Knob; 19] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -205,12 +279,17 @@ impl Knob {
         Knob::GainR,
         Knob::GainG,
         Knob::GainB,
+        Knob::Bloom,
+        Knob::BloomRadius,
+        Knob::ChromaBleed,
+        Knob::Noise,
         Knob::Seed,
         Knob::Hue,
         Knob::Saturation,
         Knob::Brightness,
         Knob::Contrast,
         Knob::Gamma,
+        Knob::Headroom,
     ];
 
     pub const fn name(self) -> &'static str {
@@ -223,12 +302,17 @@ impl Knob {
             Knob::GainR => "loop gain, red",
             Knob::GainG => "loop gain, green",
             Knob::GainB => "loop gain, blue",
+            Knob::Bloom => "bloom",
+            Knob::BloomRadius => "bloom radius",
+            Knob::ChromaBleed => "chroma bleed",
+            Knob::Noise => "noise",
             Knob::Seed => "seed",
             Knob::Hue => "hue",
             Knob::Saturation => "saturation",
             Knob::Brightness => "brightness",
             Knob::Contrast => "contrast",
             Knob::Gamma => "gamma",
+            Knob::Headroom => "headroom",
         }
     }
 
@@ -243,13 +327,18 @@ impl Knob {
             | Knob::Gain
             | Knob::GainR
             | Knob::GainG
-            | Knob::GainB => true,
+            | Knob::GainB
+            | Knob::Bloom
+            | Knob::BloomRadius
+            | Knob::ChromaBleed
+            | Knob::Noise => true,
             Knob::Seed
             | Knob::Hue
             | Knob::Saturation
             | Knob::Brightness
             | Knob::Contrast
-            | Knob::Gamma => false,
+            | Knob::Gamma
+            | Knob::Headroom => false,
         }
     }
 
@@ -262,7 +351,13 @@ impl Knob {
             Knob::Hue => 0.02,
             // Coarse enough to see: a thousandth of a radian, or of a decade
             // of phosphor curve, is imperceptible.
-            Knob::Rotation | Knob::Seed | Knob::Saturation | Knob::Contrast | Knob::Gamma => 0.005,
+            Knob::Rotation
+            | Knob::Seed
+            | Knob::Saturation
+            | Knob::Contrast
+            | Knob::Gamma
+            | Knob::Bloom
+            | Knob::Headroom => 0.005,
             Knob::Zoom
             | Knob::TranslateX
             | Knob::TranslateY
@@ -270,7 +365,12 @@ impl Knob {
             | Knob::GainR
             | Knob::GainG
             | Knob::GainB
-            | Knob::Brightness => 0.002,
+            | Knob::Brightness
+            // Radii, and a hundredth of the monitor's height is already a
+            // visible smear: these want a finer step than the levels do.
+            | Knob::BloomRadius
+            | Knob::ChromaBleed
+            | Knob::Noise => 0.002,
         }
     }
 
@@ -282,6 +382,15 @@ impl Knob {
             Knob::Rotation => Limit::Wrap,
             Knob::TranslateX | Knob::TranslateY => Limit::Clamp(-1.0, 1.0),
             Knob::Gain | Knob::GainR | Knob::GainG | Knob::GainB => Limit::Clamp(0.0, 1.2),
+            // A lens cannot scatter more light than it was given, and past
+            // 1.0 the mix extrapolates away from the image it is blurring.
+            Knob::Bloom => Limit::Clamp(0.0, 1.0),
+            // A halo a quarter of the monitor high is already most of the
+            // screen once the loop has run it round a few times.
+            Knob::BloomRadius | Knob::ChromaBleed => Limit::Clamp(0.0, 0.25),
+            // Grain is added every pass and then fed back, so it compounds:
+            // a tenth of full scale per pass is already snow.
+            Knob::Noise => Limit::Clamp(0.0, 0.25),
             Knob::Seed => Limit::Clamp(0.0, 1.0),
             // A phase: it comes back round instead of running away.
             Knob::Hue => Limit::Wrap,
@@ -292,6 +401,10 @@ impl Knob {
             // Zero would flatten every level to 1.0, and a phosphor curve
             // worth playing lives nowhere near either rail.
             Knob::Gamma => Limit::Clamp(0.25, 4.0),
+            // Zero would divide by it. The bottom of the range squeezes the
+            // whole picture into the darkest eighth, which is a sound worth
+            // having; the top is well clear of anything a monitor displays.
+            Knob::Headroom => Limit::Clamp(0.125, 8.0),
         }
     }
 }
@@ -329,6 +442,10 @@ impl Params {
                 Knob::GainR => &mut cam.gain[0],
                 Knob::GainG => &mut cam.gain[1],
                 Knob::GainB => &mut cam.gain[2],
+                Knob::Bloom => &mut cam.character.bloom,
+                Knob::BloomRadius => &mut cam.character.bloom_radius,
+                Knob::ChromaBleed => &mut cam.character.chroma_bleed,
+                Knob::Noise => &mut cam.character.noise,
                 Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
                 _ => unreachable!("is_camera() said so"),
             }
@@ -341,6 +458,7 @@ impl Params {
                 Knob::Brightness => &mut mon.colour.brightness,
                 Knob::Contrast => &mut mon.colour.contrast,
                 Knob::Gamma => &mut mon.colour.gamma,
+                Knob::Headroom => &mut mon.headroom,
                 _ => unreachable!("is_camera() said not"),
             }
         }
@@ -352,8 +470,10 @@ impl Params {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         format!(
-            "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  |  \
-             mon {}/{}: seed {:.3}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  gamma {:.3}",
+            "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
+             bloom {:.3}r{:.3}  bleed {:.3}  noise {:.3}  |  \
+             mon {}/{}: seed {:.3}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
+             gamma {:.3}  headroom {:.3}",
             focus.camera + 1,
             self.cameras.len(),
             cam.framing.zoom,
@@ -363,6 +483,10 @@ impl Params {
             cam.gain[0],
             cam.gain[1],
             cam.gain[2],
+            cam.character.bloom,
+            cam.character.bloom_radius,
+            cam.character.chroma_bleed,
+            cam.character.noise,
             focus.monitor + 1,
             self.monitors.len(),
             mon.seed_brightness,
@@ -371,6 +495,7 @@ impl Params {
             mon.colour.brightness,
             mon.colour.contrast,
             mon.colour.gamma,
+            mon.headroom,
         )
     }
 }
@@ -429,6 +554,11 @@ mod tests {
         assert_eq!(cam.framing.zoom, 4.0);
         assert_eq!(cam.gain, [1.2; 3]);
         assert_eq!(cam.framing.translate, [1.0, 1.0]);
+        assert_eq!(cam.character.bloom, 1.0);
+        assert_eq!(cam.character.bloom_radius, 0.25);
+        assert_eq!(cam.character.chroma_bleed, 0.25);
+        assert_eq!(cam.character.noise, 0.25);
+        assert_eq!(mon.headroom, 8.0);
         assert_eq!(mon.seed_brightness, 1.0);
         assert_eq!(mon.colour.saturation, 4.0);
         assert_eq!(mon.colour.brightness, 0.5);
@@ -444,6 +574,11 @@ mod tests {
         assert_eq!(cam.framing.zoom, 0.25);
         assert_eq!(cam.gain, [0.0; 3]);
         assert_eq!(cam.framing.translate, [-1.0, -1.0]);
+        assert_eq!(cam.character.bloom, 0.0);
+        assert_eq!(cam.character.bloom_radius, 0.0);
+        assert_eq!(cam.character.chroma_bleed, 0.0);
+        assert_eq!(cam.character.noise, 0.0);
+        assert_eq!(mon.headroom, 0.125);
         assert_eq!(mon.seed_brightness, 0.0);
         assert_eq!(mon.colour.saturation, 0.0);
         assert_eq!(mon.colour.brightness, -0.5);
