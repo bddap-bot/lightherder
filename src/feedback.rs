@@ -2,6 +2,9 @@
 //!
 //! The monitors are the layers of one texture array, double-buffered so a
 //! pass can read every monitor's previous frame while writing one's next.
+//! The external inputs are further layers of the same array, written rather
+//! than rendered — so "what a camera is looking at" is one layer index and
+//! the shader never learns which kind it got.
 //! Everything between a monitor and the cameras feeding it — the routing
 //! matrix, each camera's beam splitter, each camera's gain — flattens on the
 //! CPU into a list of *taps*: (source layer, sampling affine, weight).
@@ -111,8 +114,13 @@ pub struct Feedback {
     width: u32,
     height: u32,
     monitors: usize,
+    inputs: usize,
+    /// The two banks themselves, kept because an external input is written
+    /// into their layers rather than rendered into them.
+    textures: [wgpu::Texture; 2],
     /// Render targets, one per monitor layer of the two banks — two because
     /// a pass cannot sample the bank it is writing: `layer_views[bank][monitor]`.
+    /// Monitors only: an input layer is never drawn to, and never blanked.
     layer_views: [Vec<wgpu::TextureView>; 2],
     bind_groups: [wgpu::BindGroup; 2],
     front: usize,
@@ -126,30 +134,41 @@ pub struct Feedback {
 }
 
 impl Feedback {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32, monitors: usize) -> Feedback {
+    /// `inputs` external sources sit after the `monitors` in the same bank,
+    /// so a camera reaches either by one layer index and the shader has no
+    /// idea which kind it is sampling.
+    pub fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        monitors: usize,
+        inputs: usize,
+    ) -> Feedback {
         assert!(width > 0 && height > 0, "monitors must have a size");
         assert!(monitors > 0, "a graph with no monitors draws nothing");
+        let layers = monitors + inputs;
+
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/feedback.wgsl"));
 
-        let textures: Vec<wgpu::Texture> = (0..2)
-            .map(|i| {
-                device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("monitor bank {i}")),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: monitors as u32,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: MONITOR_FORMAT,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
+        let textures: [wgpu::Texture; 2] = std::array::from_fn(|i| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("source bank {i}")),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: layers as u32,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: MONITOR_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    // What an input's frames are written through.
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
             })
-            .collect();
+        });
         // A one-monitor graph still binds as an array: `create_view` defaults
         // the dimension to D2 for a single layer, which would not match the
         // shader's `texture_2d_array`.
@@ -275,6 +294,8 @@ impl Feedback {
             width,
             height,
             monitors,
+            inputs,
+            textures,
             layer_views,
             bind_groups,
             front: 0,
@@ -299,6 +320,52 @@ impl Feedback {
 
     pub(crate) fn monitors(&self) -> usize {
         self.monitors
+    }
+
+    /// The size an input's frames have to arrive at: a source layer is a
+    /// layer of the monitor bank, so it is the monitors' size exactly.
+    pub fn input_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Puts one external frame — tightly packed RGBA8 — on input `i`'s source
+    /// layer, where the cameras looking at it will find it.
+    ///
+    /// Both banks, because a camera reads whichever is current and an input
+    /// layer is never rendered into, so there is no swap to carry it across.
+    /// Twice a frame sounds wasteful and is not: the alternative is writing
+    /// one bank every frame whether or not anything arrived, and inputs only
+    /// deliver when they have something new.
+    pub fn write_input(&self, queue: &wgpu::Queue, i: usize, rgba8: &[u8]) {
+        assert!(i < self.inputs, "input {i} of {}", self.inputs);
+        let expected = crate::input::frame_bytes(self.input_size());
+        assert_eq!(rgba8.len(), expected, "input {i} handed over a short frame");
+        let halves = to_half(rgba8);
+        for texture in &self.textures {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: (self.monitors + i) as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&halves),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.width * 8),
+                    rows_per_image: Some(self.height),
+                },
+                wgpu::Extent3d {
+                    width: self.width,
+                    height: self.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
     }
 
     /// The dynamic offset that binds monitor `m`'s uniform slot.
@@ -359,6 +426,11 @@ impl Feedback {
             params.monitors.len(),
             self.monitors,
             "the graph's monitor count is baked into the textures at creation"
+        );
+        assert_eq!(
+            params.inputs.len(),
+            self.inputs,
+            "the graph's input count is baked into the textures at creation"
         );
         // Everything else the tap flattening assumes — row lengths, weight
         // signs, the tap cap — is the loader's contract, re-asserted here so
@@ -486,5 +558,93 @@ impl Feedback {
         // Exact in f32 for two days at 60 Hz, and the grain is the only
         // thing that reads it, so the wrap costs a repeat nobody will see.
         self.frame = (self.frame + 1) % (1 << 24);
+    }
+}
+
+/// One 8-bit channel as the bits of the half float the bank stores, for all
+/// 256 of them. Built once: an input frame is millions of these, and the
+/// domain is small enough to be a table rather than arithmetic.
+fn unorm8_to_half() -> &'static [u16; 256] {
+    static TABLE: std::sync::OnceLock<[u16; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::array::from_fn(|v| half_bits(v as f32 / 255.0)))
+}
+
+/// `x` as IEEE binary16, for `0 <= x <= 1` and nothing else — which is the
+/// whole domain of an 8-bit channel. Every value `v/255` above zero lands
+/// between 2^-8 and 2^0, well inside the exponents binary16 keeps normal, so
+/// there is no subnormal or overflow case here to get wrong. Ties round up
+/// rather than to even: a half step of the coarsest value in range is 1/2048,
+/// two orders below anything the loop's arithmetic distinguishes.
+fn half_bits(x: f32) -> u16 {
+    debug_assert!((0.0..=1.0).contains(&x), "{x} is outside an 8-bit channel");
+    if x == 0.0 {
+        return 0;
+    }
+    let bits = x.to_bits();
+    let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+    let mantissa = bits & 0x7f_ffff;
+    // A mantissa carry lands in the exponent, which is what the addition of
+    // the rounding bit does for free — the two fields are adjacent.
+    ((exponent as u16) << 10 | (mantissa >> 13) as u16) + ((mantissa >> 12) & 1) as u16
+}
+
+/// A tightly packed RGBA8 frame in the bank's format.
+fn to_half(rgba8: &[u8]) -> Vec<u16> {
+    // No transfer curve on the way in. The bank holds whatever a monitor is
+    // displaying, in the same convention as the rest of the instrument: the
+    // phosphor gamma is a knob on the front panel, applied on the way out of
+    // a pass, not an encoding this stage is entitled to undo.
+    let table = unorm8_to_half();
+    rgba8.iter().map(|v| table[*v as usize]).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// binary16 back to f32, written from the format rather than from
+    /// [`half_bits`], so the two are independent.
+    fn from_half(h: u16) -> f32 {
+        let sign = if h >> 15 == 1 { -1.0 } else { 1.0 };
+        let exponent = ((h >> 10) & 0x1f) as i32;
+        let mantissa = (h & 0x3ff) as f32 / 1024.0;
+        match exponent {
+            0 => sign * mantissa * 2f32.powi(-14),
+            31 => f32::INFINITY,
+            e => sign * (1.0 + mantissa) * 2f32.powi(e - 15),
+        }
+    }
+
+    #[test]
+    fn every_channel_value_survives_the_trip_to_half() {
+        // Exhaustive, because the domain is 256 values: nothing here is
+        // sampled or assumed. binary16 keeps 11 significant bits, so the
+        // worst rounding on a value of at most 1.0 is one part in 2048.
+        for v in 0u16..=255 {
+            let want = v as f32 / 255.0;
+            let got = from_half(unorm8_to_half()[v as usize]);
+            assert!((got - want).abs() <= 1.0 / 2048.0, "{v}: {got} != {want}");
+        }
+    }
+
+    #[test]
+    fn the_ends_of_the_scale_are_exact() {
+        // Black and white are the two values a rounding error would be
+        // visible on: a white that came back as 0.9995 would darken the loop
+        // one step per pass, which is the failure the colour stage went to
+        // trouble over.
+        assert_eq!(unorm8_to_half()[0], 0x0000);
+        assert_eq!(unorm8_to_half()[255], 0x3c00);
+        assert_eq!(from_half(unorm8_to_half()[255]), 1.0);
+    }
+
+    #[test]
+    fn a_frame_converts_channel_for_channel() {
+        let rgba8 = [0u8, 128, 255, 255, 255, 0, 128, 255];
+        let halves = to_half(&rgba8);
+        assert_eq!(halves.len(), rgba8.len());
+        for (h, v) in halves.iter().zip(rgba8) {
+            assert_eq!(*h, unorm8_to_half()[v as usize]);
+        }
     }
 }

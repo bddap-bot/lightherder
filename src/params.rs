@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::affine::Framing;
+use crate::input::Input;
 
 /// The colour controls on one monitor's front panel, in the order an analog
 /// signal meets them: chroma decode, video amplifier, phosphor.
@@ -166,10 +167,11 @@ pub struct Camera {
     /// What this path does to the light besides scale it.
     #[serde(default)]
     pub character: Character,
-    /// The beam splitter in front of the lens: how much of each monitor this
-    /// camera sees, indexed by monitor. `[1.0]`-style one-hots are a camera
-    /// aimed straight at one monitor; two non-zero entries are a camera
-    /// looking through beam-splitter glass at a pair.
+    /// The beam splitter in front of the lens: how much of each source this
+    /// camera sees, indexed the way [`Params::sources`] counts them — the
+    /// monitors, then the external inputs. `[1.0]`-style one-hots are a
+    /// camera aimed straight at one source; two non-zero entries are a
+    /// camera looking through beam-splitter glass at a pair.
     pub look: Vec<f32>,
 }
 
@@ -225,6 +227,13 @@ impl Monitor {
 pub struct Params {
     pub cameras: Vec<Camera>,
     pub monitors: Vec<Monitor>,
+    /// External sources the cameras can be aimed at alongside the monitors:
+    /// test patterns, video files, capture devices. A source and nothing
+    /// else — nothing draws to one and no knob turns one — so an input takes
+    /// no routing column and no part in the loop's gain. It is light entering
+    /// the graph, like the seed spot, rather than light going round it.
+    #[serde(default)]
+    pub inputs: Vec<Input>,
     /// The routing matrix: `routing[m][c]` is how much of camera `c`'s output
     /// monitor `m` displays. A permutation matrix is a plain switcher; rows
     /// with several non-zero entries mix cameras on one monitor.
@@ -421,6 +430,18 @@ impl Knob {
 }
 
 impl Params {
+    /// Everything a camera can look at, monitors first and then inputs. The
+    /// index space of [`Camera::look`] and of the shader's source layers, in
+    /// one place so the two cannot disagree about where the inputs start.
+    pub fn sources(&self) -> usize {
+        self.monitors.len() + self.inputs.len()
+    }
+
+    /// The source layer input `i` occupies.
+    pub fn input_layer(&self, i: usize) -> usize {
+        self.monitors.len() + i
+    }
+
     /// Turn `knob` on the focused camera or monitor — its side of the graph
     /// decides which of the two indices it follows.
     pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {

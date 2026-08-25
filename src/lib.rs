@@ -6,6 +6,7 @@ pub mod affine;
 pub mod app;
 pub mod config;
 pub mod feedback;
+pub mod input;
 pub mod keys;
 pub mod params;
 pub mod present;
