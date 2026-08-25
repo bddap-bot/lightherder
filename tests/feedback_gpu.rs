@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 
 use lightherder::affine::Framing;
 use lightherder::feedback::Feedback;
+use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Camera, Character, Colour, Monitor, Params};
 use lightherder::present::Present;
 
@@ -57,6 +58,7 @@ fn graph(s: &Single) -> Params {
             seed_brightness: s.seed_brightness,
             headroom: s.headroom,
         }],
+        inputs: Vec::new(),
         routing: vec![vec![1.0]],
     }
 }
@@ -110,7 +112,12 @@ struct Harness {
 }
 
 impl Harness {
-    fn new(monitor: (u32, u32), target_size: (u32, u32), monitors: usize) -> Harness {
+    fn new(
+        monitor: (u32, u32),
+        target_size: (u32, u32),
+        monitors: usize,
+        inputs: usize,
+    ) -> Harness {
         // Read-back is the point of this harness, and a texture-to-buffer
         // copy demands 256-byte rows.
         assert!(
@@ -120,7 +127,7 @@ impl Harness {
         );
         let (device, queue) = gpu().as_ref().expect("checked by harness()");
 
-        let feedback = Feedback::new(device, monitor.0, monitor.1, monitors);
+        let feedback = Feedback::new(device, monitor.0, monitor.1, monitors, inputs);
         let present = Present::new(device, &feedback, TARGET_FORMAT);
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("readback target"),
@@ -356,9 +363,14 @@ impl Image {
 
 /// `None` means this machine has no GPU to test with, which is not a failure.
 /// A machine that has one and cannot open it is a failure, and panics.
-fn graph_harness(monitor: (u32, u32), target: (u32, u32), monitors: usize) -> Option<Harness> {
+fn graph_harness(
+    monitor: (u32, u32),
+    target: (u32, u32),
+    monitors: usize,
+    inputs: usize,
+) -> Option<Harness> {
     match gpu() {
-        Ok(_) => Some(Harness::new(monitor, target, monitors)),
+        Ok(_) => Some(Harness::new(monitor, target, monitors, inputs)),
         Err(NoGpu::NoAdapter(why)) => {
             let _ = writeln!(std::io::stderr(), "SKIPPED: no adapter: {why}");
             None
@@ -369,7 +381,7 @@ fn graph_harness(monitor: (u32, u32), target: (u32, u32), monitors: usize) -> Op
 
 /// The single loop, which is all most of this suite needs.
 fn harness(monitor: (u32, u32), target: (u32, u32)) -> Option<Harness> {
-    graph_harness(monitor, target, 1)
+    graph_harness(monitor, target, 1, 0)
 }
 
 fn square() -> Option<Harness> {
@@ -1110,7 +1122,7 @@ fn the_routing_matrix_sends_each_camera_across() {
     // at monitor j but routed to the other monitor, so a seed lit on monitor
     // 0 must appear on monitor 1 one pass later, and bounce back the pass
     // after — and never sit still where it was.
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2) else {
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2, 0) else {
         return;
     };
     let mut p = Params {
@@ -1122,6 +1134,7 @@ fn the_routing_matrix_sends_each_camera_across() {
             },
             silent_monitor(),
         ],
+        inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
     };
     let seed = h.feedback.seed_uv();
@@ -1188,6 +1201,7 @@ fn mix_weights_scale_each_camera_s_contribution() {
             seed_brightness: 1.0,
             ..silent_monitor()
         }],
+        inputs: Vec::new(),
         routing: vec![vec![0.0, 0.0]],
     };
     h.step_graph(&p);
@@ -1216,7 +1230,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
     // feeding monitor 0. Light monitor 1 alone: half its light arrives on
     // monitor 0, which no routing row could do — the blend happens in front
     // of the lens.
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2) else {
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2, 0) else {
         return;
     };
     let mut p = Params {
@@ -1228,6 +1242,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
                 ..silent_monitor()
             },
         ],
+        inputs: Vec::new(),
         routing: vec![vec![1.0], vec![0.0]],
     };
     let seed = h.feedback.seed_uv();
@@ -1252,7 +1267,7 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
     // All-to-all: each of four monitors shows a quarter of every camera, so
     // one seeded monitor puts a quarter of its light on all four — itself
     // included — a pass later.
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), 4) else {
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), 4, 0) else {
         return;
     };
     let mut p = Params {
@@ -1263,6 +1278,7 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
                 ..silent_monitor()
             })
             .collect(),
+        inputs: Vec::new(),
         routing: vec![vec![0.25; 4]; 4],
     };
     h.step_graph(&p);
@@ -1290,12 +1306,16 @@ fn the_shipped_presets_settle_without_clipping() {
         ("analog", lightherder::config::analog()),
         ("crossed", lightherder::config::crossed()),
         ("insanity", lightherder::config::insanity()),
+        ("external", lightherder::config::external()),
     ] {
         let n = p.monitors.len();
         let (cols, rows) = lightherder::present::grid(n);
-        let Some(mut h) = graph_harness((SIZE, SIZE), (cols * SIZE, rows * SIZE), n) else {
+        let Some(mut h) =
+            graph_harness((SIZE, SIZE), (cols * SIZE, rows * SIZE), n, p.inputs.len())
+        else {
             return;
         };
+        feed_inputs(&h, &p);
         for _ in 0..399 {
             h.feedback.step(h.device, h.queue, &p);
         }
@@ -1568,7 +1588,7 @@ fn each_camera_carries_its_own_character() {
     // The reason it hangs on the camera rather than on the instrument: one
     // path in a graph glows while the one beside it stays sharp. Two
     // monitors, each its own loop, differing in nothing but their lens.
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2) else {
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), 2, 0) else {
         return;
     };
     let mut p = Params {
@@ -1583,6 +1603,7 @@ fn each_camera_carries_its_own_character() {
                 ..silent_monitor()
             },
         ],
+        inputs: Vec::new(),
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
     };
     h.step_graph(&p);
@@ -1687,4 +1708,145 @@ fn the_grain_is_monochrome_and_signed() {
         "{:.0}% of the grain landed at black, not about half",
         share * 100.0
     );
+}
+
+// ---- External inputs: sources the cameras can be aimed at ----------------
+
+/// Opens a graph's own inputs and puts a frame of each on its layer. The
+/// shipped patterns are still, so one delivery is the whole of it; a source
+/// with motion in it would want this every step, as the app does.
+fn feed_inputs(h: &Harness, params: &Params) {
+    for (i, input) in params.inputs.iter().enumerate() {
+        let mut source = Source::open(input, h.feedback.input_size())
+            .unwrap_or_else(|e| panic!("input {i}: {e}"));
+        let frame = source.frame().expect("open() waits for the first frame");
+        h.feedback.write_input(h.queue, i, &frame);
+    }
+}
+
+/// A flat colour as one tightly packed RGBA8 frame, which is all these tests
+/// need an "input" to be: a value they can look for on the far side.
+fn flat_frame(size: (u32, u32), rgb: [u8; 3]) -> Vec<u8> {
+    let mut pixels = vec![255u8; lightherder::input::frame_bytes(size)];
+    for texel in pixels.chunks_exact_mut(4) {
+        texel[..3].copy_from_slice(&rgb);
+    }
+    pixels
+}
+
+/// A graph of one monitor whose only light is one input: a still camera
+/// aimed at the input at unity gain, and nothing looking at the monitor. One
+/// step of it puts the input on the monitor and nothing else does.
+fn shows_only_the_input() -> Params {
+    Params {
+        cameras: vec![Camera {
+            framing: Framing::identity(),
+            gain: [1.0; 3],
+            character: Character::CLEAN,
+            look: vec![0.0, 1.0],
+        }],
+        monitors: vec![silent_monitor()],
+        inputs: vec![Input::Pattern(Pattern::Bars)],
+        routing: vec![vec![1.0]],
+    }
+}
+
+#[test]
+fn a_camera_aimed_at_an_input_shows_what_was_written_to_it() {
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), 1, 1) else {
+        return;
+    };
+    let p = shows_only_the_input();
+    // Not grey: a channel swap between the CPU frame, the half-float
+    // conversion and the layer would pass a grey and fails this.
+    h.feedback
+        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [255, 128, 0]));
+    h.step_graph(&p);
+
+    let rgb = h.read().rgb_at(0.5, 0.5);
+    assert!(rgb[0] > 250.0, "red {rgb:?}");
+    assert!((rgb[1] - 128.0).abs() < 3.0, "green {rgb:?}");
+    assert!(rgb[2] < 3.0, "blue {rgb:?}");
+}
+
+#[test]
+fn an_input_layer_is_current_in_whichever_bank_is_read() {
+    // The monitor bank swaps every step and an input layer is never rendered
+    // into, so a frame written to one bank only would show up on every other
+    // frame and be black on the rest. Six steps is three of each.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), 1, 1) else {
+        return;
+    };
+    let p = shows_only_the_input();
+    h.feedback
+        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [200; 3]));
+    for step in 0..6 {
+        h.step_graph(&p);
+        let seen = h.read().at(0.5, 0.5);
+        assert!((seen - 200.0).abs() < 3.0, "step {step}: {seen}");
+    }
+}
+
+#[test]
+fn blanking_the_monitors_leaves_the_inputs_alone() {
+    // Space is "restart the loops", not "unplug the video player" — and a
+    // still pattern that got blanked would never come back, because it is
+    // uploaded once.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), 1, 1) else {
+        return;
+    };
+    let p = shows_only_the_input();
+    h.feedback
+        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [200; 3]));
+    h.feedback.clear(h.device, h.queue);
+    h.step_graph(&p);
+    let seen = h.read().at(0.5, 0.5);
+    assert!(
+        (seen - 200.0).abs() < 3.0,
+        "the input was blanked too: {seen}"
+    );
+}
+
+#[test]
+fn a_splitter_blends_an_input_with_a_monitor() {
+    // Half the point of making an input a source layer rather than its own
+    // kind of thing: the beam splitter blends the two without knowing which
+    // is which. A monitor lit only by the input, so the second pass has the
+    // first's half-white to add the input's half-white to.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), 1, 1) else {
+        return;
+    };
+    let mut p = shows_only_the_input();
+    p.cameras[0].look = vec![0.5, 0.5];
+    h.feedback
+        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [255; 3]));
+
+    h.step_graph(&p);
+    let split = h.read().at(0.5, 0.5);
+    assert!((split - 128.0).abs() < 4.0, "half of white is {split}");
+
+    h.step_graph(&p);
+    let both = h.read().at(0.5, 0.5);
+    assert!((both - 191.0).abs() < 6.0, "half of each is {both}");
+}
+
+#[test]
+fn a_camera_frames_an_input_the_way_it_frames_a_monitor() {
+    // The other half: one lens, so the zoom acts on whatever the camera is
+    // aimed at. Pulled back by two, a white input fills the middle quarter
+    // and the room around it is dark.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), 1, 1) else {
+        return;
+    };
+    let mut p = shows_only_the_input();
+    p.cameras[0].framing.zoom = 0.5;
+    h.feedback
+        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [255; 3]));
+    h.step_graph(&p);
+
+    let img = h.read();
+    assert!(img.at(0.5, 0.5) > 250.0, "middle {}", img.at(0.5, 0.5));
+    // Just inside the shrunken image, and just outside it.
+    assert!(img.at(0.3, 0.5) > 250.0, "inside {}", img.at(0.3, 0.5));
+    assert!(img.at(0.2, 0.5) < 5.0, "outside {}", img.at(0.2, 0.5));
 }

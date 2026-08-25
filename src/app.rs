@@ -9,6 +9,7 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 use crate::feedback::Feedback;
+use crate::input::Source;
 use crate::keys::{action_for, Action};
 use crate::params::{Focus, Params};
 use crate::present::Present;
@@ -35,23 +36,41 @@ pub struct App {
     initial: Params,
     /// The camera and monitor the knobs act on.
     focus: Focus,
+    /// The running external inputs, in `params.inputs` order — so index `i`
+    /// here is the source layer `params.input_layer(i)`.
+    sources: Vec<Source>,
     live: Option<Live>,
 }
 
 /// `params` is the loaded graph, already validated by `config::load`.
-pub fn run(params: Params) -> Result<(), winit::error::EventLoopError> {
-    let event_loop = EventLoop::new()?;
+///
+/// The inputs are opened before the window is, so a file that is not there or
+/// a device that will not open says so on the terminal instead of behind a
+/// black layer of a running instrument.
+pub fn run(params: Params) -> Result<(), String> {
+    let sources = params
+        .inputs
+        .iter()
+        .map(|input| Source::open(input, MONITOR_SIZE))
+        .collect::<Result<Vec<Source>, String>>()?;
+    for input in &params.inputs {
+        log::info!("input: {}", input.describe());
+    }
+    let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut App {
-        initial: params.clone(),
-        params,
-        focus: Focus::default(),
-        live: None,
-    })
+    event_loop
+        .run_app(&mut App {
+            initial: params.clone(),
+            params,
+            focus: Focus::default(),
+            sources,
+            live: None,
+        })
+        .map_err(|e| e.to_string())
 }
 
 impl Live {
-    async fn new(event_loop: &ActiveEventLoop, monitors: usize) -> Live {
+    async fn new(event_loop: &ActiveEventLoop, monitors: usize, inputs: usize) -> Live {
         let window = Arc::new(
             event_loop
                 .create_window(Window::default_attributes().with_title("lightherder"))
@@ -93,7 +112,7 @@ impl Live {
 
         // wgpu zero-initialises textures, so the monitors start black without
         // an explicit clear.
-        let feedback = Feedback::new(&device, MONITOR_SIZE.0, MONITOR_SIZE.1, monitors);
+        let feedback = Feedback::new(&device, MONITOR_SIZE.0, MONITOR_SIZE.1, monitors, inputs);
         let present = Present::new(&device, &feedback, format);
 
         Live {
@@ -116,7 +135,7 @@ impl Live {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn render(&mut self, params: &Params) {
+    fn render(&mut self, params: &Params, sources: &mut [Source]) {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -137,6 +156,14 @@ impl Live {
         let target = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Whatever the inputs have decoded since the last frame, onto their
+        // source layers before the cameras read them.
+        for (i, source) in sources.iter_mut().enumerate() {
+            if let Some(frame) = source.frame() {
+                self.feedback.write_input(&self.queue, i, &frame);
+            }
+        }
 
         self.feedback.step(&self.device, &self.queue, params);
         self.present.draw(
@@ -162,13 +189,18 @@ impl ApplicationHandler for App {
             return;
         }
         // The one place this program blocks.
-        let live = pollster::block_on(Live::new(event_loop, self.params.monitors.len()));
+        let live = pollster::block_on(Live::new(
+            event_loop,
+            self.params.monitors.len(),
+            self.params.inputs.len(),
+        ));
         log::info!(
-            "{} monitors of {}x{}, {} cameras",
+            "{} monitors of {}x{}, {} cameras, {} inputs",
             self.params.monitors.len(),
             MONITOR_SIZE.0,
             MONITOR_SIZE.1,
-            self.params.cameras.len()
+            self.params.cameras.len(),
+            self.params.inputs.len(),
         );
         log::info!("{}", self.describe());
         live.window.request_redraw();
@@ -183,7 +215,7 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => live.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
-                live.render(&self.params);
+                live.render(&self.params, &mut self.sources);
                 live.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {

@@ -14,11 +14,9 @@ fn main() -> ExitCode {
         }
     };
     print!("{}", lightherder::keys::help());
-    match lightherder::app::run(params) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("lightherder: {e}");
-            ExitCode::FAILURE
-        }
+    if let Err(why) = lightherder::app::run(params) {
+        eprintln!("lightherder: {why}");
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }
