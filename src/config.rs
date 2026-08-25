@@ -4,7 +4,7 @@
 
 use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
-use crate::params::{Camera, Colour, Monitor, Params};
+use crate::params::{Camera, Character, Monitor, Params};
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
@@ -26,14 +26,36 @@ pub fn single() -> Params {
                 translate: [0.0, 0.0],
             },
             gain: [0.980, 0.986, 0.992],
+            character: Character::CLEAN,
             look: vec![1.0],
         }],
         monitors: vec![Monitor {
-            colour: Colour::NEUTRAL,
             seed_brightness: 0.10,
+            ..Default::default()
         }],
         routing: vec![vec![1.0]],
     }
+}
+
+/// The same single loop with the signal path turned on: a lens that scatters
+/// a third of the light into a halo, chroma smeared along the scanline, a
+/// little grain, and an amplifier whose rail sits below white so the trail
+/// compresses into the spiral instead of burning out the middle of it. The
+/// gains are [`single`]'s, so the difference between the two presets is the
+/// analog character and nothing else.
+pub fn analog() -> Params {
+    let mut params = single();
+    params.cameras[0].character = Character {
+        bloom: 0.35,
+        bloom_radius: 0.05,
+        chroma_bleed: 0.02,
+        noise: 0.02,
+    };
+    // Saturation above unity so there is chroma worth smearing; the rail
+    // then holds the result down where the phosphor can show it.
+    params.monitors[0].colour.saturation = 1.4;
+    params.monitors[0].headroom = 0.9;
+    params
 }
 
 /// The Light Herder's crossed two-structure setup: each camera looks at its
@@ -54,6 +76,7 @@ pub fn crossed() -> Params {
                 translate: [0.0, 0.0],
             },
             gain,
+            character: Character::CLEAN,
             look,
         }
     };
@@ -64,12 +87,12 @@ pub fn crossed() -> Params {
         ],
         monitors: vec![
             Monitor {
-                colour: Colour::NEUTRAL,
                 seed_brightness: 0.10,
+                ..Default::default()
             },
             Monitor {
-                colour: Colour::NEUTRAL,
                 seed_brightness: 0.10,
+                ..Default::default()
             },
         ],
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
@@ -97,6 +120,7 @@ pub fn insanity() -> Params {
                 // Each camera favours a different channel, so the mix on any
                 // monitor carries chroma for the hue knobs to turn.
                 gain: std::array::from_fn(|ch| if ch == c % 3 { 0.992 } else { 0.976 }),
+                character: Character::CLEAN,
                 look,
             }
         })
@@ -105,8 +129,8 @@ pub fn insanity() -> Params {
         cameras,
         monitors: (0..N)
             .map(|_| Monitor {
-                colour: Colour::NEUTRAL,
                 seed_brightness: 0.10,
+                ..Default::default()
             })
             .collect(),
         routing: vec![vec![1.0 / N as f32; N]; N],
@@ -118,11 +142,12 @@ pub fn insanity() -> Params {
 pub fn load(arg: &str) -> Result<Params, String> {
     let params = match arg {
         "single" => single(),
+        "analog" => analog(),
         "crossed" => crossed(),
         "insanity" => insanity(),
         path => {
             let text = std::fs::read_to_string(path)
-                .map_err(|e| format!("{path}: {e} (presets: single, crossed, insanity)"))?;
+                .map_err(|e| format!("{path}: {e} (presets: single, analog, crossed, insanity)"))?;
             toml::from_str(&text).map_err(|e| format!("{path}: {e}"))?
         }
     };
@@ -177,6 +202,27 @@ pub fn validate(params: &Params) -> Result<(), String> {
         if f.zoom == 0.0 {
             return Err(format!("camera {i}'s zoom is 0; it would divide by it"));
         }
+        let ch = &camera.character;
+        for (value, what) in [
+            (ch.bloom, "bloom"),
+            (ch.bloom_radius, "bloom radius"),
+            (ch.chroma_bleed, "chroma bleed"),
+            (ch.noise, "noise"),
+        ] {
+            finite(value, what).map_err(|e| format!("camera {i}'s {e}"))?;
+            if value < 0.0 {
+                return Err(format!("camera {i}'s {what} is {value}; it is not signed"));
+            }
+        }
+        // Above 1.0 `mix` extrapolates away from the halo instead of towards
+        // it, which is a lens that returns more light than it was handed —
+        // and inside a loop that is a multiply, not an artefact.
+        if ch.bloom > 1.0 {
+            return Err(format!(
+                "camera {i}'s bloom is {}; a lens scatters at most all of it",
+                ch.bloom
+            ));
+        }
     }
     if params.routing.len() != m {
         return Err(format!(
@@ -191,6 +237,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
         let colour = &monitor.colour;
         for (value, what) in [
             (monitor.seed_brightness, "seed brightness"),
+            (monitor.headroom, "headroom"),
             (colour.hue, "hue"),
             (colour.saturation, "saturation"),
             (colour.brightness, "brightness"),
@@ -201,6 +248,14 @@ pub fn validate(params: &Params) -> Result<(), String> {
         }
         if monitor.seed_brightness < 0.0 {
             return Err(format!("monitor {i}'s seed brightness is negative"));
+        }
+        // The rail's curve divides by the headroom, and a rail at or below
+        // zero is an amplifier with no output at all.
+        if monitor.headroom <= 0.0 {
+            return Err(format!(
+                "monitor {i}'s headroom is {}; the amplifier needs some",
+                monitor.headroom
+            ));
         }
     }
     // The flattened routing-times-look products are what the shader
@@ -220,10 +275,12 @@ pub fn validate(params: &Params) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::Colour;
 
-    fn presets() -> [(&'static str, Params); 3] {
+    fn presets() -> [(&'static str, Params); 4] {
         [
             ("single", single()),
+            ("analog", analog()),
             ("crossed", crossed()),
             ("insanity", insanity()),
         ]
@@ -287,9 +344,13 @@ mod tests {
     fn a_config_file_round_trips() {
         let dir = std::env::temp_dir().join(format!("lightherder-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("crossed.toml");
-        std::fs::write(&path, toml::to_string(&crossed()).unwrap()).unwrap();
-        assert_eq!(load(path.to_str().unwrap()).unwrap(), crossed());
+        // The analog preset, because it is the only one with a non-default
+        // value in every field the format gained this stage.
+        for params in [crossed(), analog()] {
+            let path = dir.join("preset.toml");
+            std::fs::write(&path, toml::to_string(&params).unwrap()).unwrap();
+            assert_eq!(load(path.to_str().unwrap()).unwrap(), params);
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -306,8 +367,34 @@ mod tests {
         validate(&params).unwrap();
         assert_eq!(params.cameras[0].framing, Framing::identity());
         assert_eq!(params.cameras[0].gain, [1.0; 3]);
+        assert_eq!(params.cameras[0].character, Character::CLEAN);
         assert_eq!(params.monitors[0].colour, Colour::NEUTRAL);
         assert_eq!(params.monitors[0].seed_brightness, 0.0);
+        assert_eq!(params.monitors[0].headroom, Monitor::WIDE_OPEN);
+    }
+
+    #[test]
+    fn only_the_analog_preset_has_any_character() {
+        // The stage is additive: it must not have quietly changed the look of
+        // the presets that were here before it.
+        for (name, params) in presets() {
+            let clean = params
+                .cameras
+                .iter()
+                .all(|c| c.character == Character::CLEAN)
+                && params
+                    .monitors
+                    .iter()
+                    .all(|m| m.headroom == Monitor::WIDE_OPEN);
+            assert_eq!(clean, name != "analog", "{name}");
+        }
+        // And the one that does have it turns on all four of the things this
+        // stage is named for.
+        let a = analog();
+        let ch = a.cameras[0].character;
+        assert!(ch.bloom > 0.0 && ch.bloom_radius > 0.0);
+        assert!(ch.chroma_bleed > 0.0 && ch.noise > 0.0);
+        assert!(a.monitors[0].headroom < 1.0, "the rail never bites");
     }
 
     #[test]
@@ -345,6 +432,13 @@ mod tests {
             |p| p.monitors[0].colour.gamma = f32::NAN,
             |p| p.monitors[0].seed_brightness = -0.5,
             |p| p.routing[0][1] = f32::INFINITY,
+            |p| p.cameras[0].character.bloom = f32::NAN,
+            |p| p.cameras[0].character.bloom = 1.5,
+            |p| p.cameras[0].character.bloom_radius = -0.01,
+            |p| p.cameras[0].character.chroma_bleed = f32::INFINITY,
+            |p| p.cameras[0].character.noise = -1.0,
+            |p| p.monitors[0].headroom = 0.0,
+            |p| p.monitors[0].headroom = f32::NAN,
         ];
         for (i, poison) in poison.iter().enumerate() {
             let mut params = crossed();

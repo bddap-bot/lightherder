@@ -65,6 +65,15 @@ struct Tap {
     /// rgb: routing weight x splitter weight x camera gain, per channel.
     /// a: the source monitor's layer index.
     weight: [f32; 4],
+    /// The halo's two source-uv steps: xy for one bloom radius across the
+    /// camera's image, zw for one up it. Worked out here rather than in the
+    /// shader because the tap's affine already carries the camera's zoom and
+    /// turn, and a lens's halo is round in the camera's image — not in the
+    /// monitor's, which the camera may be viewing at any angle.
+    halo: [f32; 4],
+    /// xy: the source-uv step for one chroma-bleed offset along the
+    /// scanline, mapped the same way. z: the bloom fraction. w: padding.
+    bleed: [f32; 4],
 }
 
 /// Per-monitor uniforms, mirrored by hand in `shaders/feedback.wgsl`, which
@@ -82,6 +91,9 @@ struct Uniforms {
     levels: [f32; 4],
     /// x: tap count. y: this monitor's own layer, for the present pass.
     info: [f32; 4],
+    /// x: grain amplitude, summed over the cameras the switcher routes here.
+    /// y: the amplifier's headroom. z: a frame counter, so the grain moves.
+    character: [f32; 4],
     taps: [Tap; MAX_TAPS],
 }
 
@@ -98,6 +110,9 @@ pub struct Feedback {
     layer_views: [Vec<wgpu::TextureView>; 2],
     bind_groups: [wgpu::BindGroup; 2],
     front: usize,
+    /// Seeds the grain, and only that. Wrapped well inside the integers f32
+    /// holds exactly, since that is what carries it to the shader.
+    frame: u32,
     uniforms: wgpu::Buffer,
     layout: wgpu::BindGroupLayout,
     shader: wgpu::ShaderModule,
@@ -254,6 +269,7 @@ impl Feedback {
             layer_views,
             bind_groups,
             front: 0,
+            frame: 0,
             uniforms,
             layout,
             shader,
@@ -358,14 +374,45 @@ impl Feedback {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
             for (c, src, w) in taps_of(params, m) {
-                let (rows, gain) = (&framings[c], params.cameras[c].gain);
+                let camera = &params.cameras[c];
+                let (rows, gain) = (&framings[c], camera.gain);
+                // A step of `r` screen units across and up the camera's
+                // image, carried through the tap's affine into the source
+                // it samples. Screen units are height-normalised, so the
+                // horizontal one is narrower by the aspect — the same
+                // correction the seed spot makes to stay round.
+                let step = |r: f32| {
+                    let (dx, dy) = (r / aspect, r);
+                    [
+                        rows[0][0] * dx,
+                        rows[1][0] * dx,
+                        rows[0][1] * dy,
+                        rows[1][1] * dy,
+                    ]
+                };
+                let halo = step(camera.character.bloom_radius);
+                let bleed = step(camera.character.chroma_bleed);
                 taps[count] = Tap {
                     row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
                     row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
                     weight: [w * gain[0], w * gain[1], w * gain[2], src as f32],
+                    halo,
+                    // Only the scanline direction: composite video band-limits
+                    // chroma in time, and time along a scanline is horizontal.
+                    bleed: [bleed[0], bleed[1], camera.character.bloom, 0.0],
                 };
                 count += 1;
             }
+
+            // Every camera the switcher routes here contributes its own
+            // grain, scaled by how much of it this monitor is shown. Its
+            // splitter does not come into it: the grain is the sensor's and
+            // the cable's, added after the glass.
+            let grain: f32 = params.routing[m]
+                .iter()
+                .zip(&params.cameras)
+                .map(|(route, camera)| route * camera.character.noise)
+                .sum();
 
             let chroma = monitor.colour.chroma_matrix();
             let uniforms = Uniforms {
@@ -382,6 +429,7 @@ impl Feedback {
                     monitor.seed_brightness,
                 ],
                 info: [count as f32, m as f32, 0.0, 0.0],
+                character: [grain, monitor.headroom, self.frame as f32, 0.0],
                 taps,
             };
             queue.write_buffer(
@@ -418,5 +466,8 @@ impl Feedback {
         }
         queue.submit([encoder.finish()]);
         self.front = back;
+        // Exact in f32 for two days at 60 Hz, and the grain is the only
+        // thing that reads it, so the wrap costs a repeat nobody will see.
+        self.frame = (self.frame + 1) % (1 << 24);
     }
 }

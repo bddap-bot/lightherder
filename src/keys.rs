@@ -53,6 +53,12 @@ const AXES: &[Axis] = &[
     axis(Knob::GainR, KeyCode::Digit1, "1", KeyCode::Digit2, "2"),
     axis(Knob::GainG, KeyCode::Digit3, "3", KeyCode::Digit4, "4"),
     axis(Knob::GainB, KeyCode::Digit5, "5", KeyCode::Digit6, "6"),
+    // The path's character sits under the right hand, next to nothing else:
+    // these are the knobs a performer sweeps while watching, not trimming.
+    axis(Knob::Bloom, KeyCode::KeyG, "g", KeyCode::KeyH, "h"),
+    axis(Knob::BloomRadius, KeyCode::KeyJ, "j", KeyCode::KeyK, "k"),
+    axis(Knob::ChromaBleed, KeyCode::KeyY, "y", KeyCode::KeyU, "u"),
+    axis(Knob::Noise, KeyCode::KeyI, "i", KeyCode::KeyO, "o"),
     axis(Knob::Seed, KeyCode::Semicolon, ";", KeyCode::Quote, "'"),
     // The colour stage gets the left hand, kept together so a performer can
     // sweep the front panel without looking.
@@ -61,6 +67,8 @@ const AXES: &[Axis] = &[
     axis(Knob::Brightness, KeyCode::KeyZ, "z", KeyCode::KeyX, "x"),
     axis(Knob::Contrast, KeyCode::KeyC, "c", KeyCode::KeyV, "v"),
     axis(Knob::Gamma, KeyCode::KeyQ, "q", KeyCode::KeyW, "w"),
+    // The amplifier's rail, beside the phosphor curve it feeds.
+    axis(Knob::Headroom, KeyCode::KeyE, "e", KeyCode::KeyT, "t"),
 ];
 
 const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
@@ -188,7 +196,9 @@ mod tests {
         assert_eq!(action_for(KeyCode::Space), Some(Action::Clear));
         assert_eq!(action_for(KeyCode::KeyR), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape), Some(Action::Quit));
-        assert_eq!(action_for(KeyCode::KeyT), None);
+        // A key no table claims. Function keys are the only ones this
+        // instrument will never want.
+        assert_eq!(action_for(KeyCode::F1), None);
     }
 
     #[test]
