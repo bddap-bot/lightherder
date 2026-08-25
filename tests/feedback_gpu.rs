@@ -1406,6 +1406,10 @@ fn the_lens_spreads_the_light_without_making_any() {
         after.half_extent(seed, true) > width,
         "the spot is no wider: {width} px either way"
     );
+    assert!(
+        after.half_extent(seed, false) > before.half_extent(seed, false),
+        "the ring's vertical arm did nothing"
+    );
     assert!(after.at(seed[0], seed[1]) < peak, "the middle did not give");
     // Sampling and 8-bit read-back cost a little at the edges; making light
     // would cost far more than that, in the other direction.
@@ -1531,6 +1535,11 @@ fn the_amplifier_bends_onto_its_headroom_instead_of_clipping() {
         "no shoulder to read: {was_dim}"
     );
 
+    // One rail, and it is the one value at which `h - h^2/4x` cannot be told
+    // from `h - h/4x` or `h - 1/4x`. A second rail is what closes that, and
+    // a second rail at 0.6 does not agree with this arithmetic — see the
+    // stage's issue comment; the discrepancy is unexplained and is a real
+    // question about the shader, not about the test.
     const RAIL: f32 = 1.0;
     let railed = drive(&mut h, RAIL);
     // Above the knee: h - h^2/4x, the arm the shader takes.
@@ -1541,8 +1550,8 @@ fn the_amplifier_bends_onto_its_headroom_instead_of_clipping() {
         (got - expected).abs() < 3.0,
         "peak {peak} should bend to {expected:.1}, got {got}"
     );
-    // Below it: untouched, which is what makes the rail a rail and not a
-    // gain knob wearing one's hat.
+    // Below the knee: untouched, which is what makes the rail a rail and not
+    // a gain knob wearing one's hat.
     let now_dim = railed.at(dim.0, dim.1);
     assert!(
         (now_dim - was_dim).abs() < 2.0,
@@ -1551,7 +1560,7 @@ fn the_amplifier_bends_onto_its_headroom_instead_of_clipping() {
 }
 
 #[test]
-fn character_is_tunable_per_path() {
+fn each_camera_carries_its_own_character() {
     // The reason it hangs on the camera rather than on the instrument: one
     // path in a graph glows while the one beside it stays sharp. Two
     // monitors, each its own loop, differing in nothing but their lens.
@@ -1601,5 +1610,77 @@ fn character_is_tunable_per_path() {
     assert!(
         bloomed < clean - 20.0,
         "the lens on camera 2 did nothing: {clean} vs {bloomed}"
+    );
+}
+
+#[test]
+fn the_halo_is_round_on_a_wide_monitor() {
+    // The only end-to-end check of the offsets, which are worked out on the
+    // CPU through each tap's affine for exactly this reason. On a 2:1
+    // monitor an uncorrected bloom radius is twice as wide as it is tall,
+    // and everything else in this suite runs on a square one where that is
+    // invisible.
+    let Some(mut h) = harness((SIZE * 4, SIZE * 2), (SIZE * 4, SIZE * 2)) else {
+        return;
+    };
+    let seed = h.feedback.seed_uv();
+    let before = still_spot(&mut h);
+    let (was_across, was_down) = (
+        before.half_extent(seed, true),
+        before.half_extent(seed, false),
+    );
+
+    let after = recharacter(
+        &mut h,
+        Character {
+            bloom: 0.9,
+            bloom_radius: 0.08,
+            ..Character::CLEAN
+        },
+        Monitor::KNEE_AT_WHITE,
+    );
+    let across = after.half_extent(seed, true) - was_across;
+    let down = after.half_extent(seed, false) - was_down;
+    assert!(across > 2, "the halo did not widen the spot: {across} px");
+    assert!(
+        across.abs_diff(down) <= 2,
+        "halo grew {across} px across and {down} px down"
+    );
+}
+
+#[test]
+fn the_grain_is_monochrome_and_signed() {
+    // Two claims the loop cares about. Monochrome, because it is luma noise
+    // and the chroma knobs have nothing to do to grey. Signed, because a
+    // grain with a mean above zero is a brightness knob nobody asked for,
+    // and inside a loop that lifts every pass until the monitor floods.
+    let Some(mut h) = square() else { return };
+    h.step(&Single {
+        seed_brightness: 0.0,
+        loop_gain: [0.0; 3],
+        character: Character {
+            noise: 0.2,
+            ..Character::CLEAN
+        },
+        ..frozen(seeded())
+    });
+    let img = h.read();
+
+    let mut floored = 0usize;
+    for pixel in img.pixels.chunks_exact(4) {
+        assert_eq!(
+            [pixel[0], pixel[1], pixel[2]],
+            [pixel[0]; 3],
+            "the grain is coloured"
+        );
+        floored += usize::from(pixel[0] == 0);
+    }
+    // The phosphor floors the negative half, so about half the texels come
+    // back black. An unsigned hash leaves none of them there.
+    let share = floored as f32 / (SIZE * SIZE) as f32;
+    assert!(
+        (0.4..0.6).contains(&share),
+        "{:.0}% of the grain landed at black, not about half",
+        share * 100.0
     );
 }
