@@ -11,6 +11,7 @@ use winit::window::{Window, WindowId};
 use crate::feedback::Feedback;
 use crate::input::Source;
 use crate::keys::{action_for, Action};
+use crate::midi::{Map, Midi};
 use crate::params::{Focus, Knob, Params};
 use crate::present::Present;
 
@@ -50,6 +51,10 @@ pub struct App {
     sources: Vec<Source>,
     /// Where the preset slots are kept.
     slots: std::path::PathBuf,
+    /// The control surface, connected or not — it is looked for while the
+    /// instrument runs rather than at startup, so plugging one in mid-piece
+    /// is the whole of setting it up.
+    midi: Midi,
     /// Whether shift is down, which only the slot keys read.
     shift: bool,
     live: Option<Live>,
@@ -71,6 +76,11 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
     }
     let slots = crate::slots::default_dir();
     log::info!("preset slots: {}", slots.display());
+    // Read before the window opens, like the inputs and for the same reason:
+    // a map that will not load is a terminal error, not a surface that turns
+    // out to be playing the wrong knobs once there is light on the glass.
+    let map = Map::load(&slots)?;
+    log::info!("surface: waiting for {}", map.device);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     Ok(event_loop.run_app(&mut App {
@@ -82,6 +92,7 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
         started: std::time::Instant::now(),
         sources,
         slots,
+        midi: Midi::new(map),
         shift: false,
         live: None,
     })?)
@@ -203,6 +214,11 @@ impl App {
     fn adopt(&mut self, params: Params) {
         self.focus = self.focus.clamped(&params);
         self.params = params;
+        // The whole panel just moved without a fader moving with it, so every
+        // fader has to find its knob again. Otherwise the first one brushed
+        // afterwards throws its knob back to where the fader was standing,
+        // which is the recall undone one knob at a time.
+        self.midi.recatch();
     }
 
     fn describe(&self) -> String {
@@ -211,6 +227,81 @@ impl App {
             self.params.describe(self.focus),
             self.touched.name()
         )
+    }
+
+    /// One action, from wherever it came. The keyboard and the control
+    /// surface both land here and nowhere else, so a binding cannot mean one
+    /// thing under a finger and another under a fader.
+    fn apply(&mut self, action: Action, event_loop: &ActiveEventLoop) {
+        match action {
+            Action::Nudge(knob, delta) => {
+                self.params.nudge(knob, delta, self.focus);
+                self.touched = knob;
+                log::info!("{}", self.describe());
+            }
+            Action::Set(knob, value) => {
+                self.params.set(knob, value, self.focus);
+                self.touched = knob;
+                log::info!("{}", self.describe());
+            }
+            Action::Motion => {
+                let now = self.started.elapsed().as_secs_f64();
+                self.params.motion_cycle(self.touched, self.focus, now);
+                log::info!("{}", self.describe());
+            }
+            Action::MotionRate(steps) => {
+                let now = self.started.elapsed().as_secs_f64();
+                self.params
+                    .motion_rate(self.touched, self.focus, steps, now);
+                log::info!("{}", self.describe());
+            }
+            Action::MotionDepth(steps) => {
+                self.params.motion_depth(self.touched, self.focus, steps);
+                log::info!("{}", self.describe());
+            }
+            Action::NextCamera => {
+                self.focus.camera = (self.focus.camera + 1) % self.params.cameras.len();
+                log::info!("{}", self.describe());
+            }
+            Action::NextMonitor => {
+                self.focus.monitor = (self.focus.monitor + 1) % self.params.monitors.len();
+                log::info!("{}", self.describe());
+            }
+            Action::Store(slot) => match crate::slots::store(&self.slots, slot, &self.params) {
+                Ok(path) => log::info!("slot {}: wrote {}", slot + 1, path.display()),
+                Err(why) => log::error!("slot {}: {why}", slot + 1),
+            },
+            Action::Recall(slot) => match crate::slots::recall(&self.slots, slot) {
+                Err(why) => log::error!("slot {}: {why}", slot + 1),
+                Ok(params) if !self.params.same_bank_as(&params) => log::error!(
+                    "slot {} is a different instrument: {} monitors and {} inputs, \
+                     against {} and {} running. Start it with that file instead.",
+                    slot + 1,
+                    params.monitors.len(),
+                    params.inputs.len(),
+                    self.params.monitors.len(),
+                    self.params.inputs.len(),
+                ),
+                Ok(params) => {
+                    // The loops keep running: the bank is untouched, so what
+                    // a recall changes is the knobs the next pass reads, not
+                    // the light already on the glass.
+                    self.adopt(params);
+                    log::info!("slot {}: {}", slot + 1, self.describe());
+                }
+            },
+            Action::Reset => {
+                self.adopt(self.initial.clone());
+                log::info!("reset: {}", self.describe());
+            }
+            Action::Clear => {
+                if let Some(live) = self.live.as_mut() {
+                    live.feedback.clear(&live.device, &live.queue);
+                    log::info!("cleared");
+                }
+            }
+            Action::Quit => event_loop.exit(),
+        }
     }
 }
 
@@ -235,14 +326,25 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let Some(live) = self.live.as_mut() else {
-            return;
-        };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
-            WindowEvent::Resized(size) => live.resize(size.width, size.height),
+            WindowEvent::Resized(size) => {
+                if let Some(live) = self.live.as_mut() {
+                    live.resize(size.width, size.height);
+                }
+            }
             WindowEvent::RedrawRequested => {
+                // The surface is read once a frame. Never blocking and never
+                // waiting on a device that is not plugged in, so an
+                // instrument played from the keyboard alone pays a `try_recv`
+                // and a directory listing a second for it.
+                for action in self.midi.poll(&self.params, self.focus) {
+                    self.apply(action, event_loop);
+                }
+                let Some(live) = self.live.as_mut() else {
+                    return;
+                };
                 // The automation is read here and nowhere else: the knobs the
                 // GPU is handed are the stored ones offset by whatever is
                 // driving them at this instant, and `self.params` — what the
@@ -252,77 +354,15 @@ impl ApplicationHandler for App {
                 live.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state != ElementState::Pressed {
+                if event.state != ElementState::Pressed || self.live.is_none() {
                     return;
                 }
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
                 // Repeats are wanted: holding a key sweeps its knob.
-                match action_for(code, self.shift) {
-                    Some(Action::Nudge(knob, delta)) => {
-                        self.params.nudge(knob, delta, self.focus);
-                        self.touched = knob;
-                        log::info!("{}", self.describe());
-                    }
-                    Some(Action::Motion) => {
-                        let now = self.started.elapsed().as_secs_f64();
-                        self.params.motion_cycle(self.touched, self.focus, now);
-                        log::info!("{}", self.describe());
-                    }
-                    Some(Action::MotionRate(steps)) => {
-                        let now = self.started.elapsed().as_secs_f64();
-                        self.params
-                            .motion_rate(self.touched, self.focus, steps, now);
-                        log::info!("{}", self.describe());
-                    }
-                    Some(Action::MotionDepth(steps)) => {
-                        self.params.motion_depth(self.touched, self.focus, steps);
-                        log::info!("{}", self.describe());
-                    }
-                    Some(Action::NextCamera) => {
-                        self.focus.camera = (self.focus.camera + 1) % self.params.cameras.len();
-                        log::info!("{}", self.describe());
-                    }
-                    Some(Action::NextMonitor) => {
-                        self.focus.monitor = (self.focus.monitor + 1) % self.params.monitors.len();
-                        log::info!("{}", self.describe());
-                    }
-                    Some(Action::Store(slot)) => {
-                        match crate::slots::store(&self.slots, slot, &self.params) {
-                            Ok(path) => log::info!("slot {}: wrote {}", slot + 1, path.display()),
-                            Err(why) => log::error!("slot {}: {why}", slot + 1),
-                        }
-                    }
-                    Some(Action::Recall(slot)) => match crate::slots::recall(&self.slots, slot) {
-                        Err(why) => log::error!("slot {}: {why}", slot + 1),
-                        Ok(params) if !self.params.same_bank_as(&params) => log::error!(
-                            "slot {} is a different instrument: {} monitors and {} inputs, \
-                             against {} and {} running. Start it with that file instead.",
-                            slot + 1,
-                            params.monitors.len(),
-                            params.inputs.len(),
-                            self.params.monitors.len(),
-                            self.params.inputs.len(),
-                        ),
-                        Ok(params) => {
-                            // The loops keep running: the bank is untouched,
-                            // so what a recall changes is the knobs the next
-                            // pass reads, not the light already on the glass.
-                            self.adopt(params);
-                            log::info!("slot {}: {}", slot + 1, self.describe());
-                        }
-                    },
-                    Some(Action::Reset) => {
-                        self.adopt(self.initial.clone());
-                        log::info!("reset: {}", self.describe());
-                    }
-                    Some(Action::Clear) => {
-                        live.feedback.clear(&live.device, &live.queue);
-                        log::info!("cleared");
-                    }
-                    Some(Action::Quit) => event_loop.exit(),
-                    None => {}
+                if let Some(action) = action_for(code, self.shift) {
+                    self.apply(action, event_loop);
                 }
             }
             _ => {}

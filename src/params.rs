@@ -497,6 +497,46 @@ impl Params {
         self.monitors.len() + self.inputs.len()
     }
 
+    /// Put `knob` at `value` outright, which is what a fader does: it sends
+    /// where it is standing rather than which way it moved.
+    ///
+    /// Through [`Params::nudge`] rather than by writing the field, so a
+    /// fader is subject to the very same rails, wrap and rigid three-channel
+    /// step a key press is — there is nowhere a fader can put a knob that a
+    /// hand could not.
+    pub fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
+        self.nudge(knob, value - self.knob(knob, focus), focus);
+    }
+
+    /// Where `knob` is standing. The rigid gain reads as the mean of its
+    /// three channels, which is the number its step slides: setting it to
+    /// that mean is what leaves the colour offsets alone.
+    pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
+        let cam = &self.cameras[focus.camera];
+        let mon = &self.monitors[focus.monitor];
+        match knob {
+            Knob::Zoom => cam.framing.zoom,
+            Knob::Rotation => cam.framing.rotation,
+            Knob::TranslateX => cam.framing.translate[0],
+            Knob::TranslateY => cam.framing.translate[1],
+            Knob::Gain => cam.gain.iter().sum::<f32>() / 3.0,
+            Knob::GainR => cam.gain[0],
+            Knob::GainG => cam.gain[1],
+            Knob::GainB => cam.gain[2],
+            Knob::Bloom => cam.character.bloom,
+            Knob::BloomRadius => cam.character.bloom_radius,
+            Knob::ChromaBleed => cam.character.chroma_bleed,
+            Knob::Noise => cam.character.noise,
+            Knob::Seed => mon.seed_brightness,
+            Knob::Hue => mon.colour.hue,
+            Knob::Saturation => mon.colour.saturation,
+            Knob::Brightness => mon.colour.brightness,
+            Knob::Contrast => mon.colour.contrast,
+            Knob::Gamma => mon.colour.gamma,
+            Knob::Headroom => mon.headroom,
+        }
+    }
+
     /// Turn `knob` on the focused camera or monitor — its side of the graph
     /// decides which of the two indices it follows.
     pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
@@ -1232,5 +1272,75 @@ mod tests {
             let hue = params.monitors[0].colour.hue;
             assert!(hue > -PI && hue <= PI);
         }
+    }
+
+    #[test]
+    fn the_reader_and_the_writer_of_a_knob_are_the_same_field() {
+        // `knob` matches the nineteen fields over again, next to the match
+        // `knob_mut` makes. Nothing but this stops one of them being pointed
+        // at the wrong number: a nudge that the reader does not see, or sees
+        // on another knob, is the whole failure.
+        for knob in Knob::ALL {
+            let mut params = crate::config::crossed();
+            let focus = Focus {
+                camera: 1,
+                monitor: 1,
+            };
+            let before: Vec<f32> = Knob::ALL
+                .iter()
+                .map(|other| params.knob(*other, focus))
+                .collect();
+            let step = knob.increment();
+            params.nudge(knob, step, focus);
+            for (other, was) in Knob::ALL.into_iter().zip(before) {
+                let now = params.knob(other, focus);
+                // The rigid gain and its three channels are one value seen
+                // four ways, so turning any of them moves more than one.
+                let gain_family =
+                    |k: Knob| matches!(k, Knob::Gain | Knob::GainR | Knob::GainG | Knob::GainB);
+                let expected = if other == knob {
+                    was + step
+                } else if gain_family(knob) && gain_family(other) {
+                    continue;
+                } else {
+                    was
+                };
+                assert!(
+                    (now - expected).abs() < 1e-6,
+                    "turning {} moved {} from {was} to {now}",
+                    knob.name(),
+                    other.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_fader_puts_a_knob_exactly_where_it_says() {
+        // What `set` is for, and the reason it goes through `nudge`: the
+        // value lands, and it lands inside the rails.
+        let mut params = p();
+        let focus = Focus::default();
+        params.set(Knob::Contrast, 2.5, focus);
+        assert!((params.knob(Knob::Contrast, focus) - 2.5).abs() < 1e-6);
+        // Past a rail is the rail, not the number asked for.
+        params.set(Knob::Contrast, 99.0, focus);
+        assert!((params.knob(Knob::Contrast, focus) - 4.0).abs() < 1e-6);
+        // A phase comes back round instead.
+        params.set(Knob::Hue, 3.0, focus);
+        assert!((params.knob(Knob::Hue, focus) - 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn setting_the_rigid_gain_slides_the_channels_and_keeps_their_offsets() {
+        let mut params = p();
+        let focus = Focus::default();
+        let before = params.cameras[0].gain;
+        let offsets = [before[1] - before[0], before[2] - before[0]];
+        params.set(Knob::Gain, 0.5, focus);
+        let after = params.cameras[0].gain;
+        assert!((params.knob(Knob::Gain, focus) - 0.5).abs() < 1e-6);
+        assert!((after[1] - after[0] - offsets[0]).abs() < 1e-6);
+        assert!((after[2] - after[0] - offsets[1]).abs() < 1e-6);
     }
 }

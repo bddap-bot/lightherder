@@ -8,6 +8,7 @@ pub mod config;
 pub mod feedback;
 pub mod input;
 pub mod keys;
+pub mod midi;
 pub mod motion;
 pub mod params;
 pub mod present;

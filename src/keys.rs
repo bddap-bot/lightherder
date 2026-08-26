@@ -8,6 +8,11 @@ use crate::slots::SLOTS;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
+    /// Put a knob at a value outright, which a key cannot do and a
+    /// fader does by standing somewhere. Absolute, not a position, so
+    /// where the ends of a fader are is the surface's business and not
+    /// the instrument's.
+    Set(Knob, f32),
     Nudge(Knob, f32),
     /// Move the camera knobs' focus to the next camera in the graph.
     NextCamera,
@@ -192,6 +197,37 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
         .map(|(_, _, action, _)| *action)
 }
 
+/// Every key label the help prints, in the order it prints them.
+///
+/// The control surface names a button's job by the key it presses, so this
+/// is also the whole vocabulary a MIDI map may use — and a binding added to
+/// the tables above is reachable from the panel the same day, with nothing
+/// to keep in step.
+pub fn labels() -> impl Iterator<Item = &'static str> {
+    AXES.iter()
+        .flat_map(|axis| [axis.down.1, axis.up.1])
+        .chain(COMMANDS.iter().map(|(_, label, _, _)| *label))
+        .chain(SLOT_KEYS.iter().map(|(_, label)| *label))
+}
+
+/// What the key spelled `label` does, `"shift f1"` included. `None` for a
+/// label no table claims, which is how a hand-written MIDI map is caught at
+/// load rather than in the middle of a performance.
+pub fn action_for_label(label: &str) -> Option<Action> {
+    let (shift, label) = match label.strip_prefix("shift ") {
+        Some(rest) => (true, rest),
+        None => (false, label),
+    };
+    let key = AXES
+        .iter()
+        .flat_map(|axis| [axis.down, axis.up])
+        .chain(COMMANDS.iter().map(|(key, label, _, _)| (*key, *label)))
+        .chain(SLOT_KEYS.iter().copied())
+        .find(|(_, bound)| *bound == label)?
+        .0;
+    action_for(key, shift)
+}
+
 pub fn help() -> String {
     let mut out = String::from("keys (US layout positions)\n");
     for axis in AXES {
@@ -336,5 +372,36 @@ mod tests {
                 axis.knob.name()
             );
         }
+    }
+
+    #[test]
+    fn every_label_names_exactly_one_key() {
+        // The MIDI map addresses a key by its label, so two keys sharing one
+        // would make a button's job depend on table order.
+        let labels: Vec<&str> = labels().collect();
+        for (i, label) in labels.iter().enumerate() {
+            assert!(!labels[..i].contains(label), "{label} labels two keys");
+        }
+        // And every one of them resolves, which is what the map's loader
+        // checks a hand-written binding against.
+        for label in labels {
+            assert!(action_for_label(label).is_some(), "{label}");
+        }
+    }
+
+    #[test]
+    fn a_label_reaches_the_same_action_the_key_does() {
+        assert_eq!(action_for_label("p"), Some(Action::Motion));
+        assert_eq!(action_for_label("space"), Some(Action::Clear));
+        assert_eq!(action_for_label("f3"), Some(Action::Recall(2)));
+        assert_eq!(action_for_label("shift f3"), Some(Action::Store(2)));
+        assert_eq!(
+            action_for_label("="),
+            Some(Action::Nudge(Knob::Zoom, Knob::Zoom.increment()))
+        );
+        assert_eq!(action_for_label("wiggle"), None);
+        // "shift" in front of a key that does not read it is that key, the
+        // same as it is on the keyboard.
+        assert_eq!(action_for_label("shift p"), Some(Action::Motion));
     }
 }
