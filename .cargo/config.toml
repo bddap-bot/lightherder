@@ -1,0 +1,6 @@
+# `web-sys` keeps the WebCodecs bindings behind a cfg until the spec settles,
+# and wgpu's WebGPU backend uses one of them (`VideoFrame`) — so a wasm build
+# does not compile without this. Scoped to the target it applies to, which
+# leaves every native build exactly as it was.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]
