@@ -16,6 +16,10 @@ pub enum Action {
     Nudge(Knob, f32),
     /// Move the camera knobs' focus to the next camera in the graph.
     NextCamera,
+    /// Put the camera knobs' focus on one camera outright, by its place in
+    /// the graph. A select rather than a step: a hand that means "that one"
+    /// should not have to walk past the ones it does not mean.
+    Camera(usize),
     /// Move the monitor knobs' focus to the next monitor.
     NextMonitor,
     /// Switch the automation on the last knob turned through its states: off,
@@ -42,7 +46,7 @@ pub enum Action {
 /// The preset slots. Function keys because they are the only block of eight
 /// that is not already a knob, and because a slip onto one mid-performance
 /// should not be a knob moving.
-const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
+pub(crate) const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
     (KeyCode::F1, "f1"),
     (KeyCode::F2, "f2"),
     (KeyCode::F3, "f3"),
@@ -51,6 +55,23 @@ const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
     (KeyCode::F6, "f6"),
     (KeyCode::F7, "f7"),
     (KeyCode::F8, "f8"),
+];
+
+/// The cameras a key reaches outright. The numeric keypad because it is the
+/// last block of eight the board has left, because it is already numbered
+/// the way the cameras are, and because a slip onto one only moves the
+/// focus — the cheapest kind of slip there is, since no picture changes.
+/// Past the eighth camera `n` still walks, so a graph deeper than the keypad
+/// is not shut out.
+pub(crate) const CAMERA_KEYS: [(KeyCode, &str); 8] = [
+    (KeyCode::Numpad1, "num1"),
+    (KeyCode::Numpad2, "num2"),
+    (KeyCode::Numpad3, "num3"),
+    (KeyCode::Numpad4, "num4"),
+    (KeyCode::Numpad5, "num5"),
+    (KeyCode::Numpad6, "num6"),
+    (KeyCode::Numpad7, "num7"),
+    (KeyCode::Numpad8, "num8"),
 ];
 
 /// A knob and the two keys that turn it. Physical key positions, so the
@@ -264,6 +285,9 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
             Action::Recall(slot)
         });
     }
+    if let Some(camera) = CAMERA_KEYS.iter().position(|(bound, _)| *bound == key) {
+        return Some(Action::Camera(camera));
+    }
     for axis in AXES {
         if axis.down.0 == key {
             return Some(Action::Nudge(axis.knob, -axis.knob.increment()));
@@ -280,6 +304,7 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
 /// differ but what a label reaches cannot.
 enum Binding {
     Slot { slot: usize, shift: bool },
+    Camera(usize),
     Axis { axis: &'static Axis, up: bool },
     Command(&'static Command),
 }
@@ -293,6 +318,9 @@ fn binding(label: &str) -> Option<Binding> {
     };
     if let Some(slot) = SLOT_KEYS.iter().position(|(_, bound)| *bound == bare) {
         return Some(Binding::Slot { slot, shift });
+    }
+    if let Some(camera) = CAMERA_KEYS.iter().position(|(_, bound)| *bound == bare) {
+        return Some(Binding::Camera(camera));
     }
     for axis in AXES {
         if axis.down.1 == bare {
@@ -318,6 +346,7 @@ pub fn labels() -> impl Iterator<Item = &'static str> {
     AXES.iter()
         .flat_map(|axis| [axis.down.1, axis.up.1])
         .chain(COMMANDS.iter().map(|c| c.label))
+        .chain(CAMERA_KEYS.iter().map(|(_, label)| *label))
         .chain(SLOT_KEYS.iter().map(|(_, label)| *label))
 }
 
@@ -328,6 +357,7 @@ pub fn action_for_label(label: &str) -> Option<Action> {
     Some(match binding(label)? {
         Binding::Slot { slot, shift: true } => Action::Store(slot),
         Binding::Slot { slot, shift: false } => Action::Recall(slot),
+        Binding::Camera(camera) => Action::Camera(camera),
         Binding::Axis { axis, up } => {
             let step = axis.knob.increment();
             Action::Nudge(axis.knob, if up { step } else { -step })
@@ -345,6 +375,7 @@ pub fn describes(label: &str) -> Option<String> {
             let what = if shift { "store" } else { "recall" };
             format!("{what} preset slot {}", slot + 1)
         }
+        Binding::Camera(camera) => format!("focus camera {}", camera + 1),
         Binding::Axis { axis, up } => {
             format!("{} {}", axis.knob.name(), if up { "up" } else { "down" })
         }
@@ -362,6 +393,7 @@ pub fn short(label: &str) -> Option<String> {
             let what = if shift { "save" } else { "slot" };
             format!("{what} {}", slot + 1)
         }
+        Binding::Camera(camera) => format!("cam {}", camera + 1),
         Binding::Axis { axis, up } => {
             format!("{} {}", axis.knob.name(), if up { "+" } else { "-" })
         }
@@ -378,8 +410,12 @@ pub fn help() -> String {
     for c in COMMANDS {
         out.push_str(&format!("  {:<12} {}\n", c.label, c.what));
     }
-    // Off the table's own labels, like the two above it: a slot rebound to a
-    // different key must not leave the help naming the old one.
+    // Off the tables' own labels, like the two above them: a key rebound
+    // must not leave the help naming the old one.
+    let cameras = CAMERA_KEYS.len();
+    let (first, last) = (CAMERA_KEYS[0].1, CAMERA_KEYS[cameras - 1].1);
+    let keys = format!("{first} / {last}");
+    out.push_str(&format!("  {keys:<12} focus camera 1 to {cameras}\n"));
     let (first, last) = (SLOT_KEYS[0].1, SLOT_KEYS[SLOTS - 1].1);
     let keys = format!("{first} / {last}");
     out.push_str(&format!("  {keys:<12} recall preset slot 1 to {SLOTS}\n"));
@@ -397,6 +433,7 @@ mod tests {
         AXES.iter()
             .flat_map(|a| [a.down.0, a.up.0])
             .chain(COMMANDS.iter().map(|c| c.key))
+            .chain(CAMERA_KEYS.iter().map(|(key, _)| *key))
             .chain(SLOT_KEYS.iter().map(|(key, _)| *key))
             .collect()
     }
@@ -501,9 +538,11 @@ mod tests {
     #[test]
     fn the_help_names_every_binding() {
         let help = help();
-        // The header, and the two lines the eight slot keys share.
-        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 3);
+        // The header, the line the camera keys share, and the two the slot
+        // keys share.
+        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 4);
         assert!(help.contains("recall preset slot") && help.contains("store preset slot"));
+        assert!(help.contains("focus camera 1 to 8"));
         for axis in AXES {
             assert!(help.contains(axis.down.1), "{} missing", axis.down.1);
             assert!(help.contains(axis.up.1), "{} missing", axis.up.1);
@@ -612,14 +651,24 @@ mod tests {
         // what the instrument prints; a label on one and not the other is a
         // binding a performer cannot discover or one the help lies about.
         let labels: Vec<&str> = labels().collect();
-        assert_eq!(labels.len(), AXES.len() * 2 + COMMANDS.len() + SLOTS);
+        let cameras = CAMERA_KEYS.len();
+        assert_eq!(
+            labels.len(),
+            AXES.len() * 2 + COMMANDS.len() + cameras + SLOTS
+        );
         let help = help();
-        // The slots print as one range line, "f1 / f8", so the six in the
-        // middle are named by the ends rather than each in turn.
-        let named: Vec<&str> = labels[..labels.len() - SLOTS]
+        // The camera keys and the slots each print as one range line, "f1 /
+        // f8", so the six in the middle of either are named by the ends
+        // rather than each in turn.
+        let named: Vec<&str> = labels[..labels.len() - cameras - SLOTS]
             .iter()
             .copied()
-            .chain([SLOT_KEYS[0].1, SLOT_KEYS[SLOTS - 1].1])
+            .chain([
+                CAMERA_KEYS[0].1,
+                CAMERA_KEYS[cameras - 1].1,
+                SLOT_KEYS[0].1,
+                SLOT_KEYS[SLOTS - 1].1,
+            ])
             .collect();
         for label in named {
             assert!(help.contains(label), "{label} is not in the help");
@@ -641,5 +690,22 @@ mod tests {
                 action_for(key, true)
             );
         }
+        for (key, label) in CAMERA_KEYS {
+            assert_eq!(action_for_label(label), action_for(key, false));
+        }
+    }
+
+    #[test]
+    fn a_camera_key_selects_that_camera_and_nothing_steps() {
+        // Numbered from one on the key and from zero in the graph, which is
+        // the one place the two conventions meet.
+        for (camera, (key, label)) in CAMERA_KEYS.iter().enumerate() {
+            assert_eq!(action_for(*key, false), Some(Action::Camera(camera)));
+            assert_eq!(action_for_label(label), Some(Action::Camera(camera)));
+        }
+        assert_eq!(describes("num3").as_deref(), Some("focus camera 3"));
+        assert_eq!(short("num3").as_deref(), Some("cam 3"));
+        // The step is still there for a graph deeper than the keypad.
+        assert_eq!(action_for(KeyCode::KeyN, false), Some(Action::NextCamera));
     }
 }

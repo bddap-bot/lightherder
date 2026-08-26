@@ -347,19 +347,34 @@ fn button(cc: u8, key: impl Into<String>) -> Button {
 /// has them in.
 fn nano_buttons() -> Vec<Button> {
     let mut out = Vec::new();
-    // Solo recalls a slot and Record stores one — the same asymmetry shift
-    // makes on the function keys, in the row a hand reaches for and the row
-    // it has to mean.
-    for slot in 1..=crate::slots::SLOTS as u8 {
-        out.push(button(31 + slot, format!("f{slot}")));
-        out.push(button(63 + slot, format!("shift f{slot}")));
+    // A channel strip's three buttons are the three things a performer does
+    // to the thing that strip stands for, in order of how much they commit:
+    // Solo points the knobs at camera n, Mute plays slot n back, Record
+    // writes over it. Solo selects because that is what a hand off a mixer
+    // reaches for it to do — the press that started this was S1 meaning
+    // "camera 1" and getting a preset over the live panel — and Record
+    // stores because it is the button you have to mean, the asymmetry shift
+    // makes on the function keys.
+    //
+    // Spelled off the key tables rather than beside them, so a label is
+    // written once and a rebound key moves the button with it.
+    for (camera, (_, key)) in crate::keys::CAMERA_KEYS.iter().enumerate() {
+        out.push(button(32 + camera as u8, *key));
+    }
+    for (slot, (_, key)) in crate::keys::SLOT_KEYS.iter().enumerate() {
+        out.push(button(48 + slot as u8, *key));
+        out.push(button(64 + slot as u8, format!("shift {key}")));
     }
     out.extend([
-        // Mute: what the panel is pointed at, and what is on the glass.
-        button(48, "n"),
-        button(49, "m"),
-        button(50, "space"),
-        button(51, "r"),
+        // The markers, holding what the strips displaced: which monitor the
+        // faders are on, and the two that act on the whole instrument. No
+        // step-to-the-next-camera any more — the Solo row reaches every
+        // camera the surface has a strip for, and two ways to the same one
+        // is one too many. `n` keeps it on the keyboard for a graph deeper
+        // than the surface.
+        button(60, "m"),
+        button(61, "space"),
+        button(62, "r"),
         // Transport, where the automation belongs. Nothing is bound to quit.
         button(41, "p"),
         button(43, "7"),
@@ -1015,22 +1030,23 @@ mod tests {
                 fader(23, Knob::Noise),
             ]
         );
+        let cameras: Vec<Button> = (1..=8).map(|n| button(31 + n, format!("num{n}"))).collect();
+        assert_eq!(map.button[..8], cameras[..]);
         let slots: Vec<Button> = (1..=8)
             .flat_map(|n| {
                 [
-                    button(31 + n, format!("f{n}")),
+                    button(47 + n, format!("f{n}")),
                     button(63 + n, format!("shift f{n}")),
                 ]
             })
             .collect();
-        assert_eq!(map.button[..16], slots[..]);
+        assert_eq!(map.button[8..24], slots[..]);
         assert_eq!(
-            map.button[16..],
+            map.button[24..],
             [
-                button(48, "n"),
-                button(49, "m"),
-                button(50, "space"),
-                button(51, "r"),
+                button(60, "m"),
+                button(61, "space"),
+                button(62, "r"),
                 button(41, "p"),
                 button(43, "7"),
                 button(44, "8"),
@@ -1070,6 +1086,17 @@ mod tests {
             .button
             .iter()
             .any(|b| action_for_label(&b.key) == Some(Action::Quit)));
+        // And every control the map names is one the surface has. A row is
+        // eight wide, so a key table grown past eight would otherwise walk
+        // its block's last button off into the numbers between the rows.
+        for cc in map
+            .fader
+            .iter()
+            .map(|f| f.cc)
+            .chain(map.button.iter().map(|b| b.cc))
+        {
+            assert!(spot(cc).is_some(), "cc {cc} is nowhere on the panel");
+        }
         Midi::new(map).unwrap();
     }
 
@@ -1317,19 +1344,32 @@ mod tests {
     #[test]
     fn a_button_acts_when_it_goes_down_and_not_when_it_comes_up() {
         let (mut midi, params) = surface();
-        // CC 48 is the mute button bound to "n".
-        assert_eq!(feed(&mut midi, &params, &cc(48, 127)), [Action::NextCamera]);
+        // CC 60 is "marker set", bound to "m".
+        assert_eq!(
+            feed(&mut midi, &params, &cc(60, 127)),
+            [Action::NextMonitor]
+        );
         // Held: a surface that repeats while a finger is on it must not walk
         // the focus round the graph.
-        assert_eq!(feed(&mut midi, &params, &cc(48, 127)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(48, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(48, 127)), [Action::NextCamera]);
+        assert_eq!(feed(&mut midi, &params, &cc(60, 127)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(60, 0)), []);
+        assert_eq!(
+            feed(&mut midi, &params, &cc(60, 127)),
+            [Action::NextMonitor]
+        );
     }
 
     #[test]
-    fn the_buttons_reach_the_slots_and_the_automation() {
+    fn the_buttons_reach_the_cameras_the_slots_and_the_automation() {
         let (mut midi, params) = surface();
-        assert_eq!(feed(&mut midi, &params, &cc(32, 127)), [Action::Recall(0)]);
+        // One from each row, at both ends of the strip: the three rows are
+        // three eight-wide blocks of control numbers and a block written
+        // from the wrong first number lands whole on the wrong row.
+        assert_eq!(feed(&mut midi, &params, &cc(32, 127)), [Action::Camera(0)]);
+        assert_eq!(feed(&mut midi, &params, &cc(39, 127)), [Action::Camera(7)]);
+        assert_eq!(feed(&mut midi, &params, &cc(48, 127)), [Action::Recall(0)]);
+        assert_eq!(feed(&mut midi, &params, &cc(55, 127)), [Action::Recall(7)]);
+        assert_eq!(feed(&mut midi, &params, &cc(64, 127)), [Action::Store(0)]);
         assert_eq!(feed(&mut midi, &params, &cc(71, 127)), [Action::Store(7)]);
         assert_eq!(feed(&mut midi, &params, &cc(41, 127)), [Action::Motion]);
         assert_eq!(
@@ -1355,8 +1395,8 @@ mod tests {
         // cannot see one added in `action_for`.
         let (mut midi, params) = surface();
         assert_eq!(
-            feed(&mut midi, &params, &[0xB9, 48, 127]),
-            [Action::NextCamera]
+            feed(&mut midi, &params, &[0xB9, 60, 127]),
+            [Action::NextMonitor]
         );
         assert_eq!(decode(&[0xB9, 0x07, 0x64]), [message(7, 0x64)]);
     }
@@ -1421,9 +1461,9 @@ mod tests {
             "{acted:?}"
         );
         // A button held down at the moment the cable comes out.
-        pipe.write_all(&[0xB0, 48, 127]).unwrap();
+        pipe.write_all(&[0xB0, 60, 127]).unwrap();
         pipe.flush().unwrap();
-        assert_eq!(wait_for(&mut midi, &params), [Action::NextCamera]);
+        assert_eq!(wait_for(&mut midi, &params), [Action::NextMonitor]);
 
         // Unplug: the last writer goes, so the reader's `read` returns 0.
         drop(pipe);
@@ -1438,11 +1478,11 @@ mod tests {
         // Plug it back in. It has to be looked for again — and the button
         // that was down when the cable went must count as a fresh press.
         let mut pipe = plug(&node);
-        pipe.write_all(&[0xB0, 48, 127]).unwrap();
+        pipe.write_all(&[0xB0, 60, 127]).unwrap();
         pipe.flush().unwrap();
         assert_eq!(
             wait_for(&mut midi, &params),
-            [Action::NextCamera],
+            [Action::NextMonitor],
             "the surface did not come back"
         );
         // And every fader starts again from wherever the knob is: this one

@@ -442,6 +442,18 @@ impl App {
                     ..self.focus
                 });
             }
+            Action::Camera(camera) => {
+                // A select row is wider than most graphs, so most of it
+                // points at nothing. Doing nothing is the honest answer:
+                // clamping to the last camera would make four buttons the
+                // same button on a four-camera rig.
+                if camera < self.params.cameras.len() {
+                    self.refocus(Focus {
+                        camera,
+                        ..self.focus
+                    });
+                }
+            }
             Action::NextMonitor => {
                 let monitor = (self.focus.monitor + 1) % self.params.monitors.len();
                 self.refocus(Focus {

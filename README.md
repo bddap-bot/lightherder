@@ -252,23 +252,28 @@ Out of the box, with no configuration:
 |---|---|
 | faders 1–8 | the focused **monitor**: seed, hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
-| S 1–8 | recall preset slot 1–8 |
+| S 1–8 | focus camera 1–8 |
+| M 1–8 | recall preset slot 1–8 |
 | R 1–8 | store preset slot 1–8 |
-| M 1–4 | next camera, next monitor, blank the monitors, reset |
+| marker set, prev, next | next monitor, blank the monitors, reset |
 | ▶ | automation on the last control touched: off / sine / ramp |
 | ◀◀ ▶▶ | its rate, slower and faster |
 | ⏮ ⏭ | its swing, narrower and wider |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 
 So the left hand works one monitor, the right hand one camera, and the top
-fader is the switcher crosspoint joining the two the hands are on. M1 and
-M2 move which. Nothing is bound to quit: a slipped finger during a performance
-must not be able to stop the instrument. Eight of the twenty-four knobs are
-not on the surface, which has sixteen controls and no more: the three
-per-channel gain offsets, which colour a rigid gain that is itself on a
-rotary; the bloom radius, which sizes a halo whose amount is; and the keyer's
-four, which wait for a hand that keys more than it bleeds and swaps this map
-for its own. They all stay on the keys.
+fader is the switcher crosspoint joining the two the hands are on. A strip's
+three buttons are the three things you do to what that strip stands for, in
+order of how much they commit: Solo points the knobs at camera n, Mute plays
+slot n back, Record writes over it. There is no next-camera button, because
+the Solo row reaches every camera the surface has a strip for; the keys keep
+`n` for a graph deeper than that. Nothing is bound to quit: a slipped finger
+during a performance must not be able to stop the instrument. Eight of the
+twenty-four knobs are not on the surface, which has sixteen controls and no
+more: the three per-channel gain offsets, which colour a rigid gain that is
+itself on a rotary; the bloom radius, which sizes a halo whose amount is; and
+the keyer's four, which wait for a hand that keys more than it bleeds and
+swaps this map for its own. They all stay on the keys.
 
 **A fader does not take its knob over until it has passed through where the
 knob already is.** A fader sends where it is standing, so without that,
@@ -480,6 +485,7 @@ below assumes a US layout.
 | `7` `8` | its rate, slower / faster |
 | `9` `0` | its swing, narrower / wider |
 | `n` | focus the next camera |
+| `num1`…`num8` | focus camera 1–8 outright |
 | `m` | focus the next monitor |
 | `f1`…`f8` | recall preset slot |
 | shift `f1`…`f8` | store preset slot |
