@@ -36,8 +36,8 @@ pub struct App {
     initial: Params,
     /// The camera and monitor the knobs act on.
     focus: Focus,
-    /// The running external inputs, in `params.inputs` order — so index `i`
-    /// here is the source layer `params.input_layer(i)`.
+    /// The running external inputs, in `params.inputs` order, which is the
+    /// order `Feedback::write_input` indexes them by.
     sources: Vec<Source>,
     live: Option<Live>,
 }
@@ -47,30 +47,28 @@ pub struct App {
 /// The inputs are opened before the window is, so a file that is not there or
 /// a device that will not open says so on the terminal instead of behind a
 /// black layer of a running instrument.
-pub fn run(params: Params) -> Result<(), String> {
+pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
     let sources = params
         .inputs
         .iter()
         .map(|input| Source::open(input, MONITOR_SIZE))
         .collect::<Result<Vec<Source>, String>>()?;
     for input in &params.inputs {
-        log::info!("input: {}", input.describe());
+        log::info!("input: {input}");
     }
-    let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
+    let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop
-        .run_app(&mut App {
-            initial: params.clone(),
-            params,
-            focus: Focus::default(),
-            sources,
-            live: None,
-        })
-        .map_err(|e| e.to_string())
+    Ok(event_loop.run_app(&mut App {
+        initial: params.clone(),
+        params,
+        focus: Focus::default(),
+        sources,
+        live: None,
+    })?)
 }
 
 impl Live {
-    async fn new(event_loop: &ActiveEventLoop, monitors: usize, inputs: usize) -> Live {
+    async fn new(event_loop: &ActiveEventLoop, params: &Params) -> Live {
         let window = Arc::new(
             event_loop
                 .create_window(Window::default_attributes().with_title("lightherder"))
@@ -112,7 +110,7 @@ impl Live {
 
         // wgpu zero-initialises textures, so the monitors start black without
         // an explicit clear.
-        let feedback = Feedback::new(&device, MONITOR_SIZE.0, MONITOR_SIZE.1, monitors, inputs);
+        let feedback = Feedback::new(&device, MONITOR_SIZE.0, MONITOR_SIZE.1, params);
         let present = Present::new(&device, &feedback, format);
 
         Live {
@@ -157,8 +155,7 @@ impl Live {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Whatever the inputs have decoded since the last frame, onto their
-        // source layers before the cameras read them.
+        // Before the cameras read the bank, not after.
         for (i, source) in sources.iter_mut().enumerate() {
             if let Some(frame) = source.frame() {
                 self.feedback.write_input(&self.queue, i, &frame);
@@ -189,11 +186,7 @@ impl ApplicationHandler for App {
             return;
         }
         // The one place this program blocks.
-        let live = pollster::block_on(Live::new(
-            event_loop,
-            self.params.monitors.len(),
-            self.params.inputs.len(),
-        ));
+        let live = pollster::block_on(Live::new(event_loop, &self.params));
         log::info!(
             "{} monitors of {}x{}, {} cameras, {} inputs",
             self.params.monitors.len(),

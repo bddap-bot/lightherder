@@ -13,10 +13,10 @@ use crate::params::{Camera, Character, Knob, Limit, Monitor, Params};
 /// [`MAX_TAPS`] already bounds those.
 pub const MAX_MONITORS: usize = 8;
 
-/// Inputs get their own cap rather than sharing the monitors': they cost a
-/// source layer each, and a decoder and a thread on top, but none of the
-/// per-monitor machinery [`MAX_MONITORS`] is really about. A live rig with
-/// more than four things plugged into it is not this instrument.
+/// Inputs get their own cap because nothing else bounds them: a camera aimed
+/// at one is one tap however many there are, so [`MAX_TAPS`] does not, and
+/// each costs a bank layer plus — for a file or a device — a process and a
+/// thread of its own. Four is what a switcher has spare inputs for.
 pub const MAX_INPUTS: usize = 4;
 
 /// The classic rig: one camera aimed straight at the one monitor it draws to.
@@ -148,12 +148,12 @@ pub fn insanity() -> Params {
 /// A test pattern driving the loop instead of the seed spot. One camera is
 /// the classic rig, turning and pulling back on its own monitor; the other is
 /// pointed at the bars and hands over almost nothing — a hundredth of what it
-/// sees. That is the whole point of a loop this close to unity: the trickle
-/// is what the picture is made of, because it goes round seventy times before
-/// it fades. The seed is off, so every photon on the monitor came in from
-/// outside, and the gain is flat across the channels for the first time —
-/// with an input supplying the colour there is nothing for a per-channel
-/// decay to add.
+/// sees. That is the whole point of a loop this close to unity: what settles
+/// is the trickle divided by how far the gain is from 1, so a hundredth of
+/// the bars becomes most of a monitor. The seed is off, so every photon here
+/// came in from outside, and the gain is flat across the channels because an
+/// input supplies its own colour — there is nothing for a per-channel decay
+/// to add.
 pub fn external() -> Params {
     let looking_at_the_loop = Camera {
         framing: Framing {
@@ -220,9 +220,6 @@ pub fn validate(params: &Params) -> Result<(), String> {
             "{} inputs; at most {MAX_INPUTS}",
             params.inputs.len()
         ));
-    }
-    for (i, input) in params.inputs.iter().enumerate() {
-        input_is_openable(input).map_err(|e| format!("input {i}: {e}"))?;
     }
     let weights = |row: &[f32], len: usize| -> Result<(), String> {
         if row.len() != len {
@@ -343,35 +340,6 @@ pub fn validate(params: &Params) -> Result<(), String> {
     Ok(())
 }
 
-/// The two things a config can put in an ffmpeg command line, checked before
-/// it gets there: a name that is empty, and a name that would be read as a
-/// flag. `input::argv` chooses every actual argument, so this is the only
-/// door between a file on disk and what ffmpeg is asked to do — and it is
-/// shut here rather than there so a broken graph is refused at load with
-/// every other broken graph.
-fn input_is_openable(input: &Input) -> Result<(), String> {
-    fn name(what: &str, name: &str) -> Result<(), String> {
-        if name.is_empty() {
-            return Err(format!("its {what} is empty"));
-        }
-        if name.starts_with('-') {
-            return Err(format!(
-                "its {what} {name:?} starts with a dash; ffmpeg would read it as a flag \
-                 (prefix a path with ./)"
-            ));
-        }
-        Ok(())
-    }
-    match input {
-        // Nothing is spawned for a pattern, so there is nothing to shut.
-        Input::Pattern(_) => Ok(()),
-        Input::File(path) => name("path", &path.display().to_string()),
-        Input::Capture { format, device } => {
-            name("format", format).and_then(|()| name("device", device))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,9 +372,11 @@ mod tests {
         //
         // Over the monitors a camera looks at, and not its inputs: an input
         // is light entering the graph, so it belongs to what the loop is
-        // driven *by*, not to what it multiplies. Counting it here would call
-        // the external preset divergent and would let a real runaway hide
-        // behind an input weight.
+        // driven *by*, not to what it multiplies — the seed is left out of
+        // this sum for exactly the same reason. This is the first place the
+        // one index space over two kinds of source charges rent, and it will
+        // not be the last: anywhere the loop's own gain is reasoned about,
+        // `look` has to be sliced.
         for (name, params) in presets() {
             let monitors = params.monitors.len();
             for (i, row) in params.routing.iter().enumerate() {
@@ -454,9 +424,9 @@ mod tests {
     fn a_config_file_round_trips() {
         let dir = std::env::temp_dir().join(format!("lightherder-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // The analog preset, because it is the only one with a non-default
-        // value in every field the format gained that stage; external for
-        // this one's.
+        // Between them these three carry a non-default value in every field
+        // the format has: the routing and splitter weights, the character and
+        // the rail, and the inputs.
         for params in [crossed(), analog(), external()] {
             let path = dir.join("preset.toml");
             std::fs::write(&path, toml::to_string(&params).unwrap()).unwrap();
@@ -560,10 +530,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn every_kind_of_input_survives_a_config_file() {
-        // One graph carrying all three, so the enum's TOML shape is pinned by
-        // a round trip rather than by anyone's memory of what serde emits.
+    /// A graph carrying one of every kind of input, with looks long enough
+    /// for them: `external` plus a grid, a file and a device.
+    fn one_of_every_input() -> Params {
         let mut params = external();
         params.inputs = vec![
             Input::Pattern(Pattern::Grid),
@@ -574,12 +543,33 @@ mod tests {
             },
         ];
         for camera in &mut params.cameras {
-            camera.look = vec![camera.look[0], 0.0, 0.0, 0.0];
+            camera.look.resize(params.monitors.len() + 3, 0.0);
         }
-        params.cameras[1].look[1] = 1.0;
+        params
+    }
+
+    #[test]
+    fn every_kind_of_input_spells_itself_the_way_it_is_documented() {
+        // The literal keys, not a round trip: a round trip agrees with itself
+        // whatever serde is told to call these, and every config file and
+        // every line of the README that mentions an input depends on the
+        // names rather than on the agreement.
+        let params: Params = toml::from_str(
+            "cameras = [{ look = [1.0, 0.0, 0.0, 0.0] }]\n\
+             monitors = [{}]\n\
+             routing = [[1.0]]\n\
+             inputs = [\n\
+             \x20 { pattern = \"grid\" },\n\
+             \x20 { file = \"clip.mp4\" },\n\
+             \x20 { capture = { format = \"v4l2\", device = \"/dev/video0\" } },\n\
+             ]\n",
+        )
+        .unwrap();
         validate(&params).unwrap();
-        let text = toml::to_string(&params).unwrap();
-        assert_eq!(toml::from_str::<Params>(&text).unwrap(), params);
+        assert_eq!(params.inputs, one_of_every_input().inputs);
+        // And out again, so a file written by the instrument reads back in.
+        let written = toml::to_string(&params).unwrap();
+        assert_eq!(toml::from_str::<Params>(&written).unwrap(), params);
     }
 
     #[test]
@@ -589,44 +579,23 @@ mod tests {
         let mut params = external();
         params.cameras[0].look.pop();
         params.cameras[1].look.pop();
-        assert!(validate(&params).is_err());
+        let why = validate(&params).unwrap_err();
+        assert!(why.contains("look"), "refused for the wrong reason: {why}");
     }
 
     #[test]
-    fn an_input_that_could_not_be_opened_is_refused() {
-        let refused: &[(&str, Input)] = &[
-            ("empty path", Input::File("".into())),
-            ("a path that is a flag", Input::File("-i".into())),
-            (
-                "an empty device",
-                Input::Capture {
-                    format: "v4l2".into(),
-                    device: "".into(),
-                },
-            ),
-            (
-                "a format that is a flag",
-                Input::Capture {
-                    format: "-loglevel".into(),
-                    device: "/dev/video0".into(),
-                },
-            ),
-        ];
-        for (what, input) in refused {
-            let mut params = external();
-            params.inputs = vec![input.clone()];
-            assert!(validate(&params).is_err(), "{what} passed");
+    fn more_inputs_than_the_switcher_has_are_refused() {
+        let mut params = one_of_every_input();
+        params.inputs = vec![Input::Pattern(Pattern::Bars); MAX_INPUTS + 1];
+        for camera in &mut params.cameras {
+            camera
+                .look
+                .resize(params.monitors.len() + MAX_INPUTS + 1, 0.0);
         }
-
-        let mut too_many = external();
-        too_many.inputs = vec![Input::Pattern(Pattern::Bars); MAX_INPUTS + 1];
-        for camera in &mut too_many.cameras {
-            camera.look.resize(1 + MAX_INPUTS + 1, 0.0);
-        }
+        let why = validate(&params).unwrap_err();
         assert!(
-            validate(&too_many).is_err(),
-            "{} inputs passed",
-            MAX_INPUTS + 1
+            why.contains("at most"),
+            "refused for the wrong reason: {why}"
         );
     }
 
@@ -638,13 +607,13 @@ mod tests {
         // One camera in the loop, one on the input, and no camera doing both:
         // the injection level is that camera's gain, which is only true while
         // it sees nothing else.
-        let input = p.input_layer(0);
+        let input = p.monitors.len();
         let on_input: Vec<usize> = (0..p.cameras.len())
             .filter(|c| p.cameras[*c].look[input] > 0.0)
             .collect();
         assert_eq!(on_input, vec![1]);
         assert_eq!(p.cameras[1].look[..p.monitors.len()], [0.0]);
-        assert!(p.cameras[0].look[input] == 0.0);
+        assert_eq!(p.cameras[0].look[input], 0.0);
     }
 
     #[test]

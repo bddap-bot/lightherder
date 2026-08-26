@@ -119,15 +119,20 @@ inputs = [
 ]
 ```
 
-Patterns are drawn in-process and are still: motion is the camera's job. The
-other two are one implementation — an `ffmpeg` reading something and writing
-raw RGBA down a pipe, scaled and letterboxed to the monitor size — so
-anything ffmpeg can open is an input. That includes its own generators
-(`{ format = "lavfi", device = "testsrc2" }`) and a screen
-(`{ format = "x11grab", device = ":0.0" }`), which is why only two patterns
-are built in: the two that must work with no ffmpeg on the box. A source that
-has not produced its first frame by the time the window would open is an
-error on the terminal, not a black layer.
+A file and a capture device are one implementation — an `ffmpeg` reading
+something and writing raw RGBA down a pipe, scaled and letterboxed to the
+monitor size — so anything ffmpeg can open is an input. That includes its own
+generators (`{ format = "lavfi", device = "testsrc2" }`) and a screen
+(`{ format = "x11grab", device = ":0.0" }`), which is why the drawn patterns
+stop at two: no process, no thread, no decode, and levels a test can assert
+without pinning an ffmpeg version. They are also still — motion is the
+camera's job — so a pattern is uploaded once rather than every frame.
+
+A source that has not produced its first frame by the time the window would
+open is an error on the terminal, not a black layer, and one that ends
+mid-performance says so in the log and leaves its last frame on the layer.
+ffmpeg only has to be on `PATH` if a graph actually asks for a file or a
+device; `shell.nix` has one.
 
 Injection level is just the camera's gain, and near unity a little goes a
 long way. The `external` preset hands over a hundredth of what its camera
@@ -172,10 +177,11 @@ routing = [[0.98]]
 first and then any `inputs`. `routing[m][c]` is how much of camera `c` monitor
 `m` shows, and anything omitted — framing, gain, colour — is neutral.
 
-The `shell.nix` pins nixpkgs and puts the Vulkan loader and windowing
-libraries on `LD_LIBRARY_PATH`, which wgpu and winit open at run time. Without
-Nix, a Rust toolchain recent enough for wgpu 30 and winit 0.30 and a working
-Vulkan/Metal/DX12 driver will do.
+The `shell.nix` pins nixpkgs, puts the Vulkan loader and windowing libraries
+on `LD_LIBRARY_PATH`, which wgpu and winit open at run time, and carries the
+`ffmpeg` the file and capture inputs run. Without Nix, a Rust toolchain recent
+enough for wgpu 30 and winit 0.30 and a working Vulkan/Metal/DX12 driver will
+do, plus ffmpeg if you want those inputs.
 
 The window can be any shape: every monitor is a fixed 1920x1080 regardless,
 and the bank is tiled into a grid, each monitor letterboxed in its cell
@@ -262,7 +268,9 @@ On a machine with no adapter each one prints the reason straight to the
 process's stderr and returns; libtest still counts them as passed.
 
 The input decoding is tested without a GPU: the drawn patterns against the
-colours they name, and — where there is an `ffmpeg` to run — a capture source
-against what ffmpeg was told to generate, and a real file written, decoded,
-scaled and letterboxed. With no ffmpeg those two print a skip, on the same
-terms as the GPU tests.
+colours and spacings they name, the ffmpeg command lines against the options
+that make them loop and letterbox rather than race and stretch, a capture
+source against what ffmpeg was told to generate, a real file written and
+decoded, and a file that is not there refused at once rather than after the
+first-frame timeout. Outside the pinned shell the ones that need ffmpeg print
+a skip, on the same terms as the GPU tests.
