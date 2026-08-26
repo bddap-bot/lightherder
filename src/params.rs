@@ -488,6 +488,18 @@ impl Knob {
         Knob::ALL.into_iter().find(|knob| knob.name() == name)
     }
 
+    /// Whether the knob is a value of the graph or a grip on other knobs.
+    /// The rigid gain is the only one of the latter — it reads as the mean
+    /// of the three channel knobs and turns all three — so it owns no field
+    /// of its own, which is what [`Params::knob_mut`]'s `unreachable!` says
+    /// too. Anything walking the graph's *values* wants the ones that own a
+    /// field: the mean cannot leave a range its three terms are inside, and
+    /// a walk that included it would blame the rigid knob for a channel's
+    /// fault.
+    pub const fn owns_a_field(self) -> bool {
+        !matches!(self, Knob::Gain)
+    }
+
     /// Which of the focus's two indices the knob reads.
     pub const fn side(self) -> Side {
         match self {
@@ -818,6 +830,7 @@ impl Params {
             Knob::Gamma => &mut self.monitors[focus.monitor].colour.gamma,
             Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
             Knob::Route => &mut self.routing[focus.monitor][focus.camera],
+            // `owns_a_field` is the same fact, said where a walk can read it.
             Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
         }
     }
@@ -1551,5 +1564,32 @@ mod tests {
         // The readout names the pair, not one of them.
         let line = params.motion_of(Knob::Route, second).unwrap().describe();
         assert!(line.contains("cam 1 on mon 2"), "{line}");
+    }
+
+    #[test]
+    fn a_knob_past_its_rail_is_refused_rather_than_snapped_later() {
+        // The bug one range per knob closes: a file loading at a value the
+        // first press would clamp away, leaving the instrument showing a
+        // state neither a key nor a fader can put it back into. Over
+        // `Knob::ALL` rather than a list of the knobs that had the bug, so a
+        // knob added later is covered the day it joins it.
+        //
+        // The rigid gain has no field to poison, and `validate` skips it for
+        // the same reason — `owns_a_field` is where that is said once.
+        for knob in Knob::ALL.into_iter().filter(|knob| knob.owns_a_field()) {
+            let focus = Focus {
+                camera: 1,
+                monitor: 1,
+            }
+            .narrowed(knob);
+            let (low, high) = knob.limit().ends();
+            for past in [low - 1.0, high + 1.0] {
+                let mut params = crate::config::insanity();
+                *params.knob_mut(knob, focus) = past;
+                let why = crate::config::validate(&params)
+                    .expect_err(&format!("{} loaded at {past}", knob.name()));
+                assert!(why.contains(knob.name()), "{}: {why}", knob.name());
+            }
+        }
     }
 }

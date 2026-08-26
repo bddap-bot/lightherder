@@ -6,7 +6,7 @@ use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
 use crate::motion::{Lfo, Shape};
-use crate::params::{Camera, Character, Focus, Key, Knob, Limit, Monitor, Params, Side};
+use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Params, Side};
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
@@ -287,10 +287,19 @@ pub fn read(path: &std::path::Path) -> Result<Params, String> {
 
 /// Everything the GPU side assumes about a graph, checked at load — and
 /// re-asserted by `Feedback::step`, so the success path must stay
-/// allocation-free. Beyond the shape, every number a file can supply is
-/// required finite: a NaN written into a loop that feeds itself never leaves,
-/// and the knobs cannot repair it — `clamp` passes NaN through, and Reset
-/// restores the same poisoned initial.
+/// allocation-free.
+///
+/// Every value a knob turns is checked against that knob's own [`Knob::limit`]
+/// and nowhere else. A file outside one is *refused* rather than loaded and
+/// silently snapped by the first key press, which is the only reading of the
+/// rails that leaves the instrument able to return to what it loaded: a
+/// `headroom = 1e6` that validates is a state no knob and no fader can reach
+/// twice.
+///
+/// A range check is also the finiteness check, since neither a NaN nor an
+/// infinity is inside any range — and finiteness is not optional here: a NaN
+/// written into a loop that feeds itself never leaves, because `clamp` passes
+/// it through and Reset restores the same poisoned initial.
 pub fn validate(params: &Params) -> Result<(), String> {
     let (m, c) = (params.monitors.len(), params.cameras.len());
     if !(1..=MAX_MONITORS).contains(&m) {
@@ -305,144 +314,72 @@ pub fn validate(params: &Params) -> Result<(), String> {
             params.inputs.len()
         ));
     }
-    let weights = |row: &[f32], len: usize| -> Result<(), String> {
-        if row.len() != len {
-            return Err(format!("has {} entries; needs {len}", row.len()));
-        }
-        match row.iter().find(|w| !w.is_finite() || **w < 0.0) {
-            Some(w) => Err(format!("contains {w}; weights are finite and >= 0")),
-            None => Ok(()),
-        }
-    };
-    let finite = |value: f32, what: &str| -> Result<(), String> {
-        if value.is_finite() {
-            Ok(())
-        } else {
-            Err(format!("{what} is {value}; every number is finite"))
-        }
-    };
-    for (i, camera) in params.cameras.iter().enumerate() {
-        weights(&camera.look, params.sources()).map_err(|e| format!("camera {i}'s look {e}"))?;
-        weights(&camera.gain, 3).map_err(|e| format!("camera {i}'s gain {e}"))?;
-        let f = &camera.framing;
-        for (value, what) in [
-            (f.zoom, "zoom"),
-            (f.rotation, "rotation"),
-            (f.translate[0], "pan x"),
-            (f.translate[1], "pan y"),
-        ] {
-            finite(value, what).map_err(|e| format!("camera {i}'s {e}"))?;
-        }
-        // The sampling transform divides by the zoom, and a camera that sees
-        // nothing but one texel smeared to infinity helps nobody either.
-        if f.zoom == 0.0 {
-            return Err(format!("camera {i}'s zoom is 0; it would divide by it"));
-        }
-        let ch = &camera.character;
-        for (value, what) in [
-            (ch.bloom, "bloom"),
-            (ch.bloom_radius, "bloom radius"),
-            (ch.chroma_bleed, "chroma bleed"),
-            (ch.noise, "noise"),
-        ] {
-            finite(value, what).map_err(|e| format!("camera {i}'s {e}"))?;
-            if value < 0.0 {
-                return Err(format!("camera {i}'s {what} is {value}; it is not signed"));
-            }
-        }
-        // Above its rail `mix` extrapolates away from the halo instead of
-        // towards it, which is a lens returning more light than it was
-        // handed — and inside a loop that is a multiply, not an artefact.
-        // The rail is the knob's, read from it rather than repeated: two
-        // numbers meaning one thing is how a config reaches a state its own
-        // knob cannot return it from.
-        let Limit::Clamp(_, most) = Knob::Bloom.limit() else {
-            unreachable!("bloom clamps")
-        };
-        if ch.bloom > most {
-            return Err(format!(
-                "camera {i}'s bloom is {}; a lens scatters at most {most} of it",
-                ch.bloom
-            ));
-        }
-        // The keyer's rails, read off its knobs like the bloom's: a file
-        // above one would load at a value the instrument shows and cannot
-        // return to — and a tolerance past TOLERANT is the off state wearing
-        // a number the fader would snap.
-        let key = &camera.key;
-        finite(key.hue, "key hue").map_err(|e| format!("camera {i}'s {e}"))?;
-        for (value, knob) in [
-            (key.threshold, Knob::KeyThreshold),
-            (key.softness, Knob::KeySoftness),
-            (key.tolerance, Knob::KeyTolerance),
-        ] {
-            let Limit::Clamp(low, high) = knob.limit() else {
-                unreachable!("the keyer's levels clamp")
-            };
-            finite(value, knob.name()).map_err(|e| format!("camera {i}'s {e}"))?;
-            if !(low..=high).contains(&value) {
-                return Err(format!(
-                    "camera {i}'s {} is {value}; it runs {low} to {high}",
-                    knob.name()
-                ));
-            }
-        }
-    }
+    // The routing matrix's shape, before anything reads a crosspoint out of
+    // it: `Params::knob` indexes `routing[monitor][camera]` directly, so a
+    // short row would panic rather than fail. What the crosspoints *hold* is
+    // the `Knob::Route` rail, checked with every other knob below.
     if params.routing.len() != m {
         return Err(format!(
             "routing has {} rows; needs one per monitor, {m}",
             params.routing.len()
         ));
     }
-    // A crosspoint is a knob now, so its rail is read off the knob rather
-    // than repeated here: a file that sets one above the top would load and
-    // then snap the first time a fader touched it, which is a value the
-    // instrument shows and cannot return to.
-    let Limit::Clamp(_, full) = Knob::Route.limit() else {
-        unreachable!("a crosspoint clamps")
-    };
     for (i, row) in params.routing.iter().enumerate() {
-        weights(row, c).map_err(|e| format!("routing row {i} {e}"))?;
-        if let Some(w) = row.iter().find(|w| **w > full) {
+        if row.len() != c {
             return Err(format!(
-                "routing row {i} contains {w}; a crosspoint passes at most \
-                 {full} of a camera, and the gain is the knob that amplifies"
+                "routing row {i} has {} entries; needs one per camera, {c}",
+                row.len()
             ));
         }
     }
-    for (i, monitor) in params.monitors.iter().enumerate() {
-        let colour = &monitor.colour;
-        for (value, what) in [
-            (monitor.seed_brightness, "seed brightness"),
-            (monitor.headroom, "headroom"),
-            (colour.hue, "hue"),
-            (colour.saturation, "saturation"),
-            (colour.brightness, "brightness"),
-            (colour.contrast, "contrast"),
-            (colour.gamma, "gamma"),
-        ] {
-            finite(value, what).map_err(|e| format!("monitor {i}'s {e}"))?;
-        }
-        if monitor.seed_brightness < 0.0 {
-            return Err(format!("monitor {i}'s seed brightness is negative"));
-        }
-        // The rail's curve divides by the headroom, and a rail at or below
-        // zero is an amplifier with no output at all.
-        if monitor.headroom <= 0.0 {
+    // A splitter is not a knob — nothing on the panel turns one — so this is
+    // the only place its weights are decided, and they are checked as
+    // written rather than against a rail no key could hit.
+    for (i, camera) in params.cameras.iter().enumerate() {
+        if camera.look.len() != params.sources() {
             return Err(format!(
-                "monitor {i}'s headroom is {}; the amplifier needs some",
-                monitor.headroom
+                "camera {i}'s look has {} entries; needs one per source, {}",
+                camera.look.len(),
+                params.sources()
             ));
         }
-        // pow(0, g) for g <= 0 is an infinity, and the monitor's corners are
-        // exactly 0 whenever the seed does not reach them. One pass later the
-        // chroma matrix turns that infinity into a NaN, which per the note
-        // above never leaves the loop. The knob's own floor is 0.25.
-        if colour.gamma <= 0.0 {
+        if let Some(w) = camera.look.iter().find(|w| !w.is_finite() || **w < 0.0) {
             return Err(format!(
-                "monitor {i}'s gamma is {}; black to the power of it is not a number",
-                colour.gamma
+                "camera {i}'s look contains {w}; weights are finite and >= 0"
             ));
+        }
+    }
+    // Every knob, at every focus that names a value of its own, against the
+    // one definition of its travel. This is the whole of the per-value
+    // checking: a rail spelled a second time here is a rail the two could
+    // differ on, which is how a config used to load a bloom the bloom knob
+    // could not reach.
+    for camera in 0..c {
+        for monitor in 0..m {
+            let focus = Focus { camera, monitor };
+            for knob in Knob::ALL {
+                // Once per value rather than once per pair: a camera knob
+                // reads the same field whichever monitor is focused, and
+                // `narrowed` is already the definition of which half counts.
+                // The rigid gain owns no field at all — see `owns_a_field`.
+                if !knob.owns_a_field() || focus != focus.narrowed(knob) {
+                    continue;
+                }
+                let value = params.knob(knob, focus);
+                let (low, high) = knob.limit().ends();
+                if !(low..=high).contains(&value) {
+                    // Built only on the way out, so the frame-by-frame
+                    // re-assertion above stays allocation-free.
+                    let what = match knob.side() {
+                        Side::Camera => format!("camera {camera}'s {}", knob.name()),
+                        Side::Monitor => format!("monitor {monitor}'s {}", knob.name()),
+                        Side::Edge => {
+                            format!("camera {camera}'s {} to monitor {monitor}", knob.name())
+                        }
+                    };
+                    return Err(format!("{what} is {value}; it runs {low} to {high}"));
+                }
+            }
         }
     }
     for (i, lfo) in params.motion.iter().enumerate() {
@@ -680,10 +617,6 @@ mod tests {
         wrong_row.routing[1].push(0.5);
         assert!(validate(&wrong_row).is_err());
 
-        let mut negative = crossed();
-        negative.routing[0][1] = -1.0;
-        assert!(validate(&negative).is_err());
-
         let mut empty = crossed();
         empty.monitors.clear();
         assert!(validate(&empty).is_err());
@@ -697,30 +630,23 @@ mod tests {
         // that feeds itself never leaves: the knobs clamp with `clamp`,
         // which passes NaN through, and Reset restores the same initial.
         // Refusing at load is the only door.
+        //
+        // One of each kind of number a file carries — a knob on a camera, on
+        // a monitor and on a crosspoint, and a splitter weight, which is the
+        // one that is not a knob and so is the one case the rail walk in
+        // `params::a_knob_past_its_rail_is_refused_rather_than_snapped_later`
+        // does not reach. The out-of-range poisons that used to be listed
+        // here are that walk's, over every knob rather than the few that
+        // happened to be written down.
         let poison: &[fn(&mut Params)] = &[
             |p| p.cameras[0].gain[0] = f32::NAN,
-            |p| p.cameras[0].gain[1] = -1.0,
-            |p| p.cameras[0].framing.zoom = 0.0,
             |p| p.cameras[0].framing.rotation = f32::INFINITY,
-            |p| p.monitors[0].colour.gamma = f32::NAN,
-            |p| p.monitors[0].seed_brightness = -0.5,
-            |p| p.routing[0][1] = f32::INFINITY,
             |p| p.cameras[0].character.bloom = f32::NAN,
-            |p| p.cameras[0].character.bloom = 1.5,
-            |p| p.cameras[0].character.bloom_radius = -0.01,
-            |p| p.cameras[0].character.chroma_bleed = f32::INFINITY,
-            |p| p.cameras[0].character.noise = -1.0,
-            |p| p.monitors[0].headroom = 0.0,
-            |p| p.monitors[0].headroom = f32::NAN,
-            |p| p.monitors[0].colour.gamma = 0.0,
-            |p| p.monitors[0].colour.gamma = -1.0,
-            |p| p.cameras[0].key.threshold = f32::NAN,
-            |p| p.cameras[0].key.threshold = -0.1,
-            |p| p.cameras[0].key.threshold = 1.5,
-            |p| p.cameras[0].key.softness = -0.1,
             |p| p.cameras[0].key.hue = f32::INFINITY,
-            |p| p.cameras[0].key.tolerance = Key::TOLERANT + 0.1,
-            |p| p.cameras[0].key.tolerance = f32::NAN,
+            |p| p.monitors[0].colour.gamma = f32::NAN,
+            |p| p.monitors[0].headroom = f32::NAN,
+            |p| p.routing[0][1] = f32::INFINITY,
+            |p| p.cameras[0].look[0] = f32::NAN,
         ];
         for (i, poison) in poison.iter().enumerate() {
             let mut params = crossed();
@@ -1108,15 +1034,5 @@ mod tests {
             row.pop();
         });
         validate(&params).unwrap();
-    }
-
-    #[test]
-    fn a_crosspoint_past_its_rail_is_refused_rather_than_snapped_later() {
-        // The pre-existing class of bug this one is not joining: a file that
-        // loads at a value the knob would immediately clamp away.
-        let mut params = single();
-        params.routing[0][0] = 1.5;
-        let why = validate(&params).unwrap_err();
-        assert!(why.contains("crosspoint passes at most"), "{why}");
     }
 }
