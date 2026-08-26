@@ -276,6 +276,16 @@ impl Focus {
             Focus { camera: 0, ..self }
         }
     }
+
+    /// Back inside `params`, which may have fewer nodes than the graph this
+    /// focus was walked on — a recalled preset can bring fewer cameras.
+    /// `config::validate` is what guarantees there is a node to land on.
+    pub fn clamped(self, params: &Params) -> Focus {
+        Focus {
+            camera: self.camera.min(params.cameras.len().saturating_sub(1)),
+            monitor: self.monitor.min(params.monitors.len().saturating_sub(1)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -523,6 +533,19 @@ impl Params {
             out.nudge(lfo.knob, lfo.offset(seconds), lfo.focus);
         }
         Cow::Owned(out)
+    }
+
+    /// Whether `other` can take over an instrument already running `self`.
+    ///
+    /// What a recall cannot change is what would have to be rebuilt to serve
+    /// it: the bank the monitors live in, and the processes feeding the
+    /// inputs. Rebuilding either blanks every loop, and a recall that stops
+    /// the image is the one thing a performance cannot afford — so a slot may
+    /// bring different knobs, routing, automation and even a different number
+    /// of cameras, which only ever reach the GPU as taps, but a slot with a
+    /// different bank is a different instrument and is started, not recalled.
+    pub fn same_bank_as(&self, other: &Params) -> bool {
+        self.monitors.len() == other.monitors.len() && self.inputs == other.inputs
     }
 
     /// The automation on `knob` at `focus`, if any. The first: a config may
@@ -1074,6 +1097,46 @@ mod tests {
         // A knob nothing is driving is nothing to speed up.
         params.motion_rate(Knob::Hue, a, 3.0);
         assert!(params.motion_of(Knob::Hue, a).is_none());
+    }
+
+    #[test]
+    fn a_recall_may_change_everything_but_the_bank() {
+        let running = crate::config::external();
+        // The knobs, the routing, the automation and the camera count are
+        // all a recall's to change: none of them is a texture or a process.
+        let mut slot = running.clone();
+        slot.monitors[0].colour.hue = 1.0;
+        slot.cameras.pop();
+        slot.routing[0].pop();
+        slot.motion = vec![Lfo::new(Knob::Hue, Focus::default(), Shape::Ramp)];
+        assert!(running.same_bank_as(&slot));
+
+        // The bank is not: another monitor is another texture layer, and
+        // another input is another process nothing has started.
+        let mut more_monitors = running.clone();
+        more_monitors.monitors.push(Monitor::default());
+        assert!(!running.same_bank_as(&more_monitors));
+
+        let mut other_input = running.clone();
+        other_input.inputs = vec![crate::input::Input::Pattern(crate::input::Pattern::Grid)];
+        assert!(!running.same_bank_as(&other_input));
+        // Same count, different thing plugged in: the running ffmpeg is
+        // still the old one, so a count alone would let this through.
+        assert_eq!(other_input.inputs.len(), running.inputs.len());
+
+        let mut no_inputs = running.clone();
+        no_inputs.inputs.clear();
+        assert!(!running.same_bank_as(&no_inputs));
+    }
+
+    #[test]
+    fn a_focus_lands_inside_the_graph_it_is_pointed_at() {
+        let focus = Focus {
+            camera: 3,
+            monitor: 3,
+        };
+        assert_eq!(focus.clamped(&crate::config::insanity()), focus);
+        assert_eq!(focus.clamped(&Params::default()), Focus::default());
     }
 
     #[test]

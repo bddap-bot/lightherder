@@ -4,6 +4,7 @@
 use winit::keyboard::KeyCode;
 
 use crate::params::Knob;
+use crate::slots::SLOTS;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
@@ -20,10 +21,28 @@ pub enum Action {
     /// Move its depth, in presses.
     MotionDepth(f32),
     Reset,
+    /// Write the whole panel to a preset slot.
+    Store(usize),
+    /// Play a preset slot back.
+    Recall(usize),
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
     Quit,
 }
+
+/// The preset slots. Function keys because they are the only block of eight
+/// that is not already a knob, and because a slip onto one mid-performance
+/// should not be a knob moving.
+const SLOT_KEYS: [KeyCode; SLOTS] = [
+    KeyCode::F1,
+    KeyCode::F2,
+    KeyCode::F3,
+    KeyCode::F4,
+    KeyCode::F5,
+    KeyCode::F6,
+    KeyCode::F7,
+    KeyCode::F8,
+];
 
 /// A knob and the two keys that turn it. Physical key positions, so the
 /// labels assume a US layout.
@@ -148,7 +167,17 @@ const fn axis(
     }
 }
 
-pub fn action_for(key: KeyCode) -> Option<Action> {
+/// `shift` is read by the slot keys and nothing else: recall is one press
+/// and store is the press you have to mean, because storing over a slot
+/// during a performance cannot be undone and recalling can.
+pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
+    if let Some(slot) = SLOT_KEYS.iter().position(|bound| *bound == key) {
+        return Some(if shift {
+            Action::Store(slot)
+        } else {
+            Action::Recall(slot)
+        });
+    }
     for axis in AXES {
         if axis.down.0 == key {
             return Some(Action::Nudge(axis.knob, -axis.knob.increment()));
@@ -172,6 +201,10 @@ pub fn help() -> String {
     for (_, label, _, what) in COMMANDS {
         out.push_str(&format!("  {label:<12} {what}\n"));
     }
+    let keys = format!("f1 / f{SLOTS}");
+    out.push_str(&format!("  {keys:<12} recall preset slot 1 to {SLOTS}\n"));
+    let keys = format!("shift f1 / f{SLOTS}");
+    out.push_str(&format!("  {keys:<12} store preset slot 1 to {SLOTS}\n"));
     out
 }
 
@@ -184,6 +217,7 @@ mod tests {
         AXES.iter()
             .flat_map(|a| [a.down.0, a.up.0])
             .chain(COMMANDS.iter().map(|(key, _, _, _)| *key))
+            .chain(SLOT_KEYS)
             .collect()
     }
 
@@ -205,10 +239,10 @@ mod tests {
     #[test]
     fn the_two_keys_of_an_axis_push_it_opposite_ways() {
         for axis in AXES {
-            let Some(Action::Nudge(down_knob, down)) = action_for(axis.down.0) else {
+            let Some(Action::Nudge(down_knob, down)) = action_for(axis.down.0, false) else {
                 panic!("{:?} should nudge", axis.down)
             };
-            let Some(Action::Nudge(up_knob, up)) = action_for(axis.up.0) else {
+            let Some(Action::Nudge(up_knob, up)) = action_for(axis.up.0, false) else {
                 panic!("{:?} should nudge", axis.up)
             };
             assert_eq!(down_knob, axis.knob);
@@ -221,7 +255,7 @@ mod tests {
     fn a_key_press_reaches_the_value_it_names() {
         let mut p = Params::default();
         let before = p.cameras[0].framing.zoom;
-        let Some(Action::Nudge(knob, delta)) = action_for(KeyCode::Equal) else {
+        let Some(Action::Nudge(knob, delta)) = action_for(KeyCode::Equal, false) else {
             panic!("= should nudge a knob")
         };
         p.nudge(knob, delta, Focus::default());
@@ -231,30 +265,64 @@ mod tests {
 
     #[test]
     fn the_commands_do_what_they_say() {
-        assert_eq!(action_for(KeyCode::KeyN), Some(Action::NextCamera));
-        assert_eq!(action_for(KeyCode::KeyM), Some(Action::NextMonitor));
-        assert_eq!(action_for(KeyCode::Space), Some(Action::Clear));
-        assert_eq!(action_for(KeyCode::KeyR), Some(Action::Reset));
-        assert_eq!(action_for(KeyCode::Escape), Some(Action::Quit));
-        // A key no table claims.
-        assert_eq!(action_for(KeyCode::F1), None);
+        assert_eq!(action_for(KeyCode::KeyN, false), Some(Action::NextCamera));
+        assert_eq!(action_for(KeyCode::KeyM, false), Some(Action::NextMonitor));
+        assert_eq!(action_for(KeyCode::Space, false), Some(Action::Clear));
+        assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
+        assert_eq!(action_for(KeyCode::Escape, false), Some(Action::Quit));
+        // A key no table claims — F9, because the slots stop at F8.
+        assert_eq!(action_for(KeyCode::F9, false), None);
+    }
+
+    #[test]
+    fn the_slot_keys_recall_and_shift_stores() {
+        for (slot, key) in SLOT_KEYS.iter().enumerate() {
+            assert_eq!(action_for(*key, false), Some(Action::Recall(slot)));
+            assert_eq!(action_for(*key, true), Some(Action::Store(slot)));
+        }
+    }
+
+    #[test]
+    fn shift_is_the_slot_keys_business_and_nobody_else_s() {
+        // Held shift must not make a knob key mean something else: on a
+        // physical layout it is held for all sorts of reasons.
+        for key in every_key() {
+            if SLOT_KEYS.contains(&key) {
+                continue;
+            }
+            assert_eq!(action_for(key, true), action_for(key, false), "{key:?}");
+        }
     }
 
     #[test]
     fn the_automation_keys_are_a_switch_and_two_pairs() {
-        assert_eq!(action_for(KeyCode::KeyP), Some(Action::Motion));
+        assert_eq!(action_for(KeyCode::KeyP, false), Some(Action::Motion));
         // The pairs push opposite ways, same as an axis — they are not axes
         // only because there is no knob to hang them on until one is running.
-        assert_eq!(action_for(KeyCode::Digit7), Some(Action::MotionRate(-1.0)));
-        assert_eq!(action_for(KeyCode::Digit8), Some(Action::MotionRate(1.0)));
-        assert_eq!(action_for(KeyCode::Digit9), Some(Action::MotionDepth(-1.0)));
-        assert_eq!(action_for(KeyCode::Digit0), Some(Action::MotionDepth(1.0)));
+        assert_eq!(
+            action_for(KeyCode::Digit7, false),
+            Some(Action::MotionRate(-1.0))
+        );
+        assert_eq!(
+            action_for(KeyCode::Digit8, false),
+            Some(Action::MotionRate(1.0))
+        );
+        assert_eq!(
+            action_for(KeyCode::Digit9, false),
+            Some(Action::MotionDepth(-1.0))
+        );
+        assert_eq!(
+            action_for(KeyCode::Digit0, false),
+            Some(Action::MotionDepth(1.0))
+        );
     }
 
     #[test]
     fn the_help_names_every_binding() {
         let help = help();
-        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 1);
+        // The header, and the two lines the eight slot keys share.
+        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 3);
+        assert!(help.contains("recall preset slot") && help.contains("store preset slot"));
         for axis in AXES {
             assert!(help.contains(axis.down.1), "{} missing", axis.down.1);
             assert!(help.contains(axis.up.1), "{} missing", axis.up.1);

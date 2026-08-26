@@ -11,6 +11,7 @@ pub mod keys;
 pub mod motion;
 pub mod params;
 pub mod present;
+pub mod slots;
 
 /// Vulkan, Metal, DX12 and WebGPU. Deliberately not `Backends::all()`, which
 /// also brings up a GL context per instance purely to enumerate adapters.
