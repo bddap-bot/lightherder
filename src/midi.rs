@@ -97,16 +97,17 @@ impl Map {
     /// The factory CC layout of a Korg nanoKONTROL2, which is what this
     /// instrument is played from.
     ///
-    /// The eight faders are the focused monitor's front panel — the colour
-    /// stage, its seed and its rail — with the loop gain on the last, since
-    /// gain and brightness are played together. The eight rotaries above
-    /// them are the focused camera: where it is pointed and what its signal
-    /// path does to the light. So the left hand works one monitor and the
-    /// right hand one camera, and the two focus buttons move which.
+    /// The eight faders are the focused **monitor**: its front panel, and then
+    /// how much of the focused camera it is showing. The eight rotaries above
+    /// them are the focused **camera**: where it is pointed, how much light it
+    /// hands back, and what its signal path does on the way. So the left hand
+    /// works one monitor, the right hand one camera, and the top fader is the
+    /// switcher crosspoint that joins the two the hands are on.
     ///
-    /// The three per-channel gain trims are deliberately not here. There are
-    /// nineteen knobs and sixteen controls, and those three are a trim on the
-    /// rigid gain that is on a fader — set once, not swept.
+    /// Four knobs are deliberately not here, and all four are trims rather
+    /// than things a hand sweeps: the three per-channel gain offsets, which
+    /// colour a rigid gain that is itself on a rotary, and the bloom radius,
+    /// which sizes a halo whose amount is. They stay on the keys.
     pub fn nano_kontrol2() -> Map {
         Map {
             device: "nanoKONTROL".into(),
@@ -118,13 +119,13 @@ impl Map {
                 fader(4, Knob::Contrast),
                 fader(5, Knob::Gamma),
                 fader(6, Knob::Headroom),
-                fader(7, Knob::Gain),
+                fader(7, Knob::Route),
                 fader(16, Knob::Zoom),
                 fader(17, Knob::Rotation),
                 fader(18, Knob::TranslateX),
                 fader(19, Knob::TranslateY),
-                fader(20, Knob::Bloom),
-                fader(21, Knob::BloomRadius),
+                fader(20, Knob::Gain),
+                fader(21, Knob::Bloom),
                 fader(22, Knob::ChromaBleed),
                 fader(23, Knob::Noise),
             ],
@@ -725,7 +726,12 @@ mod tests {
             .collect();
         assert_eq!(
             missing,
-            ["loop gain, red", "loop gain, green", "loop gain, blue"]
+            [
+                "loop gain, red",
+                "loop gain, green",
+                "loop gain, blue",
+                "bloom radius"
+            ]
         );
         // And every slot is reachable, both ways round.
         for slot in 1..=crate::slots::SLOTS {

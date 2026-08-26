@@ -231,8 +231,8 @@ Out of the box, with no configuration:
 
 | control | is |
 |---|---|
-| faders 1–8 | the focused **monitor**: seed, hue, saturation, brightness, contrast, gamma, headroom, loop gain |
-| rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, bloom, bloom radius, chroma bleed, noise |
+| faders 1–8 | the focused **monitor**: seed, hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
+| rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
 | S 1–8 | recall preset slot 1–8 |
 | R 1–8 | store preset slot 1–8 |
 | M 1–4 | next camera, next monitor, blank the monitors, reset |
@@ -240,11 +240,14 @@ Out of the box, with no configuration:
 | ◀◀ ▶▶ | its rate, slower and faster |
 | ⏮ ⏭ | its swing, narrower and wider |
 
-So the left hand works one monitor and the right hand one camera, and M1 and
+So the left hand works one monitor, the right hand one camera, and the top
+fader is the switcher crosspoint joining the two the hands are on. M1 and
 M2 move which. Nothing is bound to quit: a slipped finger during a performance
-must not be able to stop the instrument. The three per-channel gain trims are
-the only knobs not on the surface — there are nineteen knobs and sixteen
-controls, and those three trim a rigid gain that is itself on a fader.
+must not be able to stop the instrument. Four of the twenty knobs are not on
+the surface, and all four are trims rather than things a hand sweeps: the
+three per-channel gain offsets, which colour a rigid gain that is itself on a
+rotary, and the bloom radius, which sizes a halo whose amount is. They stay on
+the keys.
 
 **A fader does not take its knob over until it has passed through where the
 knob already is.** A fader sends where it is standing, so without that,
@@ -353,6 +356,7 @@ layout.
 | `c` `v` | contrast |
 | `q` `w` | gamma |
 | `e` `t` | headroom, i.e. where the amplifier's rails are |
+| `/` `\` | the crosspoint: how much of the focused camera the focused monitor shows |
 | `p` | automation on the last knob turned: off / sine / ramp |
 | `7` `8` | its rate, slower / faster |
 | `9` `0` | its swing, narrower / wider |
@@ -367,7 +371,8 @@ layout.
 The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (seed, colour and headroom); `n` and `m` walk the two focuses
 through the graph, and the log line names them. Routing and splitter weights
-are config, not knobs, so nothing on the surface reaches them yet.
+are config; the crosspoint that joins the two focused nodes is not — `/` and
+`\` sweep it, and it is fader 8 on the surface.
 
 `p` acts on the last knob turned rather than on a switch of its own, because
 nineteen knobs would otherwise want nineteen switches and the knob just swept
