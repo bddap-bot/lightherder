@@ -46,6 +46,10 @@ pub struct App {
     /// The running external inputs, in `params.inputs` order, which is the
     /// order `Feedback::write_input` indexes them by.
     sources: Vec<Source>,
+    /// Where the preset slots are kept.
+    slots: std::path::PathBuf,
+    /// Whether shift is down, which only the slot keys read.
+    shift: bool,
     live: Option<Live>,
 }
 
@@ -63,6 +67,8 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
     for input in &params.inputs {
         log::info!("input: {input}");
     }
+    let slots = crate::slots::default_dir();
+    log::info!("preset slots: {}", slots.display());
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     Ok(event_loop.run_app(&mut App {
@@ -74,6 +80,8 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
         touched: Knob::Rotation,
         started: std::time::Instant::now(),
         sources,
+        slots,
+        shift: false,
         live: None,
     })?)
 }
@@ -221,6 +229,7 @@ impl ApplicationHandler for App {
         };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
             WindowEvent::Resized(size) => live.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
                 // The automation is read here and nowhere else: the knobs the
@@ -239,7 +248,7 @@ impl ApplicationHandler for App {
                     return;
                 };
                 // Repeats are wanted: holding a key sweeps its knob.
-                match action_for(code) {
+                match action_for(code, self.shift) {
                     Some(Action::Nudge(knob, delta)) => {
                         self.params.nudge(knob, delta, self.focus);
                         self.touched = knob;
@@ -265,6 +274,32 @@ impl ApplicationHandler for App {
                         self.focus.monitor = (self.focus.monitor + 1) % self.params.monitors.len();
                         log::info!("{}", self.describe());
                     }
+                    Some(Action::Store(slot)) => {
+                        match crate::slots::store(&self.slots, slot, &self.params) {
+                            Ok(path) => log::info!("slot {}: wrote {}", slot + 1, path.display()),
+                            Err(why) => log::error!("slot {}: {why}", slot + 1),
+                        }
+                    }
+                    Some(Action::Recall(slot)) => match crate::slots::recall(&self.slots, slot) {
+                        Err(why) => log::error!("slot {}: {why}", slot + 1),
+                        Ok(params) if !self.params.same_bank_as(&params) => log::error!(
+                            "slot {} is a different instrument: {} monitors and {} inputs, \
+                             against {} and {} running. Start it with that file instead.",
+                            slot + 1,
+                            params.monitors.len(),
+                            params.inputs.len(),
+                            self.params.monitors.len(),
+                            self.params.inputs.len(),
+                        ),
+                        Ok(params) => {
+                            // The loops keep running: the bank is untouched,
+                            // so what a recall changes is the knobs the next
+                            // pass reads, not the light already on the glass.
+                            self.focus = self.focus.clamped(&params);
+                            self.params = params;
+                            log::info!("slot {}: {}", slot + 1, self.describe());
+                        }
+                    },
                     Some(Action::Reset) => {
                         self.params = self.initial.clone();
                         log::info!("reset: {}", self.describe());
