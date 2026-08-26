@@ -281,12 +281,49 @@ impl Live {
 }
 
 impl App {
-    /// Take `params` as the live graph. The one way `self.params` is
-    /// replaced, because the focus was walked on the old one and a graph with
-    /// fewer cameras would leave it pointing at nothing — every read of it,
-    /// the readout included, indexes straight in. Two callers, one of which
-    /// used to forget.
-    fn adopt(&mut self, params: Params) {
+    /// Take `params` as the live graph, rebuilding whatever no longer serves
+    /// it: the inputs are reopened when they changed, and the bank and its
+    /// presenter are rebuilt when the layer counts moved — a slot stores the
+    /// whole panel, so a recall reconstructs the rig rather than refusing a
+    /// graph shaped differently from what is playing. A same-shape adopt
+    /// still touches neither, so the loops keep running: what it changes is
+    /// the knobs the next pass reads, not the light already on the glass.
+    ///
+    /// Fallible because a graph can ask for more bank than the cap allows,
+    /// or for an input that will not open — and everything fallible is done
+    /// before anything is torn down, so an error leaves the running rig
+    /// exactly as it was.
+    ///
+    /// The one way `self.params` is replaced, because the focus was walked
+    /// on the old one and a graph with fewer cameras would leave it pointing
+    /// at nothing — every read of it, the readout included, indexes straight
+    /// in. Two callers, one of which used to forget.
+    fn adopt(&mut self, params: Params) -> Result<(), String> {
+        crate::feedback::bank_fits(&params, self.resolution)?;
+        let sources = (params.inputs != self.params.inputs)
+            .then(|| {
+                params
+                    .inputs
+                    .iter()
+                    .map(|input| Source::open(input, self.resolution))
+                    .collect::<Result<Vec<Source>, String>>()
+            })
+            .transpose()?;
+        if let Some(sources) = sources {
+            self.sources = sources;
+        }
+        // The layer counts are baked into the bank's textures, so a graph
+        // that changed either gets a new bank — blanked, as any bank is at
+        // creation, which is what a rig with different monitors means anyway.
+        if let Some(live) = self.live.as_mut() {
+            if params.monitors.len() != self.params.monitors.len()
+                || params.inputs.len() != self.params.inputs.len()
+            {
+                let (width, height) = self.resolution;
+                live.feedback = Feedback::new(&self.gpu.device, width, height, &params);
+                live.present = Present::new(&self.gpu.device, &live.feedback, live.config.format);
+            }
+        }
         self.focus = self.focus.clamped(&params);
         self.params = params;
         // The whole panel just moved without a fader moving with it, so every
@@ -294,6 +331,21 @@ impl App {
         // afterwards throws its knob back to where the fader was standing,
         // which is the recall undone one knob at a time.
         self.midi.release();
+        Ok(())
+    }
+
+    /// Rebuild the rig from a slot. The only refusals are a slot that will
+    /// not read and a graph the instrument would refuse at startup; either
+    /// way the running rig plays on untouched.
+    fn recall(&mut self, slot: usize) {
+        let params = match crate::slots::recall(&self.slots, slot) {
+            Ok(params) => params,
+            Err(why) => return log::error!("slot {}: {why}", slot + 1),
+        };
+        match self.adopt(params) {
+            Ok(()) => log::info!("slot {}: {}", slot + 1, self.describe()),
+            Err(why) => log::error!("slot {}: {why}", slot + 1),
+        }
     }
 
     /// Point the knobs at another node. The one way `self.focus` moves, for
@@ -379,29 +431,11 @@ impl App {
                 Ok(path) => log::info!("slot {}: wrote {}", slot + 1, path.display()),
                 Err(why) => log::error!("slot {}: {why}", slot + 1),
             },
-            Action::Recall(slot) => match crate::slots::recall(&self.slots, slot) {
-                Err(why) => log::error!("slot {}: {why}", slot + 1),
-                Ok(params) if !self.params.same_bank_as(&params) => log::error!(
-                    "slot {} is a different instrument: {} monitors and {} inputs, \
-                     against {} and {} running. Start it with that file instead.",
-                    slot + 1,
-                    params.monitors.len(),
-                    params.inputs.len(),
-                    self.params.monitors.len(),
-                    self.params.inputs.len(),
-                ),
-                Ok(params) => {
-                    // The loops keep running: the bank is untouched, so what
-                    // a recall changes is the knobs the next pass reads, not
-                    // the light already on the glass.
-                    self.adopt(params);
-                    log::info!("slot {}: {}", slot + 1, self.describe());
-                }
+            Action::Recall(slot) => self.recall(slot),
+            Action::Reset => match self.adopt(self.initial.clone()) {
+                Ok(()) => log::info!("reset: {}", self.describe()),
+                Err(why) => log::error!("reset: {why}"),
             },
-            Action::Reset => {
-                self.adopt(self.initial.clone());
-                log::info!("reset: {}", self.describe());
-            }
             Action::Clear => {
                 if let Some(live) = self.live.as_mut() {
                     live.feedback.clear(&self.gpu.device, &self.gpu.queue);
@@ -501,5 +535,108 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config;
+
+    /// A directory of this test's own, like the slots tests keep.
+    fn scratch(what: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("lightherder-app-{}-{what}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// An instrument playing `params`, headless: no window has opened, so
+    /// `live` is `None` the way it is before `resumed` — which is also the
+    /// state the bank rebuild has to be right about. `None` when the machine
+    /// has no adapter, said on stderr the way tests/feedback_gpu.rs skips.
+    fn playing(params: Params, slots: std::path::PathBuf) -> Option<App> {
+        let gpu = match pollster::block_on(Gpu::open(None, "app test")) {
+            Ok(gpu) => gpu,
+            Err(why) => {
+                use std::io::Write;
+                writeln!(std::io::stderr(), "skipping an app test: {why}").unwrap();
+                return None;
+            }
+        };
+        let resolution = (64, 64);
+        let sources = params
+            .inputs
+            .iter()
+            .map(|input| Source::open(input, resolution))
+            .collect::<Result<Vec<Source>, String>>()
+            .unwrap();
+        Some(App {
+            gpu,
+            initial: params.clone(),
+            params,
+            focus: Focus::default(),
+            touched: Knob::Rotation,
+            started: Instant::now(),
+            sources,
+            slots: slots.clone(),
+            // No file in a scratch directory, so this is the factory map.
+            midi: Midi::new(Map::load(&slots).unwrap()).unwrap(),
+            shift: false,
+            resolution,
+            fullscreen: false,
+            frames: 0,
+            metered: Instant::now(),
+            live: None,
+        })
+    }
+
+    #[test]
+    fn a_recall_rebuilds_the_rig_across_graph_shapes() {
+        // The couch flow of issue #10: the Play button launches the default
+        // rig, and a slot holds the webcam rig — one more input, one more
+        // camera. `external` is that rig with the capture device swapped
+        // for the bars, so the test runs on machines with no webcam.
+        let dir = scratch("cross-shape");
+        let stored = config::external();
+        crate::slots::store(&dir, 0, &stored).unwrap();
+        crate::slots::store(&dir, 1, &config::single()).unwrap();
+        let Some(mut app) = playing(config::single(), dir.clone()) else {
+            return;
+        };
+        assert!(app.sources.is_empty());
+
+        app.recall(0);
+        assert_eq!(app.params, stored);
+        assert_eq!(app.sources.len(), stored.inputs.len());
+
+        // And back down: the focus walked onto the second camera, which the
+        // recalled graph does not have, so the recall has to land it inside.
+        app.focus = Focus {
+            camera: 1,
+            monitor: 0,
+        };
+        app.recall(1);
+        assert_eq!(app.params, config::single());
+        assert!(app.sources.is_empty());
+        assert_eq!(app.focus, Focus::default());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_slot_that_will_not_read_leaves_the_rig_playing() {
+        let dir = scratch("unreadable");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(crate::slots::path(&dir, 0), "not toml [").unwrap();
+        let Some(mut app) = playing(config::external(), dir.clone()) else {
+            return;
+        };
+        let before = app.params.clone();
+        app.recall(0); // corrupt
+        app.recall(1); // empty
+        assert_eq!(app.params, before);
+        assert_eq!(app.sources.len(), before.inputs.len());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
