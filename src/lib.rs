@@ -4,6 +4,8 @@
 
 pub mod affine;
 pub mod app;
+pub mod bench;
+pub mod cli;
 pub mod config;
 pub mod feedback;
 pub mod input;
@@ -13,6 +15,15 @@ pub mod motion;
 pub mod params;
 pub mod present;
 pub mod slots;
+
+/// The controls as they actually are: the keys, and the control surface under
+/// whatever map is in force. Printed by `--cheatsheet` and on the way up,
+/// from the tables that drive the instrument rather than from a copy kept
+/// beside them.
+pub fn cheatsheet() -> Result<String, String> {
+    let map = midi::Map::load(&slots::default_dir())?;
+    Ok(format!("{}{}", keys::help(), map.card()))
+}
 
 /// Vulkan, Metal, DX12 and WebGPU. Deliberately not `Backends::all()`, which
 /// also brings up a GL context per instance purely to enumerate adapters.

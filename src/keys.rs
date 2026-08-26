@@ -32,6 +32,8 @@ pub enum Action {
     Recall(usize),
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
+    /// Cover the display, or stop covering it.
+    Fullscreen,
     Quit,
 }
 
@@ -160,6 +162,12 @@ const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
         "blank every monitor",
     ),
     (KeyCode::KeyR, "r", Action::Reset, "reset every knob"),
+    (
+        KeyCode::F11,
+        "f11",
+        Action::Fullscreen,
+        "cover the display, or stop",
+    ),
     (KeyCode::Escape, "esc", Action::Quit, "quit"),
 ];
 
@@ -233,14 +241,45 @@ pub fn action_for_label(label: &str) -> Option<Action> {
     action_for(key, shift)
 }
 
+/// What the key spelled `label` does, in the words the help uses. The
+/// surface prints this against the control a button sits on, so a button and
+/// the key it presses cannot be described two different ways.
+pub fn describes(label: &str) -> Option<String> {
+    let (shift, bare) = match label.strip_prefix("shift ") {
+        Some(rest) => (true, rest),
+        None => (false, label),
+    };
+    if let Some(slot) = SLOT_KEYS.iter().position(|(_, bound)| *bound == bare) {
+        let what = if shift { "store" } else { "recall" };
+        return Some(format!("{what} preset slot {}", slot + 1));
+    }
+    for axis in AXES {
+        if axis.down.1 == bare {
+            return Some(format!("{} down", axis.knob.name()));
+        }
+        if axis.up.1 == bare {
+            return Some(format!("{} up", axis.knob.name()));
+        }
+    }
+    COMMANDS
+        .iter()
+        .find(|(_, bound, _, _)| *bound == bare)
+        .map(|(_, _, _, what)| (*what).to_string())
+}
+
 pub fn help() -> String {
     let mut out = String::from("keys (US layout positions)\n");
+    let says = |label: &str| describes(label).unwrap_or_default();
     for axis in AXES {
         let keys = format!("{} / {}", axis.down.1, axis.up.1);
-        out.push_str(&format!("  {keys:<12} {} down / up\n", axis.knob.name()));
+        out.push_str(&format!(
+            "  {keys:<12} {} / {}\n",
+            says(axis.down.1),
+            says(axis.up.1)
+        ));
     }
-    for (_, label, _, what) in COMMANDS {
-        out.push_str(&format!("  {label:<12} {what}\n"));
+    for (_, label, _, _) in COMMANDS {
+        out.push_str(&format!("  {label:<12} {}\n", says(label)));
     }
     // Off the table's own labels, like the two above it: a slot rebound to a
     // different key must not leave the help naming the old one.
