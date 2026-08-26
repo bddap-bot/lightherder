@@ -72,9 +72,22 @@ pub fn analog() -> Params {
 /// real instrument, and the demonstration that automation needs no separate
 /// kinetics beside it. The spiral it draws winds one way, unwinds through
 /// square-on, and winds the other, over and over.
+///
+/// The base rotation is [`single`]'s rather than zero, so switching the motor
+/// off with `p` leaves exactly `single` running. At zero it would leave a
+/// camera pointed square on, and a loop whose trail never winds away from the
+/// seed piles up on it until the monitor clips — the same reason [`crossed`]
+/// and [`insanity`] spin all their cameras the same way. Sweeping *through*
+/// square-on is fine; stopping there is not.
+///
+/// It sweeps slowly enough that even passing through costs something — the
+/// trail piles up faster than it winds away, and on hardware that flare
+/// reached flat white. So the amplifier's rail sits below white, the way
+/// [`analog`]'s does: the flare compresses into a bloom instead of clipping,
+/// which is the rail doing the job stage four built it for.
 pub fn kinetic() -> Params {
     let mut params = single();
-    params.cameras[0].framing.rotation = 0.0;
+    params.monitors[0].headroom = 0.9;
     params.motion = vec![Lfo {
         depth: std::f32::consts::PI,
         rate: 0.05,
@@ -553,12 +566,23 @@ mod tests {
             let clean = params
                 .cameras
                 .iter()
-                .all(|c| c.character == Character::CLEAN)
-                && params
-                    .monitors
-                    .iter()
-                    .all(|m| m.headroom == Monitor::KNEE_AT_WHITE);
+                .all(|c| c.character == Character::CLEAN);
             assert_eq!(clean, name != "analog", "{name}");
+            // The amplifier's rail is the other half of that stage, and
+            // `kinetic` runs it below white too — on purpose, and for a
+            // different reason: it sweeps through square-on, where the trail
+            // piles up on the seed instead of winding away from it, and the
+            // rail is what bounds that pile-up. Verified on hardware by
+            // `the_turning_camera_keeps_an_image_all_the_way_round`.
+            let open_rail = params
+                .monitors
+                .iter()
+                .all(|m| m.headroom == Monitor::KNEE_AT_WHITE);
+            assert_eq!(
+                open_rail,
+                !["analog", "kinetic"].contains(&name),
+                "{name}'s rail"
+            );
         }
         // And the one that does have it turns on all four of the things this
         // stage is named for.

@@ -272,6 +272,19 @@ impl Image {
         self.brightest_in(0.0, 0.0, 1.0, 1.0)
     }
 
+    /// Mean absolute difference from another frame, in levels. The oracle
+    /// for whether the picture is still moving — the total is not, since a
+    /// rotation moves light around without making or losing any.
+    fn differs_from(&self, other: &Image) -> f64 {
+        let sum: f64 = self
+            .pixels
+            .iter()
+            .zip(&other.pixels)
+            .map(|(a, b)| (f64::from(*a) - f64::from(*b)).abs())
+            .sum();
+        sum / self.pixels.len() as f64
+    }
+
     /// The brightest one channel gets inside a uv rectangle. Separate from
     /// [`Image::brightest_in`] because that averages the three, which cannot
     /// tell a settled picture from one that has lost a channel outright.
@@ -1296,23 +1309,25 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
 fn the_shipped_presets_settle_without_clipping() {
     // Same bar the single default is held to, per monitor: left running,
     // every monitor of every preset keeps an image — not flat white, not
-    // black.
-    for (name, p) in [
-        ("analog", lightherder::config::analog()),
-        ("crossed", lightherder::config::crossed()),
-        ("insanity", lightherder::config::insanity()),
-        ("external", lightherder::config::external()),
-    ] {
+    // black. Off `PRESETS` rather than listed here, so a preset shipped
+    // without a line in this test cannot slip past it.
+    //
+    // Run through `modulated` on a sixty-a-second clock, because a preset
+    // that moves has to hold up while it is moving; for the presets that do
+    // not, `modulated` hands the same graph straight back.
+    for (name, build) in lightherder::config::PRESETS {
+        let p = build();
         let n = p.monitors.len();
         let (cols, rows) = lightherder::present::grid(n);
         let Some(mut h) = graph_harness((SIZE, SIZE), (cols * SIZE, rows * SIZE), &p) else {
             return;
         };
         feed_inputs(&h, &p);
-        for _ in 0..399 {
-            h.feedback.step(h.device, h.queue, &p);
+        for i in 0..399 {
+            h.feedback
+                .step(h.device, h.queue, &p.modulated(f64::from(i) / 60.0));
         }
-        h.step_graph(&p);
+        h.step_graph(&p.modulated(399.0 / 60.0));
         let img = h.read();
         for m in 0..n {
             let (u0, v0) = tile(n, m, 0.0, 0.0);
@@ -1333,6 +1348,49 @@ fn the_shipped_presets_settle_without_clipping() {
             }
         }
     }
+}
+
+#[test]
+fn the_turning_camera_keeps_an_image_all_the_way_round() {
+    // The stage's headline claim, on hardware. `kinetic` sweeps its rotation
+    // right round, so the structure has to survive every angle it passes
+    // through — including the half turn, where a point comes back beside
+    // where it started every second pass instead of winding away from it.
+    //
+    // And it has to keep moving. A loop whose camera is not turning settles
+    // and then hands back the same frame every time, so a picture that is
+    // still changing a revolution in is what says the automation reached the
+    // shader at all rather than the instrument quietly running `single`.
+    // Frame against frame, not total against total: a rotation moves light
+    // around without making or losing any, so the totals barely move.
+    let p = lightherder::config::kinetic();
+    const FPS: f64 = 60.0;
+    let frames = (FPS / f64::from(p.motion[0].rate)) as usize;
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    let mut samples: Vec<Image> = Vec::new();
+    // Two revolutions: the first fills the loop from black, the second is
+    // the one that is measured.
+    for i in 0..frames * 2 {
+        let at = p.modulated(i as f64 / FPS);
+        h.step_graph(&at);
+        if i >= frames && i.is_multiple_of(30) {
+            let img = h.read();
+            let (peak, angle) = (img.brightest(), at.cameras[0].framing.rotation);
+            assert!(peak < 250.0, "clipped at {angle:.2} rad: {peak}");
+            assert!(peak > 30.0, "went dark at {angle:.2} rad: {peak}");
+            samples.push(img);
+        }
+    }
+    let moved = samples
+        .iter()
+        .map(|img| img.differs_from(&samples[0]))
+        .fold(0.0, f64::max);
+    assert!(
+        moved > 5.0,
+        "the picture barely moved over a whole revolution: {moved} levels"
+    );
 }
 
 #[test]
