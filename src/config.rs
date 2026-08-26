@@ -733,24 +733,29 @@ mod tests {
 
     #[test]
     fn automation_spells_itself_the_way_it_is_documented() {
-        // The literal keys and the literal knob name, not a round trip: a
-        // round trip agrees with itself whatever serde is told to call these,
-        // and the README writes them out.
+        // The README's own example, literally — knob names with a space in
+        // them included. Not a round trip: a round trip agrees with itself
+        // whatever serde is told to call these, while every line of the
+        // README depends on the names.
         let params: Params = toml::from_str(
-            "cameras = [{ look = [1.0] }]\n\
+            "cameras = [{ look = [1.0] }, { look = [1.0] }]\n\
              monitors = [{}]\n\
-             routing = [[1.0]]\n\
+             routing = [[1.0, 0.0]]\n\
              motion = [\n\
              \x20 { knob = \"rotation\", shape = \"ramp\", rate = 0.05, depth = 3.14159 },\n\
-             \x20 { knob = \"hue\", rate = 0.2, depth = 0.4, phase = 0.25 },\n\
+             \x20 { knob = \"hue\", shape = \"sine\", rate = 0.2, depth = 0.4, phase = 0.25 },\n\
+             \x20 { knob = \"pan x\", rate = 0.1, depth = 0.3, focus = { camera = 1 } },\n\
              ]\n",
         )
         .unwrap();
         validate(&params).unwrap();
         assert_eq!(params.motion[0].knob, Knob::Rotation);
         assert_eq!(params.motion[0].shape, Shape::Ramp);
-        // The two omitted keys fall to their documented defaults.
-        assert_eq!(params.motion[1].shape, Shape::Sine);
+        assert_eq!(params.motion[2].knob, Knob::TranslateX);
+        assert_eq!(params.motion[2].focus.camera, 1);
+        // The keys the third line omits fall to their documented defaults.
+        assert_eq!(params.motion[2].shape, Shape::Sine);
+        assert_eq!(params.motion[2].phase, 0.0);
         assert_eq!(params.motion[1].focus, Focus::default());
     }
 
