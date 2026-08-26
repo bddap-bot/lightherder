@@ -8,6 +8,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
+use crate::cli::Cli;
 use crate::feedback::Feedback;
 use crate::input::Source;
 use crate::keys::{action_for, Action};
@@ -15,10 +16,12 @@ use crate::midi::{Map, Midi};
 use crate::params::{Focus, Knob, Params};
 use crate::present::Present;
 
-/// Every monitor is a fixed size, independent of the window. Resizing the
-/// window then rescales the view instead of scrambling the loops' state, and
-/// the framing numbers keep meaning the same thing.
-pub const MONITOR_SIZE: (u32, u32) = (1920, 1080);
+/// Borderless rather than exclusive: the instrument renders at its own
+/// resolution and lets the compositor scale, so taking a video mode from the
+/// display would buy nothing and cost a mode switch on every toggle.
+fn borderless(fullscreen: bool) -> Option<winit::window::Fullscreen> {
+    fullscreen.then_some(winit::window::Fullscreen::Borderless(None))
+}
 
 struct Live {
     window: Arc<Window>,
@@ -57,19 +60,32 @@ pub struct App {
     midi: Midi,
     /// Whether shift is down, which only the slot keys read.
     shift: bool,
+    /// How big every monitor is — see [`crate::cli::DEFAULT_RESOLUTION`], and
+    /// note that the window has nothing to do with it.
+    resolution: (u32, u32),
+    /// Whether the window covers the display. Kept here rather than asked of
+    /// the window, because it is also what the window is *created* with.
+    fullscreen: bool,
+    /// Frames since the last rate line, and when that was. The loop is paced
+    /// by the vertical blank, so this reads the refresh rate until a frame
+    /// stops fitting inside one — which is the whole reason to print it.
+    frames: u32,
+    metered: std::time::Instant,
     live: Option<Live>,
 }
 
-/// `params` is the loaded graph, already validated by `config::load`.
+/// `params` is the loaded graph, already validated by `config::load`; `cli`
+/// says how big its monitors are and whether the window covers the display.
 ///
 /// The inputs are opened before the window is, so a file that is not there or
 /// a device that will not open says so on the terminal instead of behind a
 /// black layer of a running instrument.
-pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    crate::feedback::bank_fits(&params, cli.resolution)?;
     let sources = params
         .inputs
         .iter()
-        .map(|input| Source::open(input, MONITOR_SIZE))
+        .map(|input| Source::open(input, cli.resolution))
         .collect::<Result<Vec<Source>, String>>()?;
     for input in &params.inputs {
         log::info!("input: {input}");
@@ -95,17 +111,31 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
         slots,
         midi,
         shift: false,
+        resolution: cli.resolution,
+        fullscreen: cli.fullscreen,
+        frames: 0,
+        metered: std::time::Instant::now(),
         live: None,
     })?)
 }
 
 impl Live {
-    async fn new(event_loop: &ActiveEventLoop, params: &Params) -> Live {
+    async fn new(
+        event_loop: &ActiveEventLoop,
+        params: &Params,
+        resolution: (u32, u32),
+        fullscreen: bool,
+    ) -> Live {
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes().with_title("lightherder"))
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("lightherder")
+                        .with_fullscreen(borderless(fullscreen)),
+                )
                 .expect("create window"),
         );
+        window.set_cursor_visible(!fullscreen);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: crate::BACKENDS,
@@ -142,7 +172,7 @@ impl Live {
 
         // wgpu zero-initialises textures, so the monitors start black without
         // an explicit clear.
-        let feedback = Feedback::new(&device, MONITOR_SIZE.0, MONITOR_SIZE.1, params);
+        let feedback = Feedback::new(&device, resolution.0, resolution.1, params);
         let present = Present::new(&device, &feedback, format);
 
         Live {
@@ -241,6 +271,22 @@ impl App {
         )
     }
 
+    /// One line a second on how the frame is going. The instrument is
+    /// deployed fullscreen on a display, so the log is the only place a
+    /// number can be read at all — and a rate that has left sixty is the
+    /// first thing to know when a graph is too much for the machine.
+    fn meter(&mut self) {
+        self.frames += 1;
+        let elapsed = self.metered.elapsed();
+        if elapsed < std::time::Duration::from_secs(1) {
+            return;
+        }
+        let fps = self.frames as f64 / elapsed.as_secs_f64();
+        log::info!("{fps:.0} fps ({:.1} ms/frame)", 1e3 / fps);
+        self.frames = 0;
+        self.metered = std::time::Instant::now();
+    }
+
     /// One action, from wherever it came. The keyboard and the control
     /// surface both land here and nowhere else, so a binding cannot mean one
     /// thing under a finger and another under a fader.
@@ -318,6 +364,13 @@ impl App {
                     log::info!("cleared");
                 }
             }
+            Action::Fullscreen => {
+                self.fullscreen = !self.fullscreen;
+                if let Some(live) = self.live.as_ref() {
+                    live.window.set_fullscreen(borderless(self.fullscreen));
+                    live.window.set_cursor_visible(!self.fullscreen);
+                }
+            }
             Action::Quit => event_loop.exit(),
         }
     }
@@ -329,12 +382,17 @@ impl ApplicationHandler for App {
             return;
         }
         // The one place this program blocks.
-        let live = pollster::block_on(Live::new(event_loop, &self.params));
+        let live = pollster::block_on(Live::new(
+            event_loop,
+            &self.params,
+            self.resolution,
+            self.fullscreen,
+        ));
         log::info!(
             "{} monitors of {}x{}, {} cameras, {} inputs",
             self.params.monitors.len(),
-            MONITOR_SIZE.0,
-            MONITOR_SIZE.1,
+            self.resolution.0,
+            self.resolution.1,
             self.params.cameras.len(),
             self.params.inputs.len(),
         );
@@ -377,6 +435,7 @@ impl ApplicationHandler for App {
                 let now = self.started.elapsed().as_secs_f64();
                 live.render(&self.params.modulated(now), &mut self.sources);
                 live.window.request_redraw();
+                self.meter();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {

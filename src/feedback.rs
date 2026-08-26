@@ -38,6 +38,36 @@ const SEED_CENTRE: [f32; 2] = [0.25, 0.0];
 /// through a four-way splitter on top. `config::validate` holds the line.
 pub const MAX_TAPS: usize = 32;
 
+/// The most GPU memory a bank may ask for, both copies together. A cap in
+/// bytes rather than in pixels because it is the layers that do the
+/// multiplying: eight monitors and four inputs at 3840x2160 is 3.2 GiB of
+/// half-float, and a card asked for more than it has fails inside the driver
+/// rather than at the command line.
+pub const MAX_BANK_BYTES: u64 = 2 << 30;
+
+/// What the two banks cost `params` at monitors of `size`.
+pub fn bank_bytes(params: &Params, size: (u32, u32)) -> u64 {
+    2 * params.sources() as u64 * size.0 as u64 * size.1 as u64 * MONITOR_TEXEL as u64
+}
+
+/// Whether that fits in [`MAX_BANK_BYTES`], with the figure in the refusal:
+/// a resolution is chosen at the command line and the layer count comes from
+/// the graph, so neither one alone is what went wrong.
+pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
+    let bytes = bank_bytes(params, size);
+    if bytes > MAX_BANK_BYTES {
+        return Err(format!(
+            "{} sources at {}x{} is {:.1} GiB of bank, past the {:.1} GiB cap",
+            params.sources(),
+            size.0,
+            size.1,
+            bytes as f64 / (1u64 << 30) as f64,
+            MAX_BANK_BYTES as f64 / (1u64 << 30) as f64,
+        ));
+    }
+    Ok(())
+}
+
 /// The edges of monitor `m`'s pass: (camera, source monitor, routing weight
 /// times splitter weight). The one definition of which edges become taps —
 /// `config::validate` counts these against [`MAX_TAPS`] and [`Feedback::step`]

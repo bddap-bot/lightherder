@@ -135,6 +135,29 @@ impl Map {
         }
     }
 
+    /// The surface as it is actually mapped, one control a line, for the
+    /// card a performer keeps beside the instrument. Generated from the map
+    /// in force rather than written out beside it, so a `midi.toml` that
+    /// moves a knob moves it on the card too.
+    pub fn card(&self) -> String {
+        let mut out = format!(
+            "surface: the first card named {:?}, on any MIDI channel\n",
+            self.device
+        );
+        for f in &self.fader {
+            let control = silkscreen(f.cc);
+            out.push_str(&format!("  {control:<12} {}\n", f.knob.name()));
+        }
+        for b in &self.button {
+            let control = silkscreen(b.cc);
+            // The key is named as well as what it does: a button *is* that
+            // key, so a performer who has learnt one has learnt the other.
+            let what = crate::keys::describes(&b.key).unwrap_or_default();
+            out.push_str(&format!("  {control:<12} {what} ({})\n", b.key));
+        }
+        out
+    }
+
     /// Where the map is kept: beside the preset slots, because both are the
     /// performer's own configuration of one instrument.
     fn path(dir: &Path) -> PathBuf {
@@ -205,6 +228,41 @@ impl Map {
         }
         Ok(())
     }
+}
+
+/// What is printed beside control `cc` on a nanoKONTROL2, which is the
+/// surface this instrument is played from. Off the factory CC layout, the
+/// same one [`Map::nano_kontrol2`] is written against — so a map that moves a
+/// knob to another control still names the control a hand reaches for. A
+/// number no silkscreen claims prints as itself, since a different surface
+/// entirely is a legitimate thing to map.
+pub fn silkscreen(cc: u8) -> String {
+    let numbered = |first: u8, name: &str| {
+        (cc >= first && cc < first + 8).then(|| format!("{name}{}", cc - first + 1))
+    };
+    numbered(0, "fader ")
+        .or_else(|| numbered(16, "rotary "))
+        .or_else(|| numbered(32, "S"))
+        .or_else(|| numbered(48, "M"))
+        .or_else(|| numbered(64, "R"))
+        .or_else(|| {
+            let transport = match cc {
+                41 => "play",
+                42 => "stop",
+                43 => "rewind",
+                44 => "forward",
+                45 => "record",
+                46 => "cycle",
+                58 => "track prev",
+                59 => "track next",
+                60 => "marker set",
+                61 => "marker prev",
+                62 => "marker next",
+                _ => return None,
+            };
+            Some(transport.into())
+        })
+        .unwrap_or_else(|| format!("cc {cc}"))
 }
 
 fn button(cc: u8, key: impl Into<String>) -> Button {
