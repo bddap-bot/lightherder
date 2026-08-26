@@ -18,9 +18,10 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use web_time::Instant;
 
 use crate::keys::{action_for_label, labels, Action};
 use crate::params::{Focus, Knob, Limit, Params};
@@ -172,7 +173,16 @@ impl Map {
         let path = Map::path(dir);
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Map::nano_kontrol2()),
+            // No file, or nowhere a file could be — a browser has no
+            // filesystem at all, and "there is no map" is the same answer.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::Unsupported
+                ) =>
+            {
+                return Ok(Map::nano_kontrol2())
+            }
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         let map: Map = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;

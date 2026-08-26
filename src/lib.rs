@@ -8,6 +8,7 @@ pub mod bench;
 pub mod cli;
 pub mod config;
 pub mod feedback;
+pub mod gpu;
 pub mod input;
 pub mod keys;
 pub mod midi;
@@ -15,6 +16,8 @@ pub mod motion;
 pub mod params;
 pub mod present;
 pub mod slots;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 
 /// The controls as they actually are: the keys, and the control surface under
 /// whatever map is in force. Printed by `--cheatsheet` and on the way up,

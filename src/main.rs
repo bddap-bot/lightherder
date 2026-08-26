@@ -30,9 +30,12 @@ fn play() -> Result<(), Box<dyn std::error::Error>> {
     }
     let params = lightherder::config::load(&cli.graph)?;
     match cli.mode {
-        Mode::Bench => Ok(lightherder::bench::run(&params, cli.resolution)?),
+        Mode::Bench => Ok(pollster::block_on(lightherder::bench::run(
+            &params,
+            cli.resolution,
+        ))?),
         // The instrument prints its own controls once it has the map it will
         // play, so there is one read of that file rather than two.
-        _ => lightherder::app::run(params, &cli),
+        _ => pollster::block_on(lightherder::app::run(params, &cli)),
     }
 }
