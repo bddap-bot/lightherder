@@ -233,6 +233,7 @@ impl Live {
         if width == 0 || height == 0 {
             return;
         }
+        log::info!("window {width}x{height}");
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&gpu.device, &self.config);

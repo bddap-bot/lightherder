@@ -14,17 +14,35 @@ use wasm_bindgen::prelude::wasm_bindgen;
 /// the canvas is the whole window and there is nothing to lay out here.
 const CANVAS_ID: &str = "lightherder";
 
-/// The canvas winit is handed. Panics if the page has none: the page and this
-/// module ship together, so a missing canvas is a broken build rather than
-/// anything a visitor can do.
+/// The canvas winit is handed, sized to the viewport it has been stretched
+/// over. Panics if the page has none: the page and this module ship together,
+/// so a missing canvas is a broken build rather than anything a visitor can
+/// do.
+///
+/// The stylesheet sets how big the canvas *looks*; how many pixels it holds
+/// is a separate number, and one nothing sets by itself — a canvas nobody
+/// sizes holds 300x150, and winit hands wgpu whatever it finds. So it is set
+/// here, from the size the layout gave the element, before winit ever reads
+/// it.
 pub(crate) fn canvas() -> web_sys::HtmlCanvasElement {
     use wasm_bindgen::JsCast;
-    web_sys::window()
+    let canvas: web_sys::HtmlCanvasElement = web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.get_element_by_id(CANVAS_ID))
         .expect("the page has no #lightherder canvas")
         .dyn_into()
-        .expect("#lightherder is not a canvas")
+        .expect("#lightherder is not a canvas");
+    fit(&canvas);
+    canvas
+}
+
+/// One CSS pixel is not one device pixel on a phone or a scaled display, and
+/// the instrument wants the device's.
+fn fit(canvas: &web_sys::HtmlCanvasElement) {
+    let ratio = web_sys::window().map_or(1.0, |w| w.device_pixel_ratio());
+    let pixels = |css: i32| ((css as f64 * ratio).round() as u32).max(1);
+    canvas.set_width(pixels(canvas.client_width()));
+    canvas.set_height(pixels(canvas.client_height()));
 }
 
 /// `?preset=…` if the page was asked for one, which `config::load` then
