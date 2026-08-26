@@ -109,7 +109,7 @@ const AXES: &[Axis] = &[
 
 const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
     // The automation, on the last knob turned rather than on a knob of its
-    // own: nineteen knobs would otherwise need nineteen switches, and the
+    // own: twenty knobs would otherwise need twenty switches, and the
     // knob a performer just swept is the one they want to set moving.
     (
         KeyCode::KeyP,
@@ -405,8 +405,47 @@ mod tests {
             Some(Action::Nudge(Knob::Zoom, Knob::Zoom.increment()))
         );
         assert_eq!(action_for_label("wiggle"), None);
-        // "shift" in front of a key that does not read it is that key, the
-        // same as it is on the keyboard.
+
+        // "shift" in front of a key that does not read it is that key; the
+        // MIDI map refuses such a binding rather than letting it look like
+        // it means something.
         assert_eq!(action_for_label("shift p"), Some(Action::Motion));
+    }
+
+    #[test]
+    fn the_printed_help_and_the_label_list_are_the_same_list() {
+        // `labels()` is the vocabulary a MIDI map may use and `help()` is
+        // what the instrument prints; a label on one and not the other is a
+        // binding a performer cannot discover or one the help lies about.
+        let labels: Vec<&str> = labels().collect();
+        assert_eq!(labels.len(), AXES.len() * 2 + COMMANDS.len() + SLOTS);
+        let help = help();
+        // The slots print as one range line, "f1 / f8", so the six in the
+        // middle are named by the ends rather than each in turn.
+        let named: Vec<&str> = labels[..labels.len() - SLOTS]
+            .iter()
+            .copied()
+            .chain([SLOT_KEYS[0].1, SLOT_KEYS[SLOTS - 1].1])
+            .collect();
+        for label in named {
+            assert!(help.contains(label), "{label} is not in the help");
+        }
+        // Every label reaches the action its key does, all forty-odd of them
+        // rather than the handful spelled out above.
+        for axis in AXES {
+            for (key, label) in [axis.down, axis.up] {
+                assert_eq!(action_for_label(label), action_for(key, false));
+            }
+        }
+        for (key, label, _, _) in COMMANDS {
+            assert_eq!(action_for_label(label), action_for(*key, false));
+        }
+        for (key, label) in SLOT_KEYS {
+            assert_eq!(action_for_label(label), action_for(key, false));
+            assert_eq!(
+                action_for_label(&format!("shift {label}")),
+                action_for(key, true)
+            );
+        }
     }
 }

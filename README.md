@@ -375,7 +375,7 @@ are config; the crosspoint that joins the two focused nodes is not — `/` and
 `\` sweep it, and it is fader 8 on the surface.
 
 `p` acts on the last knob turned rather than on a switch of its own, because
-nineteen knobs would otherwise want nineteen switches and the knob just swept
+twenty knobs would otherwise want twenty switches and the knob just swept
 is the one you mean; the log line names which. Shift is read by the slot keys
 and nothing else — recall is one press, store is the press you have to mean,
 since storing over a slot cannot be undone and recalling can.

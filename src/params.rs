@@ -318,6 +318,20 @@ pub enum Knob {
     Route,
 }
 
+impl Limit {
+    /// The two values a knob runs between. A phase runs -PI to PI, which is
+    /// one full turn and the only place that says so — [`wrap_pi`] brings a
+    /// value back into it and the control surface spans a fader across it,
+    /// and a second spelling of half a turn is a number the two could differ
+    /// on.
+    pub const fn ends(self) -> (f32, f32) {
+        match self {
+            Limit::Clamp(low, high) => (low, high),
+            Limit::Wrap => (-std::f32::consts::PI, std::f32::consts::PI),
+        }
+    }
+}
+
 /// Which node a knob's value belongs to, and so which half of a [`Focus`] it
 /// reads. Every knob but the switcher's crosspoint lives on one node; that
 /// one is an edge between a camera and a monitor, and reads both.
@@ -768,9 +782,7 @@ impl Params {
 }
 
 fn rigid_gain_step(gain: &[f32; 3], delta: f32) -> f32 {
-    let Limit::Clamp(low, high) = Knob::Gain.limit() else {
-        unreachable!("gain clamps")
-    };
+    let (low, high) = Knob::Gain.limit().ends();
     let travel = gain
         .iter()
         .map(|c| if delta >= 0.0 { high - c } else { c - low })
@@ -1310,7 +1322,7 @@ mod tests {
 
     #[test]
     fn the_reader_and_the_writer_of_a_knob_are_the_same_field() {
-        // `knob` matches the nineteen fields over again, next to the match
+        // `knob` matches the twenty fields over again, next to the match
         // `knob_mut` makes. Nothing but this stops one of them being pointed
         // at the wrong number: a nudge that the reader does not see, or sees
         // on another knob, is the whole failure.
@@ -1360,19 +1372,38 @@ mod tests {
         // Past a rail is the rail, not the number asked for.
         params.set(Knob::Contrast, 99.0, focus);
         assert!((params.knob(Knob::Contrast, focus) - 4.0).abs() < 1e-6);
-        // A phase comes back round instead.
-        params.set(Knob::Hue, 3.0, focus);
-        assert!((params.knob(Knob::Hue, focus) - 3.0).abs() < 1e-5);
+        // A phase comes back round instead — so the value asked for has to be
+        // past the turn, or nothing wraps and `set` could be writing the
+        // field straight rather than going through `nudge`.
+        params.set(Knob::Hue, 4.0, focus);
+        let wrapped = 4.0 - std::f32::consts::TAU;
+        assert!(
+            (params.knob(Knob::Hue, focus) - wrapped).abs() < 1e-5,
+            "{} not {wrapped}",
+            params.knob(Knob::Hue, focus)
+        );
+        // And the rigid gain's three-channel step is delegated here too, not
+        // only in the test that names it.
+        params.set(Knob::Gain, 0.4, focus);
+        let gain = params.cameras[0].gain;
+        assert!((gain.iter().sum::<f32>() / 3.0 - 0.4).abs() < 1e-6);
     }
 
     #[test]
     fn setting_the_rigid_gain_slides_the_channels_and_keeps_their_offsets() {
         let mut params = p();
         let focus = Focus::default();
+        // A triple equal to none of its own channels: the shipped gains are
+        // symmetric, so their mean *is* the middle channel and a reader
+        // returning `gain[1]` cannot be told from one returning the mean.
+        params.cameras[0].gain = [0.2, 0.9, 0.9];
         let before = params.cameras[0].gain;
         let offsets = [before[1] - before[0], before[2] - before[0]];
+        assert!((params.knob(Knob::Gain, focus) - 2.0 / 3.0).abs() < 1e-6);
         params.set(Knob::Gain, 0.5, focus);
         let after = params.cameras[0].gain;
+        // Against the array, not against `set`'s own idea of where it put it.
+        assert!((after.iter().sum::<f32>() / 3.0 - 0.5).abs() < 1e-6);
         assert!((params.knob(Knob::Gain, focus) - 0.5).abs() < 1e-6);
         assert!((after[1] - after[0] - offsets[0]).abs() < 1e-6);
         assert!((after[2] - after[0] - offsets[1]).abs() < 1e-6);
