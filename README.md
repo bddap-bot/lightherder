@@ -310,24 +310,33 @@ nix-shell --run "cargo run --release my-graph.toml"      # your own
 ```
 
 It comes up covering the display, because an instrument on a stage is the only
-thing on its screen. `f11` switches that off and on while it runs, and is the
-only way back to the rest of the machine; `esc` quits, and nothing on the
-control surface does.
+thing on its screen. `f11` switches that off and on while it runs, which is how
+you get at the rest of the machine without stopping the piece; `esc` quits, and
+nothing on the factory MIDI map does — a slipped finger mid-performance must
+not be able to stop the instrument.
 
 ```
---windowed              a window rather than the whole display
---resolution 3840x2160  how big every monitor is (default 1920x1080)
---cheatsheet            the controls — keys and surface both — and exit
---bench                 what a frame costs, off screen, and exit
+nix-shell --run "cargo run --release -- --windowed crossed"
 ```
+
+| | |
+| --- | --- |
+| `--windowed` | a window rather than the whole display |
+| `--resolution 3840x2160` | how big every monitor is (default 1920x1080) |
+| `--cheatsheet` | the controls — keys and surface both — and exit |
+| `--bench` | what a frame costs, off screen, and exit |
+
+Through `cargo run` they need the `--` above, which is cargo's and not this
+program's; a built binary takes them directly.
 
 The resolution is every monitor's size, and so the resolution the whole loop
 runs at. The window's shape has nothing to do with it: the bank is tiled into
 the window, each monitor letterboxed in its cell rather than stretched. Nor is
 it part of a graph — every position here is in screen units and every weight a
-ratio, so it changes how much detail the loop carries and nothing about what it
-does. On a 4K display ask for `3840x2160` and what is on the glass is the
-loop's own detail rather than an upscale of a smaller one.
+ratio, so it changes how much detail the loop carries and — the grain aside,
+which is hashed per texel and so is finer on a bigger monitor — nothing about
+what it does. On a 4K display ask for `3840x2160` and what is on the glass is
+the loop's own detail rather than an upscale of a smaller one.
 
 A graph file is the same shape as the presets — `cargo run` on a bad file
 prints exactly what is wrong. The smallest useful one:
@@ -380,8 +389,11 @@ sudo -u USER env XDG_RUNTIME_DIR=/run/user/UID WAYLAND_DISPLAY=wayland-0 \
 ```
 
 Its own log is how you know it worked, since nothing else on that machine can
-see the screen: `window 3840x2160 (covering the display), presenting Fifo at
-Rgba8UnormSrgb`, and then sixty a second.
+see the screen — and it takes two lines, because they are two different things:
+`1 monitors of 3840x2160` is the bank, and `window 3840x2160 (covering the
+display), presenting Fifo at Rgba8UnormSrgb` is the window. A 4K window over a
+1080p bank prints the second and not the first. Then sixty a second, from the
+first frame rather than from before the pipelines were built.
 
 ### What a frame costs
 
@@ -393,21 +405,27 @@ stepped and presented into a target the size of the display.
 | graph | 1920x1080 | 3840x2160 |
 | --- | --- | --- |
 | `single` | 0.16 ms | 0.38 ms |
+| `kinetic` | 0.14 | 0.42 |
 | `external` | 0.16 | 0.45 |
 | `analog` | 0.22 | 0.72 |
 | `crossed` (2 monitors) | 0.23 | 0.72 |
 | `insanity` (4 monitors, all-to-all) | 0.64 | 2.14 |
 
 A 60 Hz frame is 16.7 ms, so the heaviest graph that ships uses an eighth of one
-at 4K. Measured on an RTX 2080. The bank itself is what grows: two copies of
-every monitor and input at four bytes a channel, half a gigabyte for `insanity`
-at 4K, refused past two.
+at 4K. Measured on an RTX 2080. What the numbers leave out is a frame's edges
+rather than its loop: handing the frame to the compositor, and the upload of a
+live input, which for a video file or a capture device is a conversion and two
+writes of a whole frame every frame. The graphs above have none — a drawn
+pattern is uploaded once.
+
+The bank itself is what grows: two copies of every monitor and input at eight
+bytes a texel, half a gigabyte for `insanity` at 4K, and refused past two.
 
 ## Keys
 
-The binding list prints on startup — `--cheatsheet` prints it without
-starting anything, together with the control surface under whatever map is in
-force — and every knob logs its new value on change. Keys are physical
+The binding list prints on startup, together with the control surface under
+whatever map is in force; `--cheatsheet` prints the same card without starting
+anything. Every knob logs its new value on change. Keys are physical
 positions, so the punctuation below assumes a US layout.
 
 | key | effect |

@@ -16,20 +16,12 @@ use crate::config::PRESETS;
 /// it is deployed on rather than of the piece being played.
 pub const DEFAULT_RESOLUTION: (u32, u32) = (1920, 1080);
 
-/// The largest monitor accepted, per side. The real limit is the bank, which
-/// is [`crate::feedback::bank_fits`]'s to enforce because only it knows how
-/// many layers a graph has; this one keeps a typo like `--resolution 38400x2160`
-/// from being reported as a memory figure.
+/// The largest monitor accepted, per side. Not the same cap as
+/// [`crate::feedback::bank_fits`], which bounds the bank in bytes and so
+/// catches many layers of a merely large monitor: this one is the side of a
+/// texture, where every GPU worth deploying on stops at 8192 and a request
+/// past it is a validation error inside wgpu rather than a line here.
 pub const MAX_RESOLUTION: u32 = 7680;
-
-/// How many frames [`Mode::Bench`] times, after a warm-up. Ten seconds' worth
-/// at sixty, long enough that a shader compile or a first-touch allocation
-/// cannot be most of the answer.
-pub const BENCH_FRAMES: u32 = 600;
-
-/// Frames run and thrown away first: pipelines are built and every texture in
-/// the bank is touched for the first time on the way through frame one.
-pub const BENCH_WARMUP: u32 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
@@ -77,11 +69,12 @@ pub fn usage() -> String {
          \x20 --windowed          open a window instead of covering the display\n\
          \x20 --resolution WxH    how big every monitor is (default {}x{})\n\
          \x20 --cheatsheet        print the controls and exit\n\
-         \x20 --bench             time {BENCH_FRAMES} frames off screen and exit\n\
+         \x20 --bench             time {} frames off screen and exit\n\
          \x20 --help              this\n",
         names.join(" | "),
         DEFAULT_RESOLUTION.0,
         DEFAULT_RESOLUTION.1,
+        crate::bench::FRAMES,
     )
 }
 
@@ -97,9 +90,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--windowed" => cli.fullscreen = false,
-            "--cheatsheet" => cli.mode = Mode::Cheatsheet,
-            "--bench" => cli.mode = Mode::Bench,
-            "--help" | "-h" => cli.mode = Mode::Usage,
+            // One mode a run, for the reason a second graph is refused below:
+            // last-flag-wins on `--bench --cheatsheet` is a typo answered by
+            // doing one of the two things silently.
+            "--cheatsheet" => mode(&mut cli.mode, Mode::Cheatsheet)?,
+            "--bench" => mode(&mut cli.mode, Mode::Bench)?,
+            "--help" | "-h" => mode(&mut cli.mode, Mode::Usage)?,
             // Both spellings, because a flag with a value is written with a
             // space as often as with an equals, and the one a parser refuses
             // lands as a second graph rather than as an error about sizes.
@@ -130,6 +126,18 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
         cli.graph = graph;
     }
     Ok(cli)
+}
+
+/// Take `mode`, unless one has already been taken.
+fn mode(current: &mut Mode, wanted: Mode) -> Result<(), String> {
+    if *current != Mode::Play {
+        return Err(format!(
+            "{current:?} and {wanted:?} are two different runs; ask for one\n{}",
+            usage()
+        ));
+    }
+    *current = wanted;
+    Ok(())
 }
 
 /// `WIDTHxHEIGHT`, the way a display is spelled everywhere else.
@@ -201,6 +209,20 @@ mod tests {
         assert!(parse_argv(&["--resolution"])
             .unwrap_err()
             .contains("needs a size"));
+    }
+
+    #[test]
+    fn a_second_run_is_refused_the_same_way_a_second_graph_is() {
+        // Last-flag-wins here would answer a typo by doing one of the two
+        // things silently, which is the case the graphs are refused for.
+        let why = parse_argv(&["--bench", "--cheatsheet"]).unwrap_err();
+        assert!(why.contains("Bench") && why.contains("Cheatsheet"), "{why}");
+        assert!(parse_argv(&["--help", "--bench"]).is_err());
+        // Once each is not two: repeating one flag is not a second run.
+        assert_eq!(
+            parse_argv(&["--windowed", "--windowed"]).unwrap().mode,
+            Mode::Play
+        );
     }
 
     #[test]

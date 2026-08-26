@@ -2,22 +2,41 @@
 //!
 //! On a display the loop runs at the vertical blank whatever it costs, so a
 //! window reporting sixty says only that a frame fit — not by how much. This
-//! runs the same work with nothing pacing it: the graph stepped and then
-//! presented into a target the size of the display, which is every pass the
-//! deployed instrument makes bar the handoff to the compositor.
+//! runs the same work with nothing pacing it: the graph stepped, and then
+//! presented into a target the same size, which is the deployed case worth
+//! timing — a bank at the display's resolution.
+//!
+//! Two things it leaves out, both of them a frame's edges rather than its
+//! loop. Handing the frame to the compositor, which is not this program's
+//! work; and the upload of a live input, which for a file or a capture device
+//! is a conversion and two writes of a whole frame per input per frame. A
+//! graph whose inputs are drawn patterns — every one that ships — uploads
+//! them once and is timed whole.
 
 use std::time::Instant;
 
-use crate::cli::{BENCH_FRAMES, BENCH_WARMUP};
 use crate::feedback::Feedback;
 use crate::params::Params;
 use crate::present::Present;
+
+/// How many frames are timed, after a warm-up. Ten seconds' worth at sixty,
+/// long enough that a shader compile or a first-touch allocation cannot be
+/// most of the answer. A whole number of [`BATCH`]es, which the mean divides
+/// by.
+pub const FRAMES: u32 = 600;
+
+/// Frames run and thrown away first: the pipelines are built and every
+/// texture in the bank is touched for the first time on the way through frame
+/// one.
+const WARMUP: u32 = 60;
 
 /// Frames submitted between waits. Waiting after every frame would time the
 /// round trip to the driver as well as the work; waiting after all six
 /// hundred would queue up more than a GPU has memory for. Sixty is a second
 /// of the real thing.
 const BATCH: u32 = 60;
+
+const _: () = assert!(FRAMES.is_multiple_of(BATCH) && FRAMES > 0);
 
 /// The format a window on this machine most likely presents in. It matters
 /// only to the present pass's writes, and every candidate is four bytes.
@@ -67,7 +86,7 @@ pub fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> {
         feedback.step(&device, &queue, params);
         present.draw(&device, &queue, &view, resolution, feedback);
     };
-    for _ in 0..BENCH_WARMUP {
+    for _ in 0..WARMUP {
         frame(&mut feedback);
     }
     device
@@ -75,7 +94,7 @@ pub fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> {
         .map_err(|e| format!("poll: {e}"))?;
 
     let (mut total, mut worst) = (0.0f64, 0.0f64);
-    for _ in 0..BENCH_FRAMES / BATCH {
+    for _ in 0..FRAMES / BATCH {
         let started = Instant::now();
         for _ in 0..BATCH {
             frame(&mut feedback);
@@ -87,7 +106,7 @@ pub fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> {
         total += ms;
         worst = worst.max(ms);
     }
-    let mean = total / (BENCH_FRAMES / BATCH) as f64;
+    let mean = total / (FRAMES / BATCH) as f64;
     println!(
         "{name}: {} monitors and {} inputs at {width}x{height}, {:.2} GiB of bank",
         params.monitors.len(),

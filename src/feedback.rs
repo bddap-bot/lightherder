@@ -40,9 +40,10 @@ pub const MAX_TAPS: usize = 32;
 
 /// The most GPU memory a bank may ask for, both copies together. A cap in
 /// bytes rather than in pixels because it is the layers that do the
-/// multiplying: eight monitors and four inputs at 3840x2160 is 3.2 GiB of
-/// half-float, and a card asked for more than it has fails inside the driver
-/// rather than at the command line.
+/// multiplying: the largest graph `config::validate` allows — eight monitors
+/// and four inputs — is 1.5 GiB of half-float at 3840x2160 and four times
+/// that at 7680x4320, and a card asked for more than it has fails inside the
+/// driver rather than at the command line.
 pub const MAX_BANK_BYTES: u64 = 2 << 30;
 
 /// What the two banks cost `params` at monitors of `size`.
@@ -643,6 +644,50 @@ fn to_half(rgba8: &[u8]) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bank_is_two_copies_of_every_source() {
+        // Worked out from the format rather than from `bank_bytes`: one
+        // 1920x1080 layer of Rgba16Float is 8 bytes a texel, and there are
+        // two banks so a pass can read every layer while writing one.
+        let single = crate::config::single();
+        assert_eq!(single.sources(), 1);
+        assert_eq!(bank_bytes(&single, (1920, 1080)), 2 * 1920 * 1080 * 8);
+        // Four monitors, and the layers are what multiply.
+        let insanity = crate::config::insanity();
+        assert_eq!(insanity.sources(), 4);
+        assert_eq!(bank_bytes(&insanity, (3840, 2160)), 4 * 2 * 3840 * 2160 * 8);
+    }
+
+    #[test]
+    fn a_bank_past_the_cap_is_refused_and_the_4k_deployment_is_not() {
+        // The resolution this instrument is deployed at, on the largest
+        // graph that ships: it fits, or the cap would be refusing the thing
+        // it was written to allow.
+        let insanity = crate::config::insanity();
+        assert!(bank_fits(&insanity, (3840, 2160)).is_ok());
+        // And the largest graph `config::validate` permits at all.
+        let mut most = insanity.clone();
+        most.monitors = vec![most.monitors[0].clone(); crate::config::MAX_MONITORS];
+        most.inputs = vec![
+            crate::input::Input::Pattern(crate::input::Pattern::Bars);
+            crate::config::MAX_INPUTS
+        ];
+        assert_eq!(most.sources(), 12);
+        assert!(bank_fits(&most, (3840, 2160)).is_ok());
+        // Four times the texels each, on eight of them, is past it — and the
+        // refusal says both halves of why, since neither the graph nor the
+        // resolution alone is what went wrong.
+        let why = bank_fits(&most, (7680, 4320)).unwrap_err();
+        assert!(
+            why.contains("12 sources") && why.contains("7680x4320"),
+            "{why}"
+        );
+        assert!(
+            why.contains("2.0 GiB"),
+            "the cap is not in the reason: {why}"
+        );
+    }
 
     /// binary16 back to f32, written from the format rather than from
     /// [`half_bits`], so the two are independent.
