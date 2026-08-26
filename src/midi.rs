@@ -239,39 +239,35 @@ pub struct Stream {
     status: u8,
     data: [u8; 2],
     have: usize,
-    /// System-exclusive runs until its end byte and can hold anything; the
-    /// nanoKONTROL2 sends one on a scene dump.
-    in_sysex: bool,
 }
 
 impl Stream {
     /// Feed one byte in, and push out any control change it completed.
     pub fn push(&mut self, byte: u8, out: &mut Vec<Cc>) {
         match byte {
-            // Real time. Interleaved anywhere, even inside another message's
-            // data, and it does not disturb running status.
+            // Real time. Interleaved anywhere, even between a control number
+            // and its value, and it does not disturb running status.
             0xF8..=0xFF => {}
-            0xF0 => {
-                self.in_sysex = true;
-                self.status = 0;
-            }
-            0xF7 => self.in_sysex = false,
-            // System common: no running status survives one, and its own
-            // data bytes then fall through to the status-less branch below.
-            0xF1..=0xF6 => {
-                self.in_sysex = false;
-                self.status = 0;
-            }
+            // System exclusive and system common. No running status survives
+            // one, which is the whole of what a scene dump needs: its payload
+            // is data bytes with no status in force, and the branch below
+            // drops those. Nothing has to know a dump is being read.
+            0xF0..=0xF7 => self.status = 0,
             0x80..=0xEF => {
-                self.in_sysex = false;
                 self.status = byte;
                 self.have = 0;
             }
-            _ if self.in_sysex || self.status == 0 => {}
+            _ if self.status == 0 => {}
             _ => {
                 self.data[self.have] = byte;
                 self.have += 1;
-                if self.have < data_bytes(self.status) {
+                // Two, for every channel message this pairs up. Program
+                // change and channel pressure carry one, so their data pairs
+                // up wrongly here — and cannot be mistaken for a knob move
+                // anyway, because a control change only ever arrives under a
+                // 0xB0, and running status of a program change is another
+                // program change.
+                if self.have < 2 {
                     return;
                 }
                 self.have = 0;
@@ -284,15 +280,6 @@ impl Stream {
                 }
             }
         }
-    }
-}
-
-/// How many data bytes a channel message carries. Program change and channel
-/// pressure take one; everything else takes two.
-fn data_bytes(status: u8) -> usize {
-    match status & 0xF0 {
-        0xC0 | 0xD0 => 1,
-        _ => 2,
     }
 }
 
@@ -611,10 +598,15 @@ mod tests {
 
     #[test]
     fn a_scene_dump_is_not_a_hundred_knob_moves() {
-        // Sysex holds arbitrary 7-bit data, and the nanoKONTROL2 sends one
-        // on request. Read as running status it would be a fader sweep.
-        let mut bytes = vec![0xF0, 0x42, 0x40, 0x00, 0x01, 0x13, 0x00, 0x7F, 0xF7];
-        bytes.extend(cc(1, 9));
+        // Sysex holds arbitrary 7-bit data, and the nanoKONTROL2 sends one on
+        // request. It has to arrive with running status in force, which is
+        // the only state in which its payload could be read as knob moves —
+        // a dump on its own is data under no status, which nothing decodes.
+        let mut bytes = cc(1, 9);
+        bytes.extend([0xF0, 0x42, 0x40, 0x00, 0x01, 0x13, 0x00, 0x7F, 0xF7]);
+        // And no status survives the dump, so the pair after it belongs to
+        // nothing rather than to the fader that moved before it.
+        bytes.extend([0x02, 0x05]);
         assert_eq!(
             decode(&bytes),
             [Cc {
@@ -626,14 +618,16 @@ mod tests {
     }
 
     #[test]
-    fn the_messages_that_are_not_control_changes_are_dropped_whole() {
-        // Each of these has a different length, so a decoder that skipped
-        // the wrong number of data bytes would read the next message's
-        // status as data — or its data as a control change.
-        let mut bytes = vec![0x90, 0x40, 0x7F]; // note on, two data bytes
-        bytes.extend([0xC0, 0x05]); // program change, one
-        bytes.extend([0xE0, 0x00, 0x40]); // pitch bend, two
-        bytes.extend([0xD0, 0x20]); // channel pressure, one
+    fn only_a_control_change_comes_out() {
+        // A surface sends notes and a pitch bend too, and none of them is a
+        // knob. Their data bytes look exactly like a control change's, so
+        // the status they arrived under is the only thing keeping them out —
+        // including for the two that carry one data byte rather than two,
+        // which this decoder deliberately pairs up wrongly.
+        let mut bytes = vec![0x90, 0x40, 0x7F]; // note on
+        bytes.extend([0xC0, 0x05]); // program change
+        bytes.extend([0xE0, 0x00, 0x40]); // pitch bend
+        bytes.extend([0xD0, 0x20]); // channel pressure
         bytes.extend(cc(3, 11));
         assert_eq!(
             decode(&bytes),
