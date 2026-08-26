@@ -10,14 +10,20 @@
       html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
       #lightherder { display: block; width: 100%; height: 100%; }
       body { color: #ccc; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; }
-      /* The keys, over the corner of the image, fading out of the way of the
-         thing they are describing. Hover or focus brings them back. */
+      /* Never a click target. winit reads the keyboard off the *canvas* and
+         focuses it once, so anything painted over the canvas that can take a
+         click takes the focus away with it — and the keys are all there is. */
+      #keys, #why { pointer-events: none; }
+      /* The keys, in the corner, getting out of the way of the thing they
+         describe. An animation rather than a transition off :hover, so a
+         touch device — which never hovers — still reads them first. */
       #keys {
         position: fixed; left: 1rem; bottom: 1rem; margin: 0; padding: .75rem 1rem;
         background: #000a; border: 1px solid #333; white-space: pre;
-        opacity: .85; transition: opacity 1s 6s;
+        opacity: .85; animation: recede 1s 6s forwards;
       }
-      body:not(:hover) #keys { opacity: 0; }
+      @keyframes recede { to { opacity: .06; } }
+      body:hover #keys { animation: none; }
       #why { position: fixed; inset: 0; display: grid; place-content: center;
              text-align: center; padding: 2rem; color: #f66; }
     </style>
