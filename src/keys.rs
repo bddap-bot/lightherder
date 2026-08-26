@@ -100,6 +100,11 @@ const AXES: &[Axis] = &[
     axis(Knob::Gamma, KeyCode::KeyQ, "q", KeyCode::KeyW, "w"),
     // The amplifier's rail, beside the phosphor curve it feeds.
     axis(Knob::Headroom, KeyCode::KeyE, "e", KeyCode::KeyT, "t"),
+    // The switcher's crosspoint: how much of the focused camera the focused
+    // monitor shows. On the two spare keys at the right edge, away from the
+    // knobs, because it is the one control that acts on the pair of nodes
+    // rather than on either of them.
+    axis(Knob::Route, KeyCode::Slash, "/", KeyCode::Backslash, "\\"),
 ];
 
 const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[

@@ -61,6 +61,22 @@ pub(crate) fn taps_of(params: &Params, m: usize) -> impl Iterator<Item = (usize,
         })
 }
 
+/// The most taps any one monitor's pass can ever be given.
+///
+/// [`taps_of`] drops a camera whose routing weight is zero, and `Knob::Route`
+/// can raise one of those mid-performance — so the count a file loads with is
+/// not a bound on the count the shader will be handed. This is that count with
+/// every crosspoint treated as live, which is what [`config::validate`] holds
+/// against [`MAX_TAPS`]. The look weights are not a knob, so a source a camera
+/// cannot see stays uncounted.
+pub(crate) fn reachable_taps(params: &Params) -> usize {
+    params
+        .cameras
+        .iter()
+        .map(|camera| camera.look.iter().filter(|look| **look > 0.0).count())
+        .sum()
+}
+
 /// One flattened edge of the graph, mirrored in `shaders/feedback.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

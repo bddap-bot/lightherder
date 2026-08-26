@@ -270,10 +270,12 @@ impl Focus {
     /// the very same value, so an automation list that told those apart would
     /// hold two entries neither of which the keys could reliably find.
     pub fn narrowed(self, knob: Knob) -> Focus {
-        if knob.is_camera() {
-            Focus { monitor: 0, ..self }
-        } else {
-            Focus { camera: 0, ..self }
+        match knob.side() {
+            Side::Camera => Focus { monitor: 0, ..self },
+            Side::Monitor => Focus { camera: 0, ..self },
+            // A crosspoint is the pair, so both indices name it and neither
+            // can be dropped.
+            Side::Edge => self,
         }
     }
 
@@ -311,6 +313,19 @@ pub enum Knob {
     Contrast,
     Gamma,
     Headroom,
+    /// The switcher crosspoint the two halves of the focus name between
+    /// them: how much of the focused camera the focused monitor shows.
+    Route,
+}
+
+/// Which node a knob's value belongs to, and so which half of a [`Focus`] it
+/// reads. Every knob but the switcher's crosspoint lives on one node; that
+/// one is an edge between a camera and a monitor, and reads both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Camera,
+    Monitor,
+    Edge,
 }
 
 /// What a knob does when it runs out of room.
@@ -323,7 +338,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 19] = [
+    pub const ALL: [Knob; 20] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -343,6 +358,7 @@ impl Knob {
         Knob::Contrast,
         Knob::Gamma,
         Knob::Headroom,
+        Knob::Route,
     ];
 
     /// The one name a knob has: in the printed help, in an error, and in a
@@ -369,6 +385,7 @@ impl Knob {
             Knob::Contrast => "contrast",
             Knob::Gamma => "gamma",
             Knob::Headroom => "headroom",
+            Knob::Route => "route",
         }
     }
 
@@ -376,9 +393,8 @@ impl Knob {
         Knob::ALL.into_iter().find(|knob| knob.name() == name)
     }
 
-    /// Whether the knob lives on a camera or on a monitor, which is what
-    /// decides which focus it follows.
-    pub const fn is_camera(self) -> bool {
+    /// Which of the focus's two indices the knob reads.
+    pub const fn side(self) -> Side {
         match self {
             Knob::Zoom
             | Knob::Rotation
@@ -391,14 +407,15 @@ impl Knob {
             | Knob::Bloom
             | Knob::BloomRadius
             | Knob::ChromaBleed
-            | Knob::Noise => true,
+            | Knob::Noise => Side::Camera,
             Knob::Seed
             | Knob::Hue
             | Knob::Saturation
             | Knob::Brightness
             | Knob::Contrast
             | Knob::Gamma
-            | Knob::Headroom => false,
+            | Knob::Headroom => Side::Monitor,
+            Knob::Route => Side::Edge,
         }
     }
 
@@ -417,7 +434,10 @@ impl Knob {
             | Knob::Contrast
             | Knob::Gamma
             | Knob::Bloom
-            | Knob::Headroom => 0.005,
+            | Knob::Headroom
+            // A crosspoint runs 0 to 1 and gets swept end to end, so it wants
+            // the coarse step rather than the trim one.
+            | Knob::Route => 0.005,
             Knob::Zoom
             | Knob::TranslateX
             | Knob::TranslateY
@@ -465,6 +485,9 @@ impl Knob {
             // whole picture into the darkest eighth, which is a sound worth
             // having; the top is well clear of anything a monitor displays.
             Knob::Headroom => Limit::Clamp(0.125, 8.0),
+            // A crosspoint is a fraction of a camera. Above 1.0 it would be
+            // an amplifier, which is what the loop gain already is.
+            Knob::Route => Limit::Clamp(0.0, 1.0),
         }
     }
 }
@@ -534,6 +557,7 @@ impl Params {
             Knob::Contrast => mon.colour.contrast,
             Knob::Gamma => mon.colour.gamma,
             Knob::Headroom => mon.headroom,
+            Knob::Route => self.routing[focus.monitor][focus.camera],
         }
     }
 
@@ -664,35 +688,31 @@ impl Params {
 
     /// The value a knob turns, for the knobs that are a single number.
     fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
-        if knob.is_camera() {
-            let cam = &mut self.cameras[focus.camera];
-            match knob {
-                Knob::Zoom => &mut cam.framing.zoom,
-                Knob::Rotation => &mut cam.framing.rotation,
-                Knob::TranslateX => &mut cam.framing.translate[0],
-                Knob::TranslateY => &mut cam.framing.translate[1],
-                Knob::GainR => &mut cam.gain[0],
-                Knob::GainG => &mut cam.gain[1],
-                Knob::GainB => &mut cam.gain[2],
-                Knob::Bloom => &mut cam.character.bloom,
-                Knob::BloomRadius => &mut cam.character.bloom_radius,
-                Knob::ChromaBleed => &mut cam.character.chroma_bleed,
-                Knob::Noise => &mut cam.character.noise,
-                Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
-                _ => unreachable!("is_camera() said so"),
-            }
-        } else {
-            let mon = &mut self.monitors[focus.monitor];
-            match knob {
-                Knob::Seed => &mut mon.seed_brightness,
-                Knob::Hue => &mut mon.colour.hue,
-                Knob::Saturation => &mut mon.colour.saturation,
-                Knob::Brightness => &mut mon.colour.brightness,
-                Knob::Contrast => &mut mon.colour.contrast,
-                Knob::Gamma => &mut mon.colour.gamma,
-                Knob::Headroom => &mut mon.headroom,
-                _ => unreachable!("is_camera() said not"),
-            }
+        // One match rather than a branch on the side and a match inside each:
+        // the crosspoint reads both indices, so there is no side to branch on
+        // first, and the two `unreachable!` arms that split cost bought are
+        // gone with it.
+        match knob {
+            Knob::Zoom => &mut self.cameras[focus.camera].framing.zoom,
+            Knob::Rotation => &mut self.cameras[focus.camera].framing.rotation,
+            Knob::TranslateX => &mut self.cameras[focus.camera].framing.translate[0],
+            Knob::TranslateY => &mut self.cameras[focus.camera].framing.translate[1],
+            Knob::GainR => &mut self.cameras[focus.camera].gain[0],
+            Knob::GainG => &mut self.cameras[focus.camera].gain[1],
+            Knob::GainB => &mut self.cameras[focus.camera].gain[2],
+            Knob::Bloom => &mut self.cameras[focus.camera].character.bloom,
+            Knob::BloomRadius => &mut self.cameras[focus.camera].character.bloom_radius,
+            Knob::ChromaBleed => &mut self.cameras[focus.camera].character.chroma_bleed,
+            Knob::Noise => &mut self.cameras[focus.camera].character.noise,
+            Knob::Seed => &mut self.monitors[focus.monitor].seed_brightness,
+            Knob::Hue => &mut self.monitors[focus.monitor].colour.hue,
+            Knob::Saturation => &mut self.monitors[focus.monitor].colour.saturation,
+            Knob::Brightness => &mut self.monitors[focus.monitor].colour.brightness,
+            Knob::Contrast => &mut self.monitors[focus.monitor].colour.contrast,
+            Knob::Gamma => &mut self.monitors[focus.monitor].colour.gamma,
+            Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
+            Knob::Route => &mut self.routing[focus.monitor][focus.camera],
+            Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
         }
     }
 
@@ -709,13 +729,14 @@ impl Params {
             .map(|lfo| format!("\n{}", lfo.describe()))
             .collect();
         format!(
-            // Two lines rather than one: at nineteen knobs a single line
+            // Two lines rather than one: at twenty knobs a single line
             // wraps in a terminal, and consecutive presses stop lining up —
             // which was the only thing a single line was buying.
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
              bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}\n\
              mon {}/{}: seed {:.3}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             gamma {:.3}  headroom {:.3}{}",
+             gamma {:.3}  headroom {:.3}\n\
+             route {:.3}: how much of cam {} mon {} shows{}",
             focus.camera + 1,
             self.cameras.len(),
             cam.framing.zoom,
@@ -738,6 +759,9 @@ impl Params {
             mon.colour.contrast,
             mon.colour.gamma,
             mon.headroom,
+            self.routing[focus.monitor][focus.camera],
+            focus.camera + 1,
+            focus.monitor + 1,
             motion,
         )
     }
@@ -779,9 +803,15 @@ mod tests {
     #[test]
     fn every_knob_moves_something() {
         for knob in Knob::ALL {
-            let mut params = p();
-            nudge(&mut params, knob, 0.01);
-            assert_ne!(params, p(), "{knob:?} did nothing");
+            // Both ways: a knob whose default sits on a rail — the switcher's
+            // crosspoint does, at a full send — has room in one direction
+            // only, and a knob that moves in neither is the broken one.
+            let moved = [0.01f32, -0.01].map(|delta| {
+                let mut params = p();
+                nudge(&mut params, knob, delta);
+                params != p()
+            });
+            assert!(moved.iter().any(|m| *m), "{knob:?} did nothing");
         }
     }
 
@@ -923,7 +953,13 @@ mod tests {
         for knob in Knob::ALL {
             let mut params = p();
             let before = params.describe(Focus::default());
-            nudge(&mut params, knob, 0.05);
+            // Away from whichever rail the default is on, so a knob with no
+            // room upward is still moved.
+            let delta = match knob.limit() {
+                Limit::Clamp(_, high) if params.knob(knob, Focus::default()) >= high => -0.05,
+                _ => 0.05,
+            };
+            nudge(&mut params, knob, delta);
             assert_ne!(
                 params.describe(Focus::default()),
                 before,
@@ -1078,26 +1114,20 @@ mod tests {
         };
         for knob in Knob::ALL {
             let narrowed = focus.narrowed(knob);
-            if knob.is_camera() {
-                assert_eq!(
-                    narrowed,
-                    Focus {
-                        camera: 3,
-                        monitor: 0
-                    }
-                );
-            } else {
-                assert_eq!(
-                    narrowed,
-                    Focus {
-                        camera: 0,
-                        monitor: 5
-                    }
-                );
-            }
-            // Narrowing twice is narrowing once, which is what lets the keys
-            // and `validate` agree on one spelling of a target.
-            assert_eq!(narrowed.narrowed(knob), narrowed);
+            let expected = match knob.side() {
+                Side::Camera => Focus {
+                    camera: 3,
+                    monitor: 0,
+                },
+                Side::Monitor => Focus {
+                    camera: 0,
+                    monitor: 5,
+                },
+                // A crosspoint is the pair, so neither index is dropped.
+                Side::Edge => focus,
+            };
+            assert_eq!(narrowed, expected, "{}", knob.name());
+            assert_eq!(narrowed.narrowed(knob), narrowed, "{}", knob.name());
         }
     }
 
@@ -1118,13 +1148,13 @@ mod tests {
                 camera: 0,
                 monitor: 0,
             };
-            let moved = if knob.is_camera() {
-                Focus {
+            let moved = match knob.side() {
+                Side::Camera => Focus {
                     monitor: 0,
                     ..focus
-                }
-            } else {
-                Focus { camera: 0, ..focus }
+                },
+                Side::Monitor => Focus { camera: 0, ..focus },
+                Side::Edge => focus,
             };
             assert!(params.motion_of(knob, moved).is_some());
             assert_eq!(
@@ -1260,7 +1290,11 @@ mod tests {
                 "the readout is missing {:?}\n{line}",
                 lfo.describe()
             );
-            assert!(line.contains(if knob.is_camera() { "cam 2" } else { "mon 2" }));
+            assert!(match knob.side() {
+                Side::Camera => line.contains("cam 2"),
+                Side::Monitor => line.contains("mon 2"),
+                Side::Edge => line.contains("cam 2 on mon 2"),
+            });
         }
     }
 
@@ -1342,5 +1376,52 @@ mod tests {
         assert!((params.knob(Knob::Gain, focus) - 0.5).abs() < 1e-6);
         assert!((after[1] - after[0] - offsets[0]).abs() < 1e-6);
         assert!((after[2] - after[0] - offsets[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_crosspoint_knob_is_the_cell_both_halves_of_the_focus_name() {
+        // The one knob that reads the whole focus. On a graph whose routing
+        // matrix is not symmetric, so a transposed index would show.
+        let mut params = crate::config::crossed();
+        let focus = Focus {
+            camera: 0,
+            monitor: 1,
+        };
+        assert_eq!(params.routing[1][0], 1.0);
+        assert_eq!(params.routing[0][1], 1.0);
+        params.set(Knob::Route, 0.25, focus);
+        assert!((params.routing[1][0] - 0.25).abs() < 1e-6);
+        assert_eq!(params.routing[0][1], 1.0, "the transpose moved");
+        assert!((params.knob(Knob::Route, focus) - 0.25).abs() < 1e-6);
+        // And it follows both halves: the other corner is its own cell.
+        let other = Focus {
+            camera: 1,
+            monitor: 0,
+        };
+        assert!((params.knob(Knob::Route, other) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_crosspoint_can_be_automated_on_the_pair_it_names() {
+        // An LFO on an edge knob keeps both indices, where a camera or a
+        // monitor knob drops one — so two crosspoints of one camera are two
+        // automations rather than one that overwrites the other.
+        let mut params = crate::config::crossed();
+        let first = Focus {
+            camera: 0,
+            monitor: 0,
+        };
+        let second = Focus {
+            camera: 0,
+            monitor: 1,
+        };
+        params.motion_cycle(Knob::Route, first, 0.0);
+        params.motion_cycle(Knob::Route, second, 0.0);
+        assert_eq!(params.motion.len(), 2);
+        assert!(params.motion_of(Knob::Route, first).is_some());
+        assert!(params.motion_of(Knob::Route, second).is_some());
+        // The readout names the pair, not one of them.
+        let line = params.motion_of(Knob::Route, second).unwrap().describe();
+        assert!(line.contains("cam 1 on mon 2"), "{line}");
     }
 }

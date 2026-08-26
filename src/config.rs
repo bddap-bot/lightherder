@@ -6,7 +6,7 @@ use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
 use crate::motion::{Lfo, Shape};
-use crate::params::{Camera, Character, Focus, Knob, Limit, Monitor, Params};
+use crate::params::{Camera, Character, Focus, Knob, Limit, Monitor, Params, Side};
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
@@ -344,8 +344,21 @@ pub fn validate(params: &Params) -> Result<(), String> {
             params.routing.len()
         ));
     }
+    // A crosspoint is a knob now, so its rail is read off the knob rather
+    // than repeated here: a file that sets one above the top would load and
+    // then snap the first time a fader touched it, which is a value the
+    // instrument shows and cannot return to.
+    let Limit::Clamp(_, full) = Knob::Route.limit() else {
+        unreachable!("a crosspoint clamps")
+    };
     for (i, row) in params.routing.iter().enumerate() {
         weights(row, c).map_err(|e| format!("routing row {i} {e}"))?;
+        if let Some(w) = row.iter().find(|w| **w > full) {
+            return Err(format!(
+                "routing row {i} contains {w}; a crosspoint passes at most \
+                 {full} of a camera, and the gain is the knob that amplifies"
+            ));
+        }
     }
     for (i, monitor) in params.monitors.iter().enumerate() {
         let colour = &monitor.colour;
@@ -434,24 +447,26 @@ pub fn validate(params: &Params) -> Result<(), String> {
         // one is saying something the instrument cannot do — and it would
         // hide the automation from the keys, which look it up narrowed.
         if lfo.focus != lfo.focus.narrowed(lfo.knob) {
-            let side = if lfo.knob.is_camera() {
-                ("monitor", "a camera knob")
-            } else {
-                ("camera", "a monitor knob")
+            let side = match lfo.knob.side() {
+                Side::Camera => ("monitor", "a camera knob"),
+                Side::Monitor => ("camera", "a monitor knob"),
+                Side::Edge => unreachable!("a crosspoint narrows to itself"),
             };
             return Err(at(format!("names a {}; {} has none", side.0, side.1)));
         }
     }
-    // The flattened routing-times-look products are what the shader
-    // iterates, and its uniform array is a fixed size. Counted by the same
-    // function that builds them.
-    for i in 0..m {
-        let taps = crate::feedback::taps_of(params, i).count();
-        if taps > MAX_TAPS {
-            return Err(format!(
-                "monitor {i} is fed by {taps} taps; at most {MAX_TAPS}"
-            ));
-        }
+    // The flattened routing-times-look products are what the shader iterates,
+    // and its uniform array is a fixed size. Bounded against what a *knob*
+    // can reach, not what the file happens to say: `Knob::Route` sweeps a
+    // crosspoint mid-performance, so a row of zeroes at load is no promise
+    // about the tap count a second later. The look weights are not a knob, so
+    // they still count as written.
+    let reachable = crate::feedback::reachable_taps(params);
+    if reachable > MAX_TAPS {
+        return Err(format!(
+            "a monitor here could be fed by {reachable} taps once the switcher \
+             is turned up; at most {MAX_TAPS}"
+        ));
     }
     Ok(())
 }
@@ -940,5 +955,83 @@ mod tests {
              routing = [[1.0]]\n",
         );
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn the_tap_bound_holds_for_every_setting_of_the_switcher_and_not_just_the_one_on_disk() {
+        // `taps_of` drops a crosspoint at zero and `Knob::Route` can raise
+        // one, so the count validate holds against has to be the reachable
+        // one. Every preset: what the file loads with is at or under it, and
+        // turning every crosspoint up reaches exactly it.
+        for (name, params) in presets() {
+            let reachable = crate::feedback::reachable_taps(&params);
+            for m in 0..params.monitors.len() {
+                let now = crate::feedback::taps_of(&params, m).count();
+                assert!(
+                    now <= reachable,
+                    "{name}: monitor {m} has {now} of {reachable}"
+                );
+            }
+            let mut all_on = params.clone();
+            all_on.routing.iter_mut().flatten().for_each(|w| *w = 1.0);
+            for m in 0..all_on.monitors.len() {
+                assert_eq!(
+                    crate::feedback::taps_of(&all_on, m).count(),
+                    reachable,
+                    "{name}: monitor {m} with the whole switcher up"
+                );
+            }
+        }
+        // And `crossed` is a graph where the two differ, so none of the above
+        // is comparing a number with itself.
+        let crossed = crossed();
+        assert_eq!(crate::feedback::taps_of(&crossed, 0).count(), 2);
+        assert_eq!(crate::feedback::reachable_taps(&crossed), 4);
+    }
+
+    #[test]
+    fn a_graph_the_switcher_could_overrun_is_refused_at_load() {
+        // Sparse on disk and legal under a count of what is switched on, but
+        // one fader from handing the shader more taps than its array holds.
+        let cameras = MAX_TAPS / MAX_MONITORS + 1;
+        let mut params = Params {
+            cameras: (0..cameras)
+                .map(|_| Camera {
+                    framing: Framing::identity(),
+                    gain: [0.9; 3],
+                    character: Character::CLEAN,
+                    look: vec![1.0; MAX_MONITORS],
+                })
+                .collect(),
+            monitors: (0..MAX_MONITORS).map(|_| Monitor::default()).collect(),
+            inputs: Vec::new(),
+            // One camera per monitor switched on: well under the bound as it
+            // stands, and over it the moment a crosspoint is swept.
+            routing: (0..MAX_MONITORS)
+                .map(|m| (0..cameras).map(|c| f32::from(c == m)).collect())
+                .collect(),
+            motion: Vec::new(),
+        };
+        for m in 0..MAX_MONITORS {
+            assert!(crate::feedback::taps_of(&params, m).count() <= MAX_TAPS);
+        }
+        let why = validate(&params).unwrap_err();
+        assert!(why.contains("switcher is turned up"), "{why}");
+        // One camera fewer and it fits however the switcher is set.
+        params.cameras.pop();
+        params.routing.iter_mut().for_each(|row| {
+            row.pop();
+        });
+        validate(&params).unwrap();
+    }
+
+    #[test]
+    fn a_crosspoint_past_its_rail_is_refused_rather_than_snapped_later() {
+        // The pre-existing class of bug this one is not joining: a file that
+        // loads at a value the knob would immediately clamp away.
+        let mut params = single();
+        params.routing[0][0] = 1.5;
+        let why = validate(&params).unwrap_err();
+        assert!(why.contains("crosspoint passes at most"), "{why}");
     }
 }

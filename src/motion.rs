@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::params::{Focus, Knob, Limit};
+use crate::params::{Focus, Knob, Limit, Side};
 
 /// The swing over one cycle.
 ///
@@ -210,10 +210,14 @@ impl Lfo {
 
     /// One line of the instrument's readout.
     pub fn describe(&self) -> String {
-        let node = if self.knob.is_camera() {
-            format!("cam {}", self.focus.camera + 1)
-        } else {
-            format!("mon {}", self.focus.monitor + 1)
+        let node = match self.knob.side() {
+            Side::Camera => format!("cam {}", self.focus.camera + 1),
+            Side::Monitor => format!("mon {}", self.focus.monitor + 1),
+            Side::Edge => format!(
+                "cam {} on mon {}",
+                self.focus.camera + 1,
+                self.focus.monitor + 1
+            ),
         };
         format!(
             "motion: {} {} {:.3} Hz +-{:.3} on {node}",
