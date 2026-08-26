@@ -201,6 +201,16 @@ impl Live {
         // 1500 fps on a 60 Hz display — so the mode is pinned rather than
         // taken. Fifo is the one every backend must support.
         config.present_mode = wgpu::PresentMode::Fifo;
+        // Focused under the TV's nested gamescope, a presented buffer comes
+        // back one composite hop late (app → Xwayland → gamescope 4K →
+        // GNOME), and at the default latency of two the acquire blocks past
+        // the vblank: every other frame lands a slot late and the tempo sits
+        // at 40 instead of 60 (#11 — GPU and compositor were both measured
+        // idle-fast; the main thread spent the gap in DRM syncobj waits). A
+        // third frame in flight absorbs the chain's round trip; the extra
+        // 16.7 ms to the screen is invisible in an instrument whose knobs
+        // are the input.
+        config.desired_maximum_frame_latency = 3;
         let format = config.format;
         surface.configure(&gpu.device, &config);
         log::info!(
