@@ -12,6 +12,19 @@
       "why": "prose and licenses — nothing executes them"
     },
     {
+      "paths": ["web/**", ".cargo/config.toml"],
+      "tests": [
+        "nix-shell --run 'shellcheck web/build.sh'",
+        "nix-shell --run './web/build.sh'"
+      ],
+      "why": "the web build is one script, and running it is the only thing that reads the page, the cargo config's wasm rustflags and the wasm-bindgen pin at once — a wasm module is not compiled by any native build"
+    },
+    {
+      "paths": [".github/workflows/**"],
+      "tests": [],
+      "why": "GitHub is the only runner that executes these, and the push that lands one is the run that checks it — there is nothing here a local command could assert that the deploy does not"
+    },
+    {
       "paths": ["shell.nix"],
       "tests": ["nix-instantiate --parse shell.nix", "nix-shell --run 'cargo build --tests'"],
       "why": "the pinned dev environment: parsing catches a syntax error, and a build inside it catches a package that the toolchain or the wgpu/winit runtime loads actually needed"

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>lightherder</title>
+    <style>
+      /* The canvas is the page. winit follows its size, so the layout is the
+         whole of what makes the instrument fullscreen here. */
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+      #lightherder { display: block; width: 100%; height: 100%; }
+      body { color: #ccc; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+      /* The keys, over the corner of the image, fading out of the way of the
+         thing they are describing. Hover or focus brings them back. */
+      #keys {
+        position: fixed; left: 1rem; bottom: 1rem; margin: 0; padding: .75rem 1rem;
+        background: #000a; border: 1px solid #333; white-space: pre;
+        opacity: .85; transition: opacity 1s 6s;
+      }
+      body:not(:hover) #keys { opacity: 0; }
+      #why { position: fixed; inset: 0; display: grid; place-content: center;
+             text-align: center; padding: 2rem; color: #f66; }
+    </style>
+  </head>
+  <body>
+    <canvas id="lightherder"></canvas>
+    <!-- Filled in only when the instrument will not start, so an empty
+         browser (no WebGPU) says so instead of showing a black rectangle. -->
+    <div id="why"></div>
+    <!-- Filled from the same tables the instrument plays, so a binding added
+         to the keys appears here the same day. -->
+    <pre id="keys"></pre>
+    <script type="module">
+      import init from "./lightherder.js";
+      init().catch((e) => {
+        document.getElementById("why").textContent = String(e);
+      });
+    </script>
+  </body>
+</html>

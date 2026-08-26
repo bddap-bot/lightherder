@@ -551,3 +551,21 @@ with two other cards that also have raw MIDI devices. And the whole path —
 discovery, the open, the reader thread, the decode, the map and the pickup —
 against a device that is not there when the instrument starts, appears, sends
 a sweep down a pipe, and goes away again, which is what hot-plug is.
+
+## In a browser
+
+The same instrument, on WebGPU, at
+<https://bddap-bot.github.io/lightherder/> — the graph is chosen the way a
+page takes an argument, `?preset=insanity`, and the keys are the keys. What
+is not there is what a browser has no way to give it: the ALSA control
+surface, an ffmpeg input, and the preset slots, which are files.
+
+`web/build.sh` builds `web/dist` — the module, its glue and the page — and
+every push to `main` runs it and publishes the result. Locally:
+
+    nix-shell --run ./web/build.sh
+    python3 -m http.server -d web/dist
+
+The `wasm-bindgen` crate is pinned to the patch because the generator of that
+glue must be the same version; the dev shell carries that exact binary and
+`web/build.sh` refuses anything else.
