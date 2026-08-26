@@ -38,7 +38,14 @@ pub fn store(dir: &Path, slot: usize, params: &Params) -> Result<PathBuf, String
     let shown = path.display();
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let text = toml::to_string(params).map_err(|e| format!("{shown}: {e}"))?;
-    std::fs::write(&path, text).map_err(|e| format!("{shown}: {e}"))?;
+    // Beside it and then renamed, rather than written over it. A plain write
+    // truncates first, so a full disk or a kill halfway through leaves a
+    // half-finished file where a performance used to be — and the whole
+    // reason store is behind shift is that it cannot be undone. A rename
+    // within one directory is atomic, so a slot is wholly old or wholly new.
+    let scratch = path.with_extension("toml.writing");
+    std::fs::write(&scratch, text).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    std::fs::rename(&scratch, &path).map_err(|e| format!("{shown}: {e}"))?;
     Ok(path)
 }
 

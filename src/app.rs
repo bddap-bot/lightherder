@@ -36,8 +36,10 @@ pub struct App {
     initial: Params,
     /// The camera and monitor the knobs act on.
     focus: Focus,
-    /// The knob the automation keys act on: the last one turned by hand, so
-    /// the switch reaches whatever was just being played with.
+    /// Which knob the automation keys act on: the last one turned by hand.
+    /// The *node* they act on is `focus`, the same one every other key
+    /// follows — so `p` and `a` reach the same monitor, always. The readout
+    /// names the knob, since nothing on screen otherwise would.
     touched: Knob,
     /// Where the automation's clock is read from. Not reset by Reset: a knob
     /// jumping back to where it was is what Reset is for, and a phase jumping
@@ -75,8 +77,7 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
         initial: params.clone(),
         params,
         focus: Focus::default(),
-        // The knob the instrument is named for, so the automation switch does
-        // something worth seeing before anything else has been touched.
+        // So `p` does something worth seeing before any knob has been turned.
         touched: Knob::Rotation,
         started: std::time::Instant::now(),
         sources,
@@ -194,6 +195,16 @@ impl Live {
 }
 
 impl App {
+    /// Take `params` as the live graph. The one way `self.params` is
+    /// replaced, because the focus was walked on the old one and a graph with
+    /// fewer cameras would leave it pointing at nothing — every read of it,
+    /// the readout included, indexes straight in. Two callers, one of which
+    /// used to forget.
+    fn adopt(&mut self, params: Params) {
+        self.focus = self.focus.clamped(&params);
+        self.params = params;
+    }
+
     fn describe(&self) -> String {
         format!(
             "{}\nmotion keys on: {}",
@@ -255,11 +266,14 @@ impl ApplicationHandler for App {
                         log::info!("{}", self.describe());
                     }
                     Some(Action::Motion) => {
-                        self.params.motion_cycle(self.touched, self.focus);
+                        let now = self.started.elapsed().as_secs_f64();
+                        self.params.motion_cycle(self.touched, self.focus, now);
                         log::info!("{}", self.describe());
                     }
                     Some(Action::MotionRate(steps)) => {
-                        self.params.motion_rate(self.touched, self.focus, steps);
+                        let now = self.started.elapsed().as_secs_f64();
+                        self.params
+                            .motion_rate(self.touched, self.focus, steps, now);
                         log::info!("{}", self.describe());
                     }
                     Some(Action::MotionDepth(steps)) => {
@@ -295,13 +309,12 @@ impl ApplicationHandler for App {
                             // The loops keep running: the bank is untouched,
                             // so what a recall changes is the knobs the next
                             // pass reads, not the light already on the glass.
-                            self.focus = self.focus.clamped(&params);
-                            self.params = params;
+                            self.adopt(params);
                             log::info!("slot {}: {}", slot + 1, self.describe());
                         }
                     },
                     Some(Action::Reset) => {
-                        self.params = self.initial.clone();
+                        self.adopt(self.initial.clone());
                         log::info!("reset: {}", self.describe());
                     }
                     Some(Action::Clear) => {
