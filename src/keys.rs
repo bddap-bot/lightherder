@@ -124,78 +124,87 @@ const AXES: &[Axis] = &[
     axis(Knob::Route, KeyCode::Slash, "/", KeyCode::Backslash, "\\"),
 ];
 
-/// Each command's last column is the label the on-screen overlay prints
-/// beside the control — at most two words, which is the ceiling for
-/// text on the panel. It lives here beside the full description so the two
-/// name the same action or fail the same test, never a table apart.
-const COMMANDS: &[(KeyCode, &str, Action, &str, &str)] = &[
+/// A key that does one thing, and the two ways the instrument writes it
+/// down. `what` is the printed help's full wording; `short` is the on-screen
+/// overlay's caption — at most two words, which is the ceiling for
+/// text on the panel. They live side by side so the two cannot name the same
+/// action a table apart.
+struct Command {
+    key: KeyCode,
+    label: &'static str,
+    action: Action,
+    what: &'static str,
+    short: &'static str,
+}
+
+const COMMANDS: &[Command] = &[
     // The automation, on the last knob turned rather than on a knob of its
     // own: twenty knobs would otherwise need twenty switches, and the
     // knob a performer just swept is the one they want to set moving.
-    (
+    cmd(
         KeyCode::KeyP,
         "p",
         Action::Motion,
         "the last knob turned: off / sine / ramp",
         "motion",
     ),
-    (
+    cmd(
         KeyCode::Digit7,
         "7",
         Action::MotionRate(-1.0),
         "its rate, slower",
         "rate -",
     ),
-    (
+    cmd(
         KeyCode::Digit8,
         "8",
         Action::MotionRate(1.0),
         "its rate, faster",
         "rate +",
     ),
-    (
+    cmd(
         KeyCode::Digit9,
         "9",
         Action::MotionDepth(-1.0),
         "its swing, narrower",
         "swing -",
     ),
-    (
+    cmd(
         KeyCode::Digit0,
         "0",
         Action::MotionDepth(1.0),
         "its swing, wider",
         "swing +",
     ),
-    (
+    cmd(
         KeyCode::KeyN,
         "n",
         Action::NextCamera,
         "focus the next camera",
         "cam >",
     ),
-    (
+    cmd(
         KeyCode::KeyM,
         "m",
         Action::NextMonitor,
         "focus the next monitor",
         "mon >",
     ),
-    (
+    cmd(
         KeyCode::Space,
         "space",
         Action::Clear,
         "blank every monitor",
         "blank",
     ),
-    (
+    cmd(
         KeyCode::KeyR,
         "r",
         Action::Reset,
         "reset every knob",
         "reset",
     ),
-    (
+    cmd(
         KeyCode::F11,
         "f11",
         Action::Fullscreen,
@@ -204,15 +213,31 @@ const COMMANDS: &[(KeyCode, &str, Action, &str, &str)] = &[
     ),
     // Backquote because it is the traditional lid over a console, and the
     // last unclaimed key in easy reach of a resting hand.
-    (
+    cmd(
         KeyCode::Backquote,
         "`",
         Action::Overlay,
         "the controls overlay, on or off",
         "help",
     ),
-    (KeyCode::Escape, "esc", Action::Quit, "quit", "quit"),
+    cmd(KeyCode::Escape, "esc", Action::Quit, "quit", "quit"),
 ];
+
+const fn cmd(
+    key: KeyCode,
+    label: &'static str,
+    action: Action,
+    what: &'static str,
+    short: &'static str,
+) -> Command {
+    Command {
+        key,
+        label,
+        action,
+        what,
+        short,
+    }
+}
 
 const fn axis(
     knob: Knob,
@@ -247,10 +272,40 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
             return Some(Action::Nudge(axis.knob, axis.knob.increment()));
         }
     }
+    COMMANDS.iter().find(|c| c.key == key).map(|c| c.action)
+}
+
+/// A label resolved against the three tables: the one walk behind
+/// [`action_for_label`], [`describes`] and [`short`], so their wordings can
+/// differ but what a label reaches cannot.
+enum Binding {
+    Slot { slot: usize, shift: bool },
+    Axis { axis: &'static Axis, up: bool },
+    Command(&'static Command),
+}
+
+/// A leading `"shift "` is stripped for every table but only the slots keep
+/// it, exactly as [`action_for`] reads the physical key.
+fn binding(label: &str) -> Option<Binding> {
+    let (shift, bare) = match label.strip_prefix("shift ") {
+        Some(rest) => (true, rest),
+        None => (false, label),
+    };
+    if let Some(slot) = SLOT_KEYS.iter().position(|(_, bound)| *bound == bare) {
+        return Some(Binding::Slot { slot, shift });
+    }
+    for axis in AXES {
+        if axis.down.1 == bare {
+            return Some(Binding::Axis { axis, up: false });
+        }
+        if axis.up.1 == bare {
+            return Some(Binding::Axis { axis, up: true });
+        }
+    }
     COMMANDS
         .iter()
-        .find(|(bound, _, _, _, _)| *bound == key)
-        .map(|(_, _, action, _, _)| *action)
+        .find(|c| c.label == bare)
+        .map(Binding::Command)
 }
 
 /// Every key label the help prints, in the order it prints them.
@@ -262,7 +317,7 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
 pub fn labels() -> impl Iterator<Item = &'static str> {
     AXES.iter()
         .flat_map(|axis| [axis.down.1, axis.up.1])
-        .chain(COMMANDS.iter().map(|(_, label, _, _, _)| *label))
+        .chain(COMMANDS.iter().map(|c| c.label))
         .chain(SLOT_KEYS.iter().map(|(_, label)| *label))
 }
 
@@ -270,71 +325,48 @@ pub fn labels() -> impl Iterator<Item = &'static str> {
 /// label no table claims, which is how a hand-written MIDI map is caught at
 /// load rather than in the middle of a performance.
 pub fn action_for_label(label: &str) -> Option<Action> {
-    let (shift, label) = match label.strip_prefix("shift ") {
-        Some(rest) => (true, rest),
-        None => (false, label),
-    };
-    let key = AXES
-        .iter()
-        .flat_map(|axis| [axis.down, axis.up])
-        .chain(COMMANDS.iter().map(|(key, label, _, _, _)| (*key, *label)))
-        .chain(SLOT_KEYS.iter().copied())
-        .find(|(_, bound)| *bound == label)?
-        .0;
-    action_for(key, shift)
+    Some(match binding(label)? {
+        Binding::Slot { slot, shift: true } => Action::Store(slot),
+        Binding::Slot { slot, shift: false } => Action::Recall(slot),
+        Binding::Axis { axis, up } => {
+            let step = axis.knob.increment();
+            Action::Nudge(axis.knob, if up { step } else { -step })
+        }
+        Binding::Command(c) => c.action,
+    })
 }
 
 /// What the key spelled `label` does, in the words the help uses. The
 /// surface prints this against the control a button sits on, so a button and
 /// the key it presses cannot be described two different ways.
 pub fn describes(label: &str) -> Option<String> {
-    let (shift, bare) = match label.strip_prefix("shift ") {
-        Some(rest) => (true, rest),
-        None => (false, label),
-    };
-    if let Some(slot) = SLOT_KEYS.iter().position(|(_, bound)| *bound == bare) {
-        let what = if shift { "store" } else { "recall" };
-        return Some(format!("{what} preset slot {}", slot + 1));
-    }
-    for axis in AXES {
-        if axis.down.1 == bare {
-            return Some(format!("{} down", axis.knob.name()));
+    Some(match binding(label)? {
+        Binding::Slot { slot, shift } => {
+            let what = if shift { "store" } else { "recall" };
+            format!("{what} preset slot {}", slot + 1)
         }
-        if axis.up.1 == bare {
-            return Some(format!("{} up", axis.knob.name()));
+        Binding::Axis { axis, up } => {
+            format!("{} {}", axis.knob.name(), if up { "up" } else { "down" })
         }
-    }
-    COMMANDS
-        .iter()
-        .find(|(_, bound, _, _, _)| *bound == bare)
-        .map(|(_, _, _, what, _)| (*what).to_string())
+        Binding::Command(c) => c.what.to_string(),
+    })
 }
 
 /// What the key spelled `label` does, in the two words the on-screen overlay
-/// has room for. The same tables as [`describes`], read for their short
-/// column — so a control cannot be captioned one thing on the overlay and
-/// another on the card. `None` for a label no table claims.
+/// has room for. The same resolution as [`describes`], worded for a caption
+/// — so a control cannot be captioned one thing on the overlay and another
+/// on the card. `None` for a label no table claims.
 pub fn short(label: &str) -> Option<String> {
-    let (shift, bare) = match label.strip_prefix("shift ") {
-        Some(rest) => (true, rest),
-        None => (false, label),
-    };
-    if let Some(slot) = SLOT_KEYS.iter().position(|(_, bound)| *bound == bare) {
-        let what = if shift { "save" } else { "slot" };
-        return Some(format!("{what} {}", slot + 1));
-    }
-    for axis in AXES {
-        if axis.down.1 == bare {
-            return Some(format!("{} -", axis.knob.name()));
+    Some(match binding(label)? {
+        Binding::Slot { slot, shift } => {
+            let what = if shift { "save" } else { "slot" };
+            format!("{what} {}", slot + 1)
         }
-        if axis.up.1 == bare {
-            return Some(format!("{} +", axis.knob.name()));
+        Binding::Axis { axis, up } => {
+            format!("{} {}", axis.knob.name(), if up { "+" } else { "-" })
         }
-    }
-    COMMANDS
-        .iter()
-        .find(|(_, bound, _, _, _)| *bound == bare)
-        .map(|(_, _, _, _, short)| (*short).to_string())
+        Binding::Command(c) => c.short.to_string(),
+    })
 }
 
 pub fn help() -> String {
@@ -343,8 +375,8 @@ pub fn help() -> String {
         let keys = format!("{} / {}", axis.down.1, axis.up.1);
         out.push_str(&format!("  {keys:<12} {} down / up\n", axis.knob.name()));
     }
-    for (_, label, _, what, _) in COMMANDS {
-        out.push_str(&format!("  {label:<12} {what}\n"));
+    for c in COMMANDS {
+        out.push_str(&format!("  {:<12} {}\n", c.label, c.what));
     }
     // Off the table's own labels, like the two above it: a slot rebound to a
     // different key must not leave the help naming the old one.
@@ -364,7 +396,7 @@ mod tests {
     fn every_key() -> Vec<KeyCode> {
         AXES.iter()
             .flat_map(|a| [a.down.0, a.up.0])
-            .chain(COMMANDS.iter().map(|(key, _, _, _, _)| *key))
+            .chain(COMMANDS.iter().map(|c| c.key))
             .chain(SLOT_KEYS.iter().map(|(key, _)| *key))
             .collect()
     }
@@ -599,8 +631,8 @@ mod tests {
                 assert_eq!(action_for_label(label), action_for(key, false));
             }
         }
-        for (key, label, _, _, _) in COMMANDS {
-            assert_eq!(action_for_label(label), action_for(*key, false));
+        for c in COMMANDS {
+            assert_eq!(action_for_label(c.label), action_for(c.key, false));
         }
         for (key, label) in SLOT_KEYS {
             assert_eq!(action_for_label(label), action_for(key, false));
