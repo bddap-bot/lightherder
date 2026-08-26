@@ -81,6 +81,7 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
     // out to be playing the wrong knobs once there is light on the glass.
     let map = Map::load(&slots)?;
     log::info!("surface: waiting for {}", map.device);
+    let midi = Midi::new(map)?;
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     Ok(event_loop.run_app(&mut App {
@@ -92,7 +93,7 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
         started: std::time::Instant::now(),
         sources,
         slots,
-        midi: Midi::new(map),
+        midi,
         shift: false,
         live: None,
     })?)
@@ -218,7 +219,18 @@ impl App {
         // fader has to find its knob again. Otherwise the first one brushed
         // afterwards throws its knob back to where the fader was standing,
         // which is the recall undone one knob at a time.
-        self.midi.recatch();
+        self.midi.release();
+    }
+
+    /// Point the knobs at another node. The one way `self.focus` moves, for
+    /// the same reason [`App::adopt`] is the one way `params` is replaced: a
+    /// fader that has caught a knob is holding *that* node's knob, and the
+    /// new node's is somewhere else entirely — without letting go, the next
+    /// rotary touched throws it to wherever the fader is standing.
+    fn refocus(&mut self, focus: Focus) {
+        self.focus = focus;
+        self.midi.release();
+        log::info!("{}", self.describe());
     }
 
     fn describe(&self) -> String {
@@ -260,12 +272,18 @@ impl App {
                 log::info!("{}", self.describe());
             }
             Action::NextCamera => {
-                self.focus.camera = (self.focus.camera + 1) % self.params.cameras.len();
-                log::info!("{}", self.describe());
+                let camera = (self.focus.camera + 1) % self.params.cameras.len();
+                self.refocus(Focus {
+                    camera,
+                    ..self.focus
+                });
             }
             Action::NextMonitor => {
-                self.focus.monitor = (self.focus.monitor + 1) % self.params.monitors.len();
-                log::info!("{}", self.describe());
+                let monitor = (self.focus.monitor + 1) % self.params.monitors.len();
+                self.refocus(Focus {
+                    monitor,
+                    ..self.focus
+                });
             }
             Action::Store(slot) => match crate::slots::store(&self.slots, slot, &self.params) {
                 Ok(path) => log::info!("slot {}: wrote {}", slot + 1, path.display()),
@@ -335,11 +353,18 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // The surface is read once a frame. Never blocking and never
-                // waiting on a device that is not plugged in, so an
-                // instrument played from the keyboard alone pays a `try_recv`
-                // and a directory listing a second for it.
-                for action in self.midi.poll(&self.params, self.focus) {
+                // The surface is read once a frame, and each message is
+                // turned into an action against the panel the message
+                // before it left — not against a snapshot of the whole
+                // batch. A slot button and a fader inside one frame is a
+                // real two-handed gesture, and resolved against a
+                // snapshot the fader would be dragging a knob back out
+                // of the preset the button just recalled.
+                for message in self.midi.poll() {
+                    let Some(action) = self.midi.action_for(message, &self.params, self.focus)
+                    else {
+                        continue;
+                    };
                     self.apply(action, event_loop);
                 }
                 let Some(live) = self.live.as_mut() else {
@@ -354,7 +379,7 @@ impl ApplicationHandler for App {
                 live.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state != ElementState::Pressed || self.live.is_none() {
+                if event.state != ElementState::Pressed {
                     return;
                 }
                 let PhysicalKey::Code(code) = event.physical_key else {
