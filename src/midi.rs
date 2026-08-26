@@ -145,11 +145,11 @@ impl Map {
             self.device
         );
         for f in &self.fader {
-            let control = silkscreen(f.cc);
+            let control = silkscreen(&self.device, f.cc);
             out.push_str(&format!("  {control:<12} {}\n", f.knob.name()));
         }
         for b in &self.button {
-            let control = silkscreen(b.cc);
+            let control = silkscreen(&self.device, b.cc);
             // The key is named as well as what it does: a button *is* that
             // key, so a performer who has learnt one has learnt the other.
             let what = crate::keys::describes(&b.key).unwrap_or_default();
@@ -230,13 +230,19 @@ impl Map {
     }
 }
 
-/// What is printed beside control `cc` on a nanoKONTROL2, which is the
-/// surface this instrument is played from. Off the factory CC layout, the
-/// same one [`Map::nano_kontrol2`] is written against — so a map that moves a
-/// knob to another control still names the control a hand reaches for. A
-/// number no silkscreen claims prints as itself, since a different surface
-/// entirely is a legitimate thing to map.
-pub fn silkscreen(cc: u8) -> String {
+/// What is printed beside control `cc` on the surface named `device`. Off the
+/// nanoKONTROL2's factory CC layout, the same one [`Map::nano_kontrol2`] is
+/// written against — so a map that moves a knob to another control still
+/// names the control a hand reaches for.
+///
+/// Any other surface gets numbers: these names are one instrument's
+/// silkscreen, and a card that invents a control a performer cannot find is
+/// worse than one that prints the number they can. A number no silkscreen
+/// claims prints as itself for the same reason.
+pub fn silkscreen(device: &str, cc: u8) -> String {
+    if !device.to_lowercase().contains("nanokontrol") {
+        return format!("cc {cc}");
+    }
     let numbered = |first: u8, name: &str| {
         (cc >= first && cc < first + 8).then(|| format!("{name}{}", cc - first + 1))
     };
@@ -677,6 +683,59 @@ fn open(path: &Path) -> Result<Port, String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn the_silkscreen_is_the_one_printed_on_a_nano_kontrol2() {
+        // The four blocks and both ends of each, since an off-by-one in
+        // either the first number or the width mislabels every control on
+        // the card and nothing on the surface would say so.
+        let nano = |cc| silkscreen("nanoKONTROL", cc);
+        assert_eq!(nano(0), "fader 1");
+        assert_eq!(nano(7), "fader 8");
+        assert_eq!(nano(16), "rotary 1");
+        assert_eq!(nano(23), "rotary 8");
+        assert_eq!(nano(32), "S1");
+        assert_eq!(nano(39), "S8");
+        assert_eq!(nano(48), "M1");
+        assert_eq!(nano(55), "M8");
+        assert_eq!(nano(64), "R1");
+        assert_eq!(nano(71), "R8");
+        assert_eq!(nano(41), "play");
+        assert_eq!(nano(43), "rewind");
+        assert_eq!(nano(59), "track next");
+        // The gaps between the blocks are numbers, not the nearest name.
+        assert_eq!(nano(8), "cc 8");
+        assert_eq!(nano(15), "cc 15");
+        assert_eq!(nano(72), "cc 72");
+        // And another surface entirely gets numbers throughout: these names
+        // are one instrument's, and a card naming a control the performer
+        // cannot find is worse than one naming the number they can.
+        assert_eq!(silkscreen("Launchpad", 0), "cc 0");
+        assert_eq!(silkscreen("Launchpad", 41), "cc 41");
+    }
+
+    #[test]
+    fn the_card_names_every_binding_in_the_map() {
+        let map = Map::nano_kontrol2();
+        let card = map.card();
+        // A line for the device and one for each control, no more and no
+        // fewer: a card that quietly leaves a fader off is a fader the
+        // performer does not know they have.
+        assert_eq!(card.lines().count(), 1 + map.fader.len() + map.button.len());
+        for f in &map.fader {
+            let line = format!("  {:<12} {}", silkscreen(&map.device, f.cc), f.knob.name());
+            assert!(card.contains(&line), "missing: {line}");
+        }
+        for b in &map.button {
+            let what = crate::keys::describes(&b.key).expect("every key is described");
+            let line = format!("  {:<12} {what} ({})", silkscreen(&map.device, b.cc), b.key);
+            assert!(card.contains(&line), "missing: {line}");
+        }
+        assert!(
+            card.contains("nanoKONTROL"),
+            "the card does not name the surface"
+        );
+    }
 
     fn cc(control: u8, value: u8) -> Vec<u8> {
         vec![0xB0, control, value]

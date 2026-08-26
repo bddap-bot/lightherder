@@ -269,17 +269,12 @@ pub fn describes(label: &str) -> Option<String> {
 
 pub fn help() -> String {
     let mut out = String::from("keys (US layout positions)\n");
-    let says = |label: &str| describes(label).unwrap_or_default();
     for axis in AXES {
         let keys = format!("{} / {}", axis.down.1, axis.up.1);
-        out.push_str(&format!(
-            "  {keys:<12} {} / {}\n",
-            says(axis.down.1),
-            says(axis.up.1)
-        ));
+        out.push_str(&format!("  {keys:<12} {} down / up\n", axis.knob.name()));
     }
-    for (_, label, _, _) in COMMANDS {
-        out.push_str(&format!("  {label:<12} {}\n", says(label)));
+    for (_, label, _, what) in COMMANDS {
+        out.push_str(&format!("  {label:<12} {what}\n"));
     }
     // Off the table's own labels, like the two above it: a slot rebound to a
     // different key must not leave the help naming the old one.
@@ -431,6 +426,32 @@ mod tests {
         for label in labels {
             assert!(action_for_label(label).is_some(), "{label}");
         }
+    }
+
+    #[test]
+    fn every_label_is_described() {
+        // `Map::card` prints a control by what its key does, so a label with
+        // no description is a blank line on the performer's card. Every
+        // label, and every label under a shift, since the map may write one.
+        for label in labels() {
+            for label in [label.to_string(), format!("shift {label}")] {
+                let what = describes(&label).unwrap_or_else(|| panic!("{label}: no description"));
+                assert!(!what.is_empty(), "{label}: an empty description");
+            }
+        }
+        // And it says what the key does, not what its neighbour does.
+        assert_eq!(describes("f3").as_deref(), Some("recall preset slot 3"));
+        assert_eq!(
+            describes("shift f3").as_deref(),
+            Some("store preset slot 3")
+        );
+        assert_eq!(describes("=").as_deref(), Some("zoom up"));
+        assert_eq!(describes("-").as_deref(), Some("zoom down"));
+        assert_eq!(
+            describes("p").as_deref(),
+            Some("the last knob turned: off / sine / ramp")
+        );
+        assert_eq!(describes("wiggle"), None);
     }
 
     #[test]

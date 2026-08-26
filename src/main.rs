@@ -31,12 +31,8 @@ fn play() -> Result<(), Box<dyn std::error::Error>> {
     let params = lightherder::config::load(&cli.graph)?;
     match cli.mode {
         Mode::Bench => Ok(lightherder::bench::run(&params, cli.resolution)?),
-        _ => {
-            // Fullscreen, this scrolls past behind the instrument; it is here
-            // for the terminal it was started from, which is where the log
-            // lands too.
-            print!("{}", lightherder::cheatsheet()?);
-            lightherder::app::run(params, &cli)
-        }
+        // The instrument prints its own controls once it has the map it will
+        // play, so there is one read of that file rather than two.
+        _ => lightherder::app::run(params, &cli),
     }
 }
