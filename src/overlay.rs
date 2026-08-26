@@ -146,15 +146,28 @@ impl Canvas {
         self.text(cx - w / 2, y, text, self.width, colour);
     }
 
-    /// A caption of up to two words under a strip-wide control: on one line
-    /// when it fits the strip, a word per line when it does not.
+    /// A caption under a strip-wide control, wrapped greedily to the strip:
+    /// as many words a line as fit, so even a knob named past the two-word
+    /// ceiling by a hand-written map stays within the rows below it.
     fn caption(&mut self, cx: i32, y: i32, text: &str, colour: [u8; 4]) {
-        if text.chars().count() as i32 * GLYPH <= STRIP_W - 4 {
-            return self.text_centred(cx, y, text, colour);
+        let fits = |line: &str| line.chars().count() as i32 * GLYPH <= STRIP_W - 4;
+        let mut line = String::new();
+        let mut row = 0;
+        for word in text.split_whitespace() {
+            let joined = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if fits(&joined) {
+                line = joined;
+                continue;
+            }
+            self.text_centred(cx, y + row * (GLYPH + 2), &line, colour);
+            row += 1;
+            line = word.into();
         }
-        for (i, word) in text.split_whitespace().enumerate() {
-            self.text_centred(cx, y + i as i32 * (GLYPH + 2), word, colour);
-        }
+        self.text_centred(cx, y + row * (GLYPH + 2), &line, colour);
     }
 }
 
