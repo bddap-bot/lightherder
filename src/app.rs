@@ -164,11 +164,31 @@ impl Live {
             .expect("request device");
 
         let size = window.inner_size();
-        let config = surface
+        let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("adapter cannot draw to this surface");
+        // The vertical blank is this instrument's clock, and not for smoothness:
+        // the loop evolves one pass per frame, so the frame rate is a tempo. A
+        // camera that pulls back 0.6% and turns 0.05 rad per pass draws its
+        // spiral in a second at sixty and in a twenty-fifth of one at fifteen
+        // hundred. `get_default_config` takes whatever mode the adapter lists
+        // first — Mailbox on this hardware, which ran the analog preset at
+        // 1500 fps on a 60 Hz display — so the mode is pinned rather than
+        // taken. Fifo is the one every backend must support.
+        config.present_mode = wgpu::PresentMode::Fifo;
         let format = config.format;
         surface.configure(&device, &config);
+        log::info!(
+            "window {}x{} {}, presenting {:?} at {format:?}",
+            config.width,
+            config.height,
+            if fullscreen {
+                "(covering the display)"
+            } else {
+                "(windowed)"
+            },
+            config.present_mode,
+        );
 
         // wgpu zero-initialises textures, so the monitors start black without
         // an explicit clear.
