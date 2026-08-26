@@ -25,6 +25,9 @@ pkgs.mkShell {
     rustc
     clippy
     rustfmt
+    # An external input that is a file or a device is an ffmpeg reading it,
+    # and two of the tests run one.
+    ffmpeg
   ];
 
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;

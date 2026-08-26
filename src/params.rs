@@ -430,16 +430,12 @@ impl Knob {
 }
 
 impl Params {
-    /// Everything a camera can look at, monitors first and then inputs. The
-    /// index space of [`Camera::look`] and of the shader's source layers, in
-    /// one place so the two cannot disagree about where the inputs start.
+    /// Everything a camera can look at: the monitors, then the inputs. The
+    /// index space of [`Camera::look`] and the layer count of the source
+    /// bank, which is why `Feedback::new` takes the graph rather than a
+    /// count it could be handed the wrong one of.
     pub fn sources(&self) -> usize {
         self.monitors.len() + self.inputs.len()
-    }
-
-    /// The source layer input `i` occupies.
-    pub fn input_layer(&self, i: usize) -> usize {
-        self.monitors.len() + i
     }
 
     /// Turn `knob` on the focused camera or monitor — its side of the graph

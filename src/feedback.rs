@@ -21,6 +21,10 @@ use crate::params::Params;
 /// bands after a few dozen passes.
 const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// One texel of [`MONITOR_FORMAT`], in bytes. Beside the format because an
+/// upload has to lay its rows out at exactly this stride.
+const MONITOR_TEXEL: u32 = 8;
+
 /// Radius of the seed spot, in screen units where the monitor is 1.0 tall.
 const SEED_RADIUS: f32 = 0.06;
 
@@ -134,19 +138,14 @@ pub struct Feedback {
 }
 
 impl Feedback {
-    /// `inputs` external sources sit after the `monitors` in the same bank,
-    /// so a camera reaches either by one layer index and the shader has no
-    /// idea which kind it is sampling.
-    pub fn new(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        monitors: usize,
-        inputs: usize,
-    ) -> Feedback {
+    /// Sized for `params`, which is the graph it will be stepped with: the
+    /// two counts are baked into the textures here, so taking them from the
+    /// graph itself is the only way they cannot be swapped or drift.
+    pub fn new(device: &wgpu::Device, width: u32, height: u32, params: &Params) -> Feedback {
         assert!(width > 0 && height > 0, "monitors must have a size");
+        let (monitors, inputs) = (params.monitors.len(), params.inputs.len());
         assert!(monitors > 0, "a graph with no monitors draws nothing");
-        let layers = monitors + inputs;
+        let layers = params.sources();
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/feedback.wgsl"));
 
@@ -322,9 +321,9 @@ impl Feedback {
         self.monitors
     }
 
-    /// The size an input's frames have to arrive at: a source layer is a
-    /// layer of the monitor bank, so it is the monitors' size exactly.
-    pub fn input_size(&self) -> (u32, u32) {
+    /// The size of every layer of the bank, and so the size an input.s frames
+    /// have to arrive at.
+    pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
 
@@ -333,12 +332,9 @@ impl Feedback {
     ///
     /// Both banks, because a camera reads whichever is current and an input
     /// layer is never rendered into, so there is no swap to carry it across.
-    /// Twice a frame sounds wasteful and is not: the alternative is writing
-    /// one bank every frame whether or not anything arrived, and inputs only
-    /// deliver when they have something new.
     pub fn write_input(&self, queue: &wgpu::Queue, i: usize, rgba8: &[u8]) {
         assert!(i < self.inputs, "input {i} of {}", self.inputs);
-        let expected = crate::input::frame_bytes(self.input_size());
+        let expected = crate::input::frame_bytes(self.size());
         assert_eq!(rgba8.len(), expected, "input {i} handed over a short frame");
         let halves = to_half(rgba8);
         for texture in &self.textures {
@@ -356,7 +352,7 @@ impl Feedback {
                 bytemuck::cast_slice(&halves),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.width * 8),
+                    bytes_per_row: Some(self.width * MONITOR_TEXEL),
                     rows_per_image: Some(self.height),
                 },
                 wgpu::Extent3d {
@@ -564,7 +560,7 @@ impl Feedback {
 /// One 8-bit channel as the bits of the half float the bank stores, for all
 /// 256 of them. Built once: an input frame is millions of these, and the
 /// domain is small enough to be a table rather than arithmetic.
-fn unorm8_to_half() -> &'static [u16; 256] {
+fn half_table() -> &'static [u16; 256] {
     static TABLE: std::sync::OnceLock<[u16; 256]> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| std::array::from_fn(|v| half_bits(v as f32 / 255.0)))
 }
@@ -594,7 +590,7 @@ fn to_half(rgba8: &[u8]) -> Vec<u16> {
     // displaying, in the same convention as the rest of the instrument: the
     // phosphor gamma is a knob on the front panel, applied on the way out of
     // a pass, not an encoding this stage is entitled to undo.
-    let table = unorm8_to_half();
+    let table = half_table();
     rgba8.iter().map(|v| table[*v as usize]).collect()
 }
 
@@ -616,14 +612,20 @@ mod tests {
     }
 
     #[test]
-    fn every_channel_value_survives_the_trip_to_half() {
+    fn every_channel_value_lands_on_the_nearest_half() {
         // Exhaustive, because the domain is 256 values: nothing here is
-        // sampled or assumed. binary16 keeps 11 significant bits, so the
-        // worst rounding on a value of at most 1.0 is one part in 2048.
+        // sampled or assumed. Nearest rather than within-a-tolerance, because
+        // a tolerance of one ulp is met by truncating — which is what the
+        // rounding term exists not to do, and inside a loop that feeds itself
+        // a bias that always rounds down is a ratchet.
         for v in 0u16..=255 {
             let want = v as f32 / 255.0;
-            let got = from_half(unorm8_to_half()[v as usize]);
-            assert!((got - want).abs() <= 1.0 / 2048.0, "{v}: {got} != {want}");
+            let bits = half_table()[v as usize];
+            let error = (from_half(bits) - want).abs();
+            for neighbour in [bits.wrapping_sub(1), bits + 1] {
+                let theirs = (from_half(neighbour) - want).abs();
+                assert!(error <= theirs, "{v}: {bits:#06x} is not the nearest half");
+            }
         }
     }
 
@@ -633,9 +635,9 @@ mod tests {
         // visible on: a white that came back as 0.9995 would darken the loop
         // one step per pass, which is the failure the colour stage went to
         // trouble over.
-        assert_eq!(unorm8_to_half()[0], 0x0000);
-        assert_eq!(unorm8_to_half()[255], 0x3c00);
-        assert_eq!(from_half(unorm8_to_half()[255]), 1.0);
+        assert_eq!(half_table()[0], 0x0000);
+        assert_eq!(half_table()[255], 0x3c00);
+        assert_eq!(from_half(half_table()[255]), 1.0);
     }
 
     #[test]
@@ -644,7 +646,7 @@ mod tests {
         let halves = to_half(&rgba8);
         assert_eq!(halves.len(), rgba8.len());
         for (h, v) in halves.iter().zip(rgba8) {
-            assert_eq!(*h, unorm8_to_half()[v as usize]);
+            assert_eq!(*h, half_table()[v as usize]);
         }
     }
 }
