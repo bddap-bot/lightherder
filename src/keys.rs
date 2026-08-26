@@ -92,6 +92,19 @@ const AXES: &[Axis] = &[
     axis(Knob::BloomRadius, KeyCode::KeyJ, "j", KeyCode::KeyK, "k"),
     axis(Knob::ChromaBleed, KeyCode::KeyY, "y", KeyCode::KeyU, "u"),
     axis(Knob::Noise, KeyCode::KeyI, "i", KeyCode::KeyO, "o"),
+    // The keyer, on what a nearly full board has left: the last two letters
+    // for the level a performer hunts, and the nav cluster for the trims
+    // that get set once per backdrop.
+    axis(Knob::KeyThreshold, KeyCode::KeyB, "b", KeyCode::KeyL, "l"),
+    axis(Knob::KeySoftness, KeyCode::F9, "f9", KeyCode::F10, "f10"),
+    axis(Knob::KeyHue, KeyCode::Home, "home", KeyCode::End, "end"),
+    axis(
+        Knob::KeyTolerance,
+        KeyCode::PageDown,
+        "pgdn",
+        KeyCode::PageUp,
+        "pgup",
+    ),
     axis(Knob::Seed, KeyCode::Semicolon, ";", KeyCode::Quote, "'"),
     // The colour stage gets the left hand, kept together so a performer can
     // sweep the front panel without looking.
@@ -348,8 +361,8 @@ mod tests {
         assert_eq!(action_for(KeyCode::Space, false), Some(Action::Clear));
         assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape, false), Some(Action::Quit));
-        // A key no table claims — F9, because the slots stop at F8.
-        assert_eq!(action_for(KeyCode::F9, false), None);
+        // A key no table claims.
+        assert_eq!(action_for(KeyCode::F12, false), None);
     }
 
     #[test]

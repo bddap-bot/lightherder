@@ -107,10 +107,11 @@ impl Map {
     /// works one monitor, the right hand one camera, and the top fader is the
     /// switcher crosspoint that joins the two the hands are on.
     ///
-    /// Four knobs are deliberately not here, and all four are trims rather
-    /// than things a hand sweeps: the three per-channel gain offsets, which
-    /// colour a rigid gain that is itself on a rotary, and the bloom radius,
-    /// which sizes a halo whose amount is. They stay on the keys.
+    /// Eight knobs are deliberately not here — the surface has sixteen
+    /// controls and they are taken. The three per-channel gain offsets and
+    /// the bloom radius are trims of knobs that are on the surface; the
+    /// keyer's four wait for a hand that keys more than it bleeds and swaps
+    /// this map for its own. They all stay on the keys.
     fn nano_kontrol2() -> Map {
         Map {
             device: "nanoKONTROL".into(),
@@ -966,7 +967,7 @@ mod tests {
     #[test]
     fn the_factory_map_covers_the_surface_it_names() {
         let map = Map::nano_kontrol2();
-        // Naming the four that are missing is what makes a knob added later
+        // Naming the ones that are missing is what makes a knob added later
         // show up as a failure rather than as a knob nobody can reach.
         let missing: Vec<&str> = Knob::ALL
             .into_iter()
@@ -979,7 +980,11 @@ mod tests {
                 "loop gain, red",
                 "loop gain, green",
                 "loop gain, blue",
-                "bloom radius"
+                "bloom radius",
+                "key threshold",
+                "key softness",
+                "key hue",
+                "key tolerance",
             ]
         );
         // Nothing is bound to quit: a slipped finger on a control surface

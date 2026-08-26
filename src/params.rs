@@ -152,6 +152,70 @@ impl Default for Character {
     }
 }
 
+/// The keyer on one camera's path: what this camera refuses to hand on. Two
+/// keys that multiply — a luma key that cuts the dark, for a subject against
+/// a black backdrop, and a chroma key that cuts one colour, for a subject
+/// against a sheet. On the camera rather than on the input, because gain,
+/// framing and character already are: a key is one more thing a path does to
+/// the light, and a camera aimed at an input through its key is the webcam
+/// use without any second kind of source appearing anywhere.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Key {
+    /// The luma the key passes in full. Cutting is complete one `softness`
+    /// below it, so at 0 the key passes everything exactly — which is what
+    /// lets 0 be the off state without a switch beside the knob.
+    pub threshold: f32,
+    /// Width of both keys' soft edge — luma units on the luma key, and the
+    /// same number reused on the chroma projection, whose scale is close
+    /// enough that a second knob would be sprawl. Zero is a hard edge; the
+    /// shader keeps its smoothstep legal on its own.
+    pub softness: f32,
+    /// The colour the chroma key cuts, as a phase of the chroma subcarrier —
+    /// the one way this instrument names a colour, so a key colour is a hue
+    /// and not three more knobs.
+    pub hue: f32,
+    /// How much of the key colour a pixel may carry before it is cut,
+    /// measured as its chroma's projection onto the key hue. At the top of
+    /// its travel — [`Key::TOLERANT`], past anything a frame can carry — the
+    /// key is off, which is what makes it the default.
+    pub tolerance: f32,
+}
+
+impl Key {
+    /// Above the widest chroma projection an RGB frame can carry (0.633, at
+    /// the saturated corner nearest the I axis), so a tolerance at this rail
+    /// cuts nothing — and the tap flattening zeroes the key vector there
+    /// outright, so even an over-bright loop signal is passed.
+    pub const TOLERANT: f32 = 0.7;
+
+    /// Both keys off: the path hands on everything, exactly. The softness is
+    /// not zero for the same reason `Character::CLEAN`'s bloom radius is not:
+    /// it is only an aim point while the keys are off, and a default of zero
+    /// would land the threshold knob hard-edged on its first press.
+    pub const OFF: Key = Key {
+        threshold: 0.0,
+        softness: 0.05,
+        hue: 0.0,
+        tolerance: Key::TOLERANT,
+    };
+}
+
+impl Default for Key {
+    fn default() -> Key {
+        Key::OFF
+    }
+}
+
+/// The RGB row that measures "how much of hue `h`" a pixel's chroma carries:
+/// the two subcarrier axes blended at the hue's phase. Composed in f64 from
+/// [`DECODE`] like the chroma matrix, so the crate keeps one copy of the
+/// axes — and grey lands on exactly zero, both rows summing to nothing.
+pub fn key_weights(hue: f32) -> [f32; 3] {
+    let (sin, cos) = (hue as f64).sin_cos();
+    std::array::from_fn(|i| (cos * DECODE[1][i] + sin * DECODE[2][i]) as f32)
+}
+
 /// One camera in the graph: what it sees, how it frames it, and how much of
 /// the light it hands on.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,6 +234,9 @@ pub struct Camera {
     /// What this path does to the light besides scale it.
     #[serde(default)]
     pub character: Character,
+    /// What this path refuses to hand on.
+    #[serde(default)]
+    pub key: Key,
     /// The beam splitter in front of the lens: how much of each source this
     /// camera sees, indexed the way [`Params::sources`] counts them — the
     /// monitors, then the external inputs. `[1.0]`-style one-hots are a
@@ -306,6 +373,12 @@ pub enum Knob {
     BloomRadius,
     ChromaBleed,
     Noise,
+    /// The keyer: the luma it demands, the edge both keys blend over, and
+    /// the colour the chroma key cuts with how much of it to tolerate.
+    KeyThreshold,
+    KeySoftness,
+    KeyHue,
+    KeyTolerance,
     Seed,
     Hue,
     Saturation,
@@ -352,7 +425,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 20] = [
+    pub const ALL: [Knob; 24] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -365,6 +438,10 @@ impl Knob {
         Knob::BloomRadius,
         Knob::ChromaBleed,
         Knob::Noise,
+        Knob::KeyThreshold,
+        Knob::KeySoftness,
+        Knob::KeyHue,
+        Knob::KeyTolerance,
         Knob::Seed,
         Knob::Hue,
         Knob::Saturation,
@@ -392,6 +469,10 @@ impl Knob {
             Knob::BloomRadius => "bloom radius",
             Knob::ChromaBleed => "chroma bleed",
             Knob::Noise => "noise",
+            Knob::KeyThreshold => "key threshold",
+            Knob::KeySoftness => "key softness",
+            Knob::KeyHue => "key hue",
+            Knob::KeyTolerance => "key tolerance",
             Knob::Seed => "seed",
             Knob::Hue => "hue",
             Knob::Saturation => "saturation",
@@ -421,7 +502,11 @@ impl Knob {
             | Knob::Bloom
             | Knob::BloomRadius
             | Knob::ChromaBleed
-            | Knob::Noise => Side::Camera,
+            | Knob::Noise
+            | Knob::KeyThreshold
+            | Knob::KeySoftness
+            | Knob::KeyHue
+            | Knob::KeyTolerance => Side::Camera,
             Knob::Seed
             | Knob::Hue
             | Knob::Saturation
@@ -439,7 +524,7 @@ impl Knob {
         match self {
             // A full turn of the subcarrier is a gesture rather than a trim,
             // and at the default step it would take three thousand presses.
-            Knob::Hue => 0.02,
+            Knob::Hue | Knob::KeyHue => 0.02,
             // Coarse enough to see: a thousandth of a radian, or of a decade
             // of phosphor curve, is imperceptible.
             Knob::Rotation
@@ -451,7 +536,11 @@ impl Knob {
             | Knob::Headroom
             // A crosspoint runs 0 to 1 and gets swept end to end, so it wants
             // the coarse step rather than the trim one.
-            | Knob::Route => 0.005,
+            | Knob::Route
+            // Both are swept end to end hunting the backdrop's level, and
+            // the soft edge is what forgives a coarse landing.
+            | Knob::KeyThreshold
+            | Knob::KeyTolerance => 0.005,
             Knob::Zoom
             | Knob::TranslateX
             | Knob::TranslateY
@@ -464,7 +553,8 @@ impl Knob {
             // visible smear: these want a finer step than the levels do.
             | Knob::BloomRadius
             | Knob::ChromaBleed
-            | Knob::Noise => 0.002,
+            | Knob::Noise
+            | Knob::KeySoftness => 0.002,
         }
     }
 
@@ -486,8 +576,15 @@ impl Knob {
             // a tenth of full scale per pass is already snow.
             Knob::Noise => Limit::Clamp(0.0, 0.25),
             Knob::Seed => Limit::Clamp(0.0, 1.0),
+            // Luma runs 0 to 1 in a frame; the loop's reserve above white is
+            // not something a keyer has any business waiting for.
+            Knob::KeyThreshold => Limit::Clamp(0.0, 1.0),
+            // A quarter of the scale is already a fog, not an edge.
+            Knob::KeySoftness => Limit::Clamp(0.0, 0.25),
+            // The top rail is the off state — see [`Key::TOLERANT`].
+            Knob::KeyTolerance => Limit::Clamp(0.0, Key::TOLERANT),
             // A phase: it comes back round instead of running away.
-            Knob::Hue => Limit::Wrap,
+            Knob::Hue | Knob::KeyHue => Limit::Wrap,
             Knob::Saturation | Knob::Contrast => Limit::Clamp(0.0, 4.0),
             // Potent inside a loop, so the rails are close: a tenth of a unit
             // added every pass floods the monitor to white in under a second.
@@ -564,6 +661,10 @@ impl Params {
             Knob::BloomRadius => cam.character.bloom_radius,
             Knob::ChromaBleed => cam.character.chroma_bleed,
             Knob::Noise => cam.character.noise,
+            Knob::KeyThreshold => cam.key.threshold,
+            Knob::KeySoftness => cam.key.softness,
+            Knob::KeyHue => cam.key.hue,
+            Knob::KeyTolerance => cam.key.tolerance,
             Knob::Seed => mon.seed_brightness,
             Knob::Hue => mon.colour.hue,
             Knob::Saturation => mon.colour.saturation,
@@ -718,6 +819,10 @@ impl Params {
             Knob::BloomRadius => &mut self.cameras[focus.camera].character.bloom_radius,
             Knob::ChromaBleed => &mut self.cameras[focus.camera].character.chroma_bleed,
             Knob::Noise => &mut self.cameras[focus.camera].character.noise,
+            Knob::KeyThreshold => &mut self.cameras[focus.camera].key.threshold,
+            Knob::KeySoftness => &mut self.cameras[focus.camera].key.softness,
+            Knob::KeyHue => &mut self.cameras[focus.camera].key.hue,
+            Knob::KeyTolerance => &mut self.cameras[focus.camera].key.tolerance,
             Knob::Seed => &mut self.monitors[focus.monitor].seed_brightness,
             Knob::Hue => &mut self.monitors[focus.monitor].colour.hue,
             Knob::Saturation => &mut self.monitors[focus.monitor].colour.saturation,
@@ -747,7 +852,8 @@ impl Params {
             // wraps in a terminal, and consecutive presses stop lining up —
             // which was the only thing a single line was buying.
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
-             bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}\n\
+             bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  \
+             key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
              mon {}/{}: seed {:.3}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
              gamma {:.3}  headroom {:.3}\n\
              route {:.3}: how much of cam {} mon {} shows{}",
@@ -764,6 +870,10 @@ impl Params {
             cam.character.bloom_radius,
             cam.character.chroma_bleed,
             cam.character.noise,
+            cam.key.threshold,
+            cam.key.softness,
+            cam.key.hue,
+            cam.key.tolerance,
             focus.monitor + 1,
             self.monitors.len(),
             mon.seed_brightness,
@@ -843,6 +953,9 @@ mod tests {
         assert_eq!(cam.character.bloom_radius, 0.25);
         assert_eq!(cam.character.chroma_bleed, 0.25);
         assert_eq!(cam.character.noise, 0.25);
+        assert_eq!(cam.key.threshold, 1.0);
+        assert_eq!(cam.key.softness, 0.25);
+        assert_eq!(cam.key.tolerance, Key::TOLERANT);
         assert_eq!(mon.headroom, 8.0);
         assert_eq!(mon.seed_brightness, 1.0);
         assert_eq!(mon.colour.saturation, 4.0);
@@ -863,6 +976,9 @@ mod tests {
         assert_eq!(cam.character.bloom_radius, 0.0);
         assert_eq!(cam.character.chroma_bleed, 0.0);
         assert_eq!(cam.character.noise, 0.0);
+        assert_eq!(cam.key.threshold, 0.0);
+        assert_eq!(cam.key.softness, 0.0);
+        assert_eq!(cam.key.tolerance, 0.0);
         assert_eq!(mon.headroom, 0.125);
         assert_eq!(mon.seed_brightness, 0.0);
         assert_eq!(mon.colour.saturation, 0.0);
@@ -1017,6 +1133,24 @@ mod tests {
             ..Colour::NEUTRAL
         },
     ];
+
+    #[test]
+    fn the_key_weights_spare_grey_and_the_tolerant_rail_clears_every_frame() {
+        use core::f32::consts::TAU;
+        for i in 0..=1000 {
+            let k = key_weights(-PI + TAU * i as f32 / 1000.0);
+            // Grey has no chroma, so no hue's key may touch it: both
+            // subcarrier rows of DECODE sum to zero and so does any blend.
+            let grey: f32 = k.iter().sum();
+            assert!(grey.abs() < 1e-5, "grey projects {grey}");
+            // The widest projection an RGB frame in 0..=1 can carry is the
+            // sum of the positive weights, at the corner that lights exactly
+            // those channels. TOLERANT clears it at every hue — that is the
+            // claim its value makes, so it is held here.
+            let most: f32 = k.iter().map(|w| w.max(0.0)).sum();
+            assert!(most < Key::TOLERANT, "a frame can project {most}");
+        }
+    }
 
     #[test]
     fn the_encode_matrix_is_the_decode_matrix_inverted() {
@@ -1336,7 +1470,13 @@ mod tests {
                 .iter()
                 .map(|other| params.knob(*other, focus))
                 .collect();
-            let step = knob.increment();
+            // Away from whichever rail the default sits on — the key
+            // tolerance's off state is its top rail, so it only has room
+            // down.
+            let step = match knob.limit() {
+                Limit::Clamp(_, high) if params.knob(knob, focus) >= high => -knob.increment(),
+                _ => knob.increment(),
+            };
             params.nudge(knob, step, focus);
             for (other, was) in Knob::ALL.into_iter().zip(before) {
                 let now = params.knob(other, focus);

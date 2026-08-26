@@ -17,6 +17,12 @@ struct Tap {
     // xy: source-uv step for one chroma-bleed offset along the scanline.
     // z: the fraction of the light the lens scatters. w: padding.
     bleed: vec4<f32>,
+    // The camera's keyer: x luma threshold, y softness, z chroma tolerance,
+    // w padding.
+    key: vec4<f32>,
+    // xyz: the RGB row measuring the key colour in a sample; all zero when
+    // the chroma key is off. See feedback::Tap.
+    keyvec: vec4<f32>,
 };
 
 struct Uniforms {
@@ -163,7 +169,20 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
             );
             signal = smeared + vec3<f32>(dot(u.luma.xyz, lens) - dot(u.luma.xyz, smeared));
         }
-        fed_back += signal * tap.weight.rgb;
+
+        // The keyer, judged on the centre sample: what it gates is the
+        // path's whole hand-over, lens and bleed included, the way the gain
+        // scales it. The luma key passes everything at or above its
+        // threshold and finishes cutting one softness below it, so a
+        // threshold of zero is exactly inert — inside a loop, "almost
+        // passes" is a ratchet. The chroma key is its mirror: a sample
+        // carrying more of the key colour than the tolerance is cut. The
+        // epsilon keeps smoothstep's edges apart at zero softness, where it
+        // would otherwise divide by nothing.
+        let soft = max(tap.key.y, 1e-4);
+        let alpha = smoothstep(tap.key.x - soft, tap.key.x, dot(u.luma.xyz, raw))
+            * (1.0 - smoothstep(tap.key.z, tap.key.z + soft, dot(tap.keyvec.xyz, raw)));
+        fed_back += signal * tap.weight.rgb * alpha;
     }
 
     // Grain from the sensors and cables feeding this monitor, in before the

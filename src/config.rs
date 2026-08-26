@@ -6,7 +6,7 @@ use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
 use crate::motion::{Lfo, Shape};
-use crate::params::{Camera, Character, Focus, Knob, Limit, Monitor, Params, Side};
+use crate::params::{Camera, Character, Focus, Key, Knob, Limit, Monitor, Params, Side};
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
@@ -35,6 +35,7 @@ pub fn single() -> Params {
             },
             gain: [0.980, 0.986, 0.992],
             character: Character::CLEAN,
+            key: Key::OFF,
             look: vec![1.0],
         }],
         monitors: vec![Monitor {
@@ -116,6 +117,7 @@ pub fn crossed() -> Params {
             },
             gain,
             character: Character::CLEAN,
+            key: Key::OFF,
             look,
         }
     };
@@ -162,6 +164,7 @@ pub fn insanity() -> Params {
                 // monitor carries chroma for the hue knobs to turn.
                 gain: std::array::from_fn(|ch| if ch == c % 3 { 0.992 } else { 0.976 }),
                 character: Character::CLEAN,
+                key: Key::OFF,
                 look,
             }
         })
@@ -198,6 +201,7 @@ pub fn external() -> Params {
         },
         gain: [0.985; 3],
         character: Character::CLEAN,
+        key: Key::OFF,
         look: vec![1.0, 0.0],
     };
     let looking_at_the_bars = Camera {
@@ -206,6 +210,7 @@ pub fn external() -> Params {
         framing: Framing::identity(),
         gain: [0.014; 3],
         character: Character::CLEAN,
+        key: Key::OFF,
         look: vec![0.0, 1.0],
     };
     Params {
@@ -217,17 +222,40 @@ pub fn external() -> Params {
     }
 }
 
+/// A webcam driving the loop: [`external`] with the bars swapped for
+/// `/dev/video0` and the luma key switched on, so a subject against a dark
+/// room feeds the spiral and the backdrop feeds nothing — plug in, recall,
+/// play. The injection sits a touch above the bars': what settles is the
+/// injection divided by the loop's distance from unity, and at 0.015 a
+/// subject settles at its own brightness — full scale in, white trail out,
+/// with the amplifier's rail above it for the moments a light swings past.
+pub fn webcam() -> Params {
+    let mut params = external();
+    params.inputs = vec![Input::Capture {
+        format: "v4l2".into(),
+        device: "/dev/video0".into(),
+    }];
+    params.cameras[1].gain = [0.015; 3];
+    params.cameras[1].key = Key {
+        threshold: 0.35,
+        softness: 0.08,
+        ..Key::OFF
+    };
+    params
+}
+
 /// A preset: the name the command line knows it by, and the graph it builds.
 pub type Preset = (&'static str, fn() -> Params);
 
 /// The presets, by the names the command line and the error messages use.
-pub const PRESETS: [Preset; 6] = [
+pub const PRESETS: [Preset; 7] = [
     ("single", single as fn() -> Params),
     ("analog", analog),
     ("kinetic", kinetic),
     ("crossed", crossed),
     ("insanity", insanity),
     ("external", external),
+    ("webcam", webcam),
 ];
 
 /// `arg` is a preset name or a path to a TOML file of [`Params`]. Either way
@@ -336,6 +364,28 @@ pub fn validate(params: &Params) -> Result<(), String> {
                 "camera {i}'s bloom is {}; a lens scatters at most {most} of it",
                 ch.bloom
             ));
+        }
+        // The keyer's rails, read off its knobs like the bloom's: a file
+        // above one would load at a value the instrument shows and cannot
+        // return to — and a tolerance past TOLERANT is the off state wearing
+        // a number the fader would snap.
+        let key = &camera.key;
+        finite(key.hue, "key hue").map_err(|e| format!("camera {i}'s {e}"))?;
+        for (value, knob) in [
+            (key.threshold, Knob::KeyThreshold),
+            (key.softness, Knob::KeySoftness),
+            (key.tolerance, Knob::KeyTolerance),
+        ] {
+            let Limit::Clamp(low, high) = knob.limit() else {
+                unreachable!("the keyer's levels clamp")
+            };
+            finite(value, knob.name()).map_err(|e| format!("camera {i}'s {e}"))?;
+            if !(low..=high).contains(&value) {
+                return Err(format!(
+                    "camera {i}'s {} is {value}; it runs {low} to {high}",
+                    knob.name()
+                ));
+            }
         }
     }
     if params.routing.len() != m {
@@ -556,8 +606,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Between them these carry a non-default value in every field
         // the format has: the routing and splitter weights, the character and
-        // the rail, the inputs, and the automation.
-        for params in [crossed(), analog(), external(), kinetic()] {
+        // the rail, the keyer, the inputs, and the automation.
+        for params in [crossed(), analog(), external(), kinetic(), webcam()] {
             let path = dir.join("preset.toml");
             std::fs::write(&path, toml::to_string(&params).unwrap()).unwrap();
             assert_eq!(load(path.to_str().unwrap()).unwrap(), params);
@@ -664,6 +714,13 @@ mod tests {
             |p| p.monitors[0].headroom = f32::NAN,
             |p| p.monitors[0].colour.gamma = 0.0,
             |p| p.monitors[0].colour.gamma = -1.0,
+            |p| p.cameras[0].key.threshold = f32::NAN,
+            |p| p.cameras[0].key.threshold = -0.1,
+            |p| p.cameras[0].key.threshold = 1.5,
+            |p| p.cameras[0].key.softness = -0.1,
+            |p| p.cameras[0].key.hue = f32::INFINITY,
+            |p| p.cameras[0].key.tolerance = Key::TOLERANT + 0.1,
+            |p| p.cameras[0].key.tolerance = f32::NAN,
         ];
         for (i, poison) in poison.iter().enumerate() {
             let mut params = crossed();
@@ -756,6 +813,33 @@ mod tests {
         assert_eq!(on_input, vec![1]);
         assert_eq!(p.cameras[1].look[..p.monitors.len()], [0.0]);
         assert_eq!(p.cameras[0].look[input], 0.0);
+    }
+
+    #[test]
+    fn the_webcam_preset_keys_its_device_into_the_loop() {
+        let p = webcam();
+        assert_eq!(
+            p.inputs,
+            vec![Input::Capture {
+                format: "v4l2".into(),
+                device: "/dev/video0".into(),
+            }]
+        );
+        // The key sits on the camera aimed at the device, luma half only —
+        // a dark room, not a coloured sheet, is what a bare webcam faces —
+        // and the loop camera hands on everything, or the trail would gate
+        // itself.
+        let key = p.cameras[1].key;
+        assert!(key.threshold > 0.0 && key.softness > 0.0);
+        assert_eq!(key.tolerance, Key::TOLERANT);
+        assert_eq!(p.cameras[0].key, Key::OFF);
+        // The seed is off: every photon on the monitor walked in the lens.
+        assert_eq!(p.monitors[0].seed_brightness, 0.0);
+        // And no other preset keys anything, so the stage is additive.
+        for (name, params) in presets() {
+            let keyed = params.cameras.iter().any(|c| c.key != Key::OFF);
+            assert_eq!(keyed, name == "webcam", "{name}");
+        }
     }
 
     #[test]
@@ -1000,6 +1084,7 @@ mod tests {
                     framing: Framing::identity(),
                     gain: [0.9; 3],
                     character: Character::CLEAN,
+                    key: Key::OFF,
                     look: vec![1.0; MAX_MONITORS],
                 })
                 .collect(),

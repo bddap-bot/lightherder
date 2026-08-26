@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use lightherder::affine::Framing;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
-use lightherder::params::{Camera, Character, Colour, Monitor, Params};
+use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params};
 use lightherder::present::Present;
 
 /// The bootstrap stage's one-camera-one-monitor params, kept as this suite's
@@ -51,6 +51,7 @@ fn graph(s: &Single) -> Params {
             framing: s.framing,
             gain: s.loop_gain,
             character: s.character,
+            key: Key::OFF,
             look: vec![1.0],
         }],
         monitors: vec![Monitor {
@@ -1108,6 +1109,7 @@ fn plain_camera(look: Vec<f32>) -> Camera {
         framing: Framing::identity(),
         gain: [1.0; 3],
         character: Character::CLEAN,
+        key: Key::OFF,
         look,
     }
 }
@@ -1799,9 +1801,21 @@ fn the_grain_is_monochrome_and_signed() {
 /// with motion in it would want this every step, as the app does.
 fn feed_inputs(h: &Harness, params: &Params) {
     for (i, input) in params.inputs.iter().enumerate() {
-        let mut source =
-            Source::open(input, h.feedback.size()).unwrap_or_else(|e| panic!("input {i}: {e}"));
-        let frame = source.frame().expect("open() waits for the first frame");
+        let frame = match input {
+            // A capture device is real hardware this suite cannot demand —
+            // the webcam preset names /dev/video0. Its layer gets a
+            // stand-in of the scene such a preset expects, a bright subject
+            // on a dark backdrop, written deliberately here rather than
+            // decoded; the capture path itself is input.rs's to test.
+            Input::Capture { .. } => {
+                quartered_frame(h.feedback.size(), [[200; 3], [30; 3], [200; 3], [30; 3]])
+            }
+            _ => {
+                let mut source = Source::open(input, h.feedback.size())
+                    .unwrap_or_else(|e| panic!("input {i}: {e}"));
+                source.frame().expect("open() waits for the first frame")
+            }
+        };
         h.feedback.write_input(h.queue, i, &frame);
     }
 }
@@ -1840,6 +1854,7 @@ fn one_camera_on_one_input() -> Params {
             framing: Framing::identity(),
             gain: [1.0; 3],
             character: Character::CLEAN,
+            key: Key::OFF,
             look: vec![0.0, 1.0],
         }],
         monitors: vec![silent_monitor()],
@@ -1997,4 +2012,87 @@ fn a_camera_frames_an_input_the_way_it_frames_a_monitor() {
     // Just inside the shrunken image, and just outside it.
     assert!(img.at(0.3, 0.5) > 250.0, "inside {}", img.at(0.3, 0.5));
     assert!(img.at(0.2, 0.5) < 5.0, "outside {}", img.at(0.2, 0.5));
+}
+
+// ---- The keyer: what a camera's path refuses to hand on ------------------
+
+#[test]
+fn the_luma_key_cuts_the_dark_passes_the_bright_and_blends_the_edge() {
+    // One step of one keyed camera on one input, with quarters below the
+    // key's band, inside it, and above it: the backdrop vanishes, the
+    // subject arrives intact, and the middle lands part-way up — the soft
+    // edge asserted as an effect on the light, not as a shader detail. The
+    // key passes at 0.5 and has finished cutting one softness down at 0.3;
+    // the quarters' lumas are 0.16, 0.39 and 0.86.
+    let mut p = one_camera_on_one_input();
+    p.cameras[0].key = Key {
+        threshold: 0.5,
+        softness: 0.2,
+        ..Key::OFF
+    };
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    h.feedback.write_input(
+        h.queue,
+        0,
+        &quartered_frame((SIZE, SIZE), [[40; 3], [100; 3], [220; 3], [220; 3]]),
+    );
+    h.step_graph(&p);
+
+    let img = h.read();
+    let below = img.at(0.25, 0.25);
+    assert!(below < 3.0, "below the key, {below} survives");
+    let above = img.at(0.75, 0.75);
+    assert!((above - 220.0).abs() < 4.0, "above the key: {above}");
+    // Inside the band: attenuated but alive, which neither a hard cut at
+    // the threshold nor no key at all can produce.
+    let edge = img.at(0.75, 0.25);
+    assert!(
+        edge > 25.0 && edge < 70.0,
+        "the soft edge should blend 100 part-way down, not {edge}"
+    );
+}
+
+#[test]
+fn the_chroma_key_cuts_its_colour_and_spares_grey_and_the_far_hue() {
+    // A green sheet, keyed by its hue: the green quarters vanish while a
+    // grey of the same brightness — whose chroma is zero, whatever the key
+    // hue — and a magenta — whose chroma leans the other way — both arrive
+    // intact. The atan2 spells out green's chroma coordinates — transcribed
+    // from the decode axes, so a change of axes fails this loudly rather
+    // than following along.
+    let mut p = one_camera_on_one_input();
+    p.cameras[0].key = Key {
+        hue: (-0.5227f32).atan2(-0.2746),
+        tolerance: 0.2,
+        softness: 0.02,
+        ..Key::OFF
+    };
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    let (green, grey, magenta) = ([0, 200, 0], [200; 3], [200, 0, 200]);
+    h.feedback.write_input(
+        h.queue,
+        0,
+        &quartered_frame((SIZE, SIZE), [green, grey, green, magenta]),
+    );
+    h.step_graph(&p);
+
+    let img = h.read();
+    for (u, v) in [(0.25, 0.25), (0.75, 0.75)] {
+        let seen = img.at(u, v);
+        assert!(seen < 3.0, "the key colour at ({u}, {v}) survives: {seen}");
+    }
+    let grey_seen = img.at(0.75, 0.25);
+    assert!(
+        (grey_seen - 200.0).abs() < 4.0,
+        "grey was keyed: {grey_seen}"
+    );
+    let magenta_seen = img.rgb_at(0.25, 0.75);
+    assert!(
+        (magenta_seen[0] - 200.0).abs() < 4.0 && (magenta_seen[2] - 200.0).abs() < 4.0,
+        "the far hue was keyed: {magenta_seen:?}"
+    );
 }

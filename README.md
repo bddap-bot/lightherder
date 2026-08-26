@@ -141,6 +141,25 @@ sees, into a loop at 0.985 with the seed switched off: the trickle goes round
 seventy times before it fades, so every photon on that monitor came in from
 outside.
 
+### The keyer
+
+Each camera's path carries a keyer beside its gain and its character: what
+this path refuses to hand on. Two keys that multiply, both off by default. The
+**luma key** passes everything at or above its threshold and finishes cutting
+one softness below it, so a subject in front of a dark room feeds the rig and
+the room feeds nothing. The **chroma key** cuts the pixels leaning toward its
+key colour — named as a hue, the way this instrument names every colour —
+with a tolerance for how much of it a pixel may carry; at the top of its
+travel the key is off, so grey and the far hues always pass. All four are
+ordinary knobs: on the keys, mappable from a MIDI surface, saved in slots,
+and as automatable as the rest of the panel. On the camera rather than on the
+input, because that is where the gain and the framing already are — a camera
+aimed at an input through its key is the webcam rig, and a key on a loop
+camera is a gate on the feedback itself, which is its own instrument to play.
+
+The `webcam` preset is `external` with the bars swapped for
+`/dev/video0` and the luma key on: plug a camera in, recall, play.
+
 A soft spot seeds the loop, since a loop with gain below 1.0 and nothing
 feeding it decays to black. The spot sits off-centre on purpose: a radially
 symmetric spot in the middle is a fixed point of rotation, so a centred seed
@@ -243,11 +262,12 @@ Out of the box, with no configuration:
 So the left hand works one monitor, the right hand one camera, and the top
 fader is the switcher crosspoint joining the two the hands are on. M1 and
 M2 move which. Nothing is bound to quit: a slipped finger during a performance
-must not be able to stop the instrument. Four of the twenty knobs are not on
-the surface, and all four are trims rather than things a hand sweeps: the
-three per-channel gain offsets, which colour a rigid gain that is itself on a
-rotary, and the bloom radius, which sizes a halo whose amount is. They stay on
-the keys.
+must not be able to stop the instrument. Eight of the twenty-four knobs are
+not on the surface, which has sixteen controls and no more: the three
+per-channel gain offsets, which colour a rigid gain that is itself on a
+rotary; the bloom radius, which sizes a halo whose amount is; and the keyer's
+four, which wait for a hand that keys more than it bleeds and swaps this map
+for its own. They all stay on the keys.
 
 **A fader does not take its knob over until it has passed through where the
 knob already is.** A fader sends where it is standing, so without that,
@@ -306,6 +326,7 @@ nix-shell --run "cargo run --release kinetic"            # the camera on a motor
 nix-shell --run "cargo run --release crossed"            # two crossed structures
 nix-shell --run "cargo run --release insanity"           # four, all-to-all
 nix-shell --run "cargo run --release external"           # a test pattern driving the loop
+nix-shell --run "cargo run --release webcam"             # /dev/video0 through the luma key
 nix-shell --run "cargo run --release my-graph.toml"      # your own
 ```
 
@@ -439,6 +460,10 @@ positions, so the punctuation below assumes a US layout.
 | `j` `k` | bloom radius |
 | `y` `u` | chroma bleed |
 | `i` `o` | noise, i.e. the grain |
+| `b` `l` | key threshold: the luma the path passes in full |
+| `f9` `f10` | key softness, both keys' soft edge |
+| `home` `end` | key hue: the colour the chroma key cuts |
+| `pgdn` `pgup` | key tolerance; at the top, the chroma key is off |
 | `;` `'` | seed |
 | `a` `s` | hue, per pass |
 | `d` `f` | saturation |

@@ -129,6 +129,13 @@ struct Tap {
     /// scanline, mapped the same way. zw: the fraction of the light the lens
     /// scatters, and padding.
     bleed: [f32; 4],
+    /// The camera's keyer: x luma threshold, y softness, z chroma tolerance,
+    /// w padding.
+    key: [f32; 4],
+    /// xyz: the RGB row measuring the key colour in a sample — zeroed when
+    /// the tolerance stands at its off rail, so the default keys nothing
+    /// however bright the loop runs. See `params::key_weights`.
+    keyvec: [f32; 4],
 }
 
 /// Per-monitor uniforms, mirrored by hand in `shaders/feedback.wgsl`, which
@@ -519,12 +526,28 @@ impl Feedback {
                 // scanline is across the camera's image.
                 let halo = step(camera.character.bloom_radius);
                 let bleed = step(camera.character.chroma_bleed);
+                // The chroma key is disarmed outright at its rail rather
+                // than out-thresholded: the smoothstep alone would hold off
+                // frames, but a loop signal can run past white and project
+                // past any finite tolerance.
+                let keyvec = if camera.key.tolerance >= crate::params::Key::TOLERANT {
+                    [0.0; 3]
+                } else {
+                    crate::params::key_weights(camera.key.hue)
+                };
                 taps[count] = Tap {
                     row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
                     row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
                     weight: [w * gain[0], w * gain[1], w * gain[2], src as f32],
                     halo,
                     bleed: [bleed[0], bleed[1], camera.character.bloom, 0.0],
+                    key: [
+                        camera.key.threshold,
+                        camera.key.softness,
+                        camera.key.tolerance,
+                        0.0,
+                    ],
+                    keyvec: [keyvec[0], keyvec[1], keyvec[2], 0.0],
                 };
                 count += 1;
             }
