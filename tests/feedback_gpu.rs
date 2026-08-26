@@ -60,6 +60,7 @@ fn graph(s: &Single) -> Params {
         }],
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
+        motion: Vec::new(),
     }
 }
 
@@ -1123,6 +1124,7 @@ fn the_routing_matrix_sends_each_camera_across() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
+        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1193,6 +1195,7 @@ fn mix_weights_scale_each_camera_s_contribution() {
         }],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 0.0]],
+        motion: Vec::new(),
     };
     h.step_graph(&p);
     let seed = h.feedback.seed_uv();
@@ -1231,6 +1234,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![1.0], vec![0.0]],
+        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1267,6 +1271,7 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
             .collect(),
         inputs: Vec::new(),
         routing: vec![vec![0.25; 4]; 4],
+        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
         return;
@@ -1590,6 +1595,7 @@ fn each_camera_carries_its_own_character() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1751,6 +1757,7 @@ fn one_camera_on_one_input() -> Params {
         monitors: vec![silent_monitor()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
         routing: vec![vec![1.0]],
+        motion: Vec::new(),
     }
 }
 
@@ -1815,6 +1822,7 @@ fn each_input_lands_on_its_own_layer() {
         monitors: vec![silent_monitor(), silent_monitor()],
         inputs: vec![Input::Pattern(Pattern::Bars), Input::Pattern(Pattern::Grid)],
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;

@@ -1,10 +1,13 @@
 //! The knobs on the instrument. No windowing, no GPU — a MIDI surface drives
 //! the same values a keyboard does.
 
-use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::affine::Framing;
 use crate::input::Input;
+use crate::motion::{Lfo, Shape};
 
 /// The colour controls on one monitor's front panel, in the order an analog
 /// signal meets them: chroma decode, video amplifier, phosphor.
@@ -238,6 +241,11 @@ pub struct Params {
     /// monitor `m` displays. A permutation matrix is a plain switcher; rows
     /// with several non-zero entries mix cameras on one monitor.
     pub routing: Vec<Vec<f32>>,
+    /// The knobs that turn themselves. Offsets on the values above rather
+    /// than a second copy of them, so this is state the way a knob's angle is
+    /// state — saved, recalled and edited like the rest of the panel.
+    #[serde(default)]
+    pub motion: Vec<Lfo>,
 }
 
 impl Default for Params {
@@ -249,10 +257,25 @@ impl Default for Params {
 /// Which camera and which monitor the knobs act on. Named fields on purpose:
 /// two bare `usize`s in a row would let a swapped pair compile and silently
 /// edit the wrong node.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Focus {
     pub camera: usize,
     pub monitor: usize,
+}
+
+impl Focus {
+    /// The half of the focus `knob` actually reads, with the other back at
+    /// zero. A monitor knob at camera 3 and the same knob at camera 0 turn
+    /// the very same value, so an automation list that told those apart would
+    /// hold two entries neither of which the keys could reliably find.
+    pub fn narrowed(self, knob: Knob) -> Focus {
+        if knob.is_camera() {
+            Focus { monitor: 0, ..self }
+        } else {
+            Focus { camera: 0, ..self }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -312,6 +335,9 @@ impl Knob {
         Knob::Headroom,
     ];
 
+    /// The one name a knob has: in the printed help, in an error, and in a
+    /// config file — [`Knob`]'s serde is this function and its inverse, so a
+    /// knob cannot be called one thing on the terminal and another on disk.
     pub const fn name(self) -> &'static str {
         match self {
             Knob::Zoom => "zoom",
@@ -334,6 +360,10 @@ impl Knob {
             Knob::Gamma => "gamma",
             Knob::Headroom => "headroom",
         }
+    }
+
+    pub fn from_name(name: &str) -> Option<Knob> {
+        Knob::ALL.into_iter().find(|knob| knob.name() == name)
     }
 
     /// Whether the knob lives on a camera or on a monitor, which is what
@@ -429,6 +459,25 @@ impl Knob {
     }
 }
 
+/// By name, not by variant: a config file naming a knob should read the way
+/// the help prints it, and deriving would give it a second spelling to drift
+/// from.
+impl Serialize for Knob {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Knob {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Knob, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Knob::from_name(&name).ok_or_else(|| {
+            let known = Knob::ALL.map(Knob::name).join(", ");
+            serde::de::Error::custom(format!("no knob called {name:?}; there are {known}"))
+        })
+    }
+}
+
 impl Params {
     /// Everything a camera can look at: the monitors, then the inputs. The
     /// index space of [`Camera::look`] and the layer count of the source
@@ -456,6 +505,67 @@ impl Params {
             Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
             Limit::Wrap => wrap_pi(*field + delta),
         };
+    }
+
+    /// The graph as the automation has it `seconds` into the performance:
+    /// every knob offset by whatever is driving it, and nothing else changed.
+    ///
+    /// Recomputed from the stored knobs rather than applied to them, so a
+    /// swing cannot compound and turning one off leaves its knob exactly
+    /// where the hand did. A graph with no automation is handed straight
+    /// back, which is what makes this free for the presets that have none.
+    pub fn modulated(&self, seconds: f64) -> Cow<'_, Params> {
+        if self.motion.is_empty() {
+            return Cow::Borrowed(self);
+        }
+        let mut out = self.clone();
+        for lfo in &self.motion {
+            out.nudge(lfo.knob, lfo.offset(seconds), lfo.focus);
+        }
+        Cow::Owned(out)
+    }
+
+    /// The automation on `knob` at `focus`, if any. The first: a config may
+    /// stack several on one knob and they sum — two offsets are a beat, not a
+    /// fight — but the keys drive one.
+    pub fn motion_of(&self, knob: Knob, focus: Focus) -> Option<&Lfo> {
+        self.motion_index(knob, focus).map(|i| &self.motion[i])
+    }
+
+    fn motion_index(&self, knob: Knob, focus: Focus) -> Option<usize> {
+        let focus = focus.narrowed(knob);
+        self.motion
+            .iter()
+            .position(|lfo| lfo.knob == knob && lfo.focus == focus)
+    }
+
+    /// The automation switch, one key: off, then a sine, then a ramp, then
+    /// off again. A cycle rather than a switch and a shape selector, because
+    /// with two shapes those are the same three states and one binding is
+    /// cheaper than two.
+    pub fn motion_cycle(&mut self, knob: Knob, focus: Focus) {
+        match self.motion_index(knob, focus) {
+            None => self.motion.push(Lfo::new(knob, focus, Shape::Sine)),
+            Some(i) => match self.motion[i].shape {
+                Shape::Sine => self.motion[i].shape = Shape::Ramp,
+                Shape::Ramp => drop(self.motion.remove(i)),
+            },
+        }
+    }
+
+    /// Move the rate of the automation on `knob` by `steps` presses. Nothing
+    /// driving that knob is nothing to speed up, not an error.
+    pub fn motion_rate(&mut self, knob: Knob, focus: Focus, steps: f32) {
+        if let Some(i) = self.motion_index(knob, focus) {
+            self.motion[i].scale_rate(steps);
+        }
+    }
+
+    /// Move its depth by `steps` presses.
+    pub fn motion_depth(&mut self, knob: Knob, focus: Focus, steps: f32) {
+        if let Some(i) = self.motion_index(knob, focus) {
+            self.motion[i].nudge_depth(steps);
+        }
     }
 
     /// The value a knob turns, for the knobs that are a single number.
@@ -497,6 +607,13 @@ impl Params {
     pub fn describe(&self, focus: Focus) -> String {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
+        // Every one of them, not the focused node's: automation the readout
+        // does not mention is a knob moving for no visible reason.
+        let motion: String = self
+            .motion
+            .iter()
+            .map(|lfo| format!("\n{}", lfo.describe()))
+            .collect();
         format!(
             // Two lines rather than one: at nineteen knobs a single line
             // wraps in a terminal, and consecutive presses stop lining up —
@@ -504,7 +621,7 @@ impl Params {
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
              bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}\n\
              mon {}/{}: seed {:.3}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             gamma {:.3}  headroom {:.3}",
+             gamma {:.3}  headroom {:.3}{}",
             focus.camera + 1,
             self.cameras.len(),
             cam.framing.zoom,
@@ -527,6 +644,7 @@ impl Params {
             mon.colour.contrast,
             mon.colour.gamma,
             mon.headroom,
+            motion,
         )
     }
 }
@@ -830,6 +948,149 @@ mod tests {
             for (weight, luma) in row.iter().zip(DECODE[0]) {
                 assert!((weight - luma as f32).abs() < 1e-5, "row {row:?}");
             }
+        }
+    }
+
+    #[test]
+    fn a_knob_is_the_same_name_on_disk_as_on_the_terminal() {
+        for knob in Knob::ALL {
+            assert_eq!(Knob::from_name(knob.name()), Some(knob));
+            let written = toml::to_string(&Lfo::new(knob, Focus::default(), Shape::Sine)).unwrap();
+            assert!(
+                written.contains(&format!("knob = \"{}\"", knob.name())),
+                "{knob:?} writes itself as {written}"
+            );
+        }
+        assert_eq!(Knob::from_name("no such knob"), None);
+    }
+
+    #[test]
+    fn no_two_knobs_share_a_name() {
+        // The name is the knob's identity on disk, so a duplicate would make
+        // one of the two unreachable from a config file.
+        for (i, knob) in Knob::ALL.iter().enumerate() {
+            let clash = Knob::ALL[..i]
+                .iter()
+                .any(|other| other.name() == knob.name());
+            assert!(!clash, "{knob:?} shares its name");
+        }
+    }
+
+    #[test]
+    fn a_focus_narrows_to_the_half_its_knob_reads() {
+        let focus = Focus {
+            camera: 3,
+            monitor: 5,
+        };
+        for knob in Knob::ALL {
+            let narrowed = focus.narrowed(knob);
+            if knob.is_camera() {
+                assert_eq!(
+                    narrowed,
+                    Focus {
+                        camera: 3,
+                        monitor: 0
+                    }
+                );
+            } else {
+                assert_eq!(
+                    narrowed,
+                    Focus {
+                        camera: 0,
+                        monitor: 5
+                    }
+                );
+            }
+            // Narrowing twice is narrowing once, which is what lets the keys
+            // and `validate` agree on one spelling of a target.
+            assert_eq!(narrowed.narrowed(knob), narrowed);
+        }
+    }
+
+    #[test]
+    fn the_automation_switch_cycles_and_the_keys_find_what_it_made() {
+        let mut params = crate::config::crossed();
+        let focus = Focus {
+            camera: 1,
+            monitor: 1,
+        };
+        for knob in Knob::ALL {
+            params.motion_cycle(knob, focus);
+            let lfo = params.motion_of(knob, focus).expect("switched on");
+            assert_eq!(lfo.shape, Shape::Sine);
+            // Found from the other half of the focus too: a monitor knob's
+            // automation must not go missing because the camera focus moved.
+            let elsewhere = Focus {
+                camera: 0,
+                monitor: 0,
+            };
+            let moved = if knob.is_camera() {
+                Focus {
+                    monitor: 0,
+                    ..focus
+                }
+            } else {
+                Focus { camera: 0, ..focus }
+            };
+            assert!(params.motion_of(knob, moved).is_some());
+            assert_eq!(
+                params.motion_of(knob, elsewhere).is_some(),
+                moved == elsewhere
+            );
+
+            params.motion_cycle(knob, focus);
+            assert_eq!(params.motion_of(knob, focus).unwrap().shape, Shape::Ramp);
+            params.motion_cycle(knob, focus);
+            assert!(params.motion_of(knob, focus).is_none(), "{knob:?} stuck on");
+        }
+        assert!(params.motion.is_empty(), "the list is not being emptied");
+    }
+
+    #[test]
+    fn the_automation_keys_move_the_lfo_the_focus_names() {
+        let mut params = crate::config::crossed();
+        let (a, b) = (
+            Focus {
+                camera: 0,
+                monitor: 0,
+            },
+            Focus {
+                camera: 1,
+                monitor: 0,
+            },
+        );
+        params.motion_cycle(Knob::Zoom, a);
+        params.motion_cycle(Knob::Zoom, b);
+        let before = *params.motion_of(Knob::Zoom, b).unwrap();
+        params.motion_rate(Knob::Zoom, a, 3.0);
+        params.motion_depth(Knob::Zoom, a, -1.0);
+        let after = params.motion_of(Knob::Zoom, a).unwrap();
+        assert!(after.rate > before.rate && after.depth < before.depth);
+        assert_eq!(
+            params.motion_of(Knob::Zoom, b),
+            Some(&before),
+            "hit camera 2"
+        );
+        // A knob nothing is driving is nothing to speed up.
+        params.motion_rate(Knob::Hue, a, 3.0);
+        assert!(params.motion_of(Knob::Hue, a).is_none());
+    }
+
+    #[test]
+    fn the_log_line_shows_every_running_lfo() {
+        // Automation the readout does not mention is a knob moving for no
+        // reason a performer can see.
+        let mut params = crate::config::crossed();
+        for knob in Knob::ALL {
+            params.motion_cycle(knob, Focus::default());
+        }
+        let line = params.describe(Focus::default());
+        for knob in Knob::ALL {
+            assert!(
+                line.contains(&format!("motion: {}", knob.name())),
+                "{} is not in the readout",
+                knob.name()
+            );
         }
     }
 
