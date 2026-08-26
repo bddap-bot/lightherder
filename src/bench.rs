@@ -13,9 +13,10 @@
 //! graph whose inputs are drawn patterns — every one that ships — uploads
 //! them once and is timed whole.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::feedback::Feedback;
+use crate::gpu::Gpu;
 use crate::params::Params;
 use crate::present::Present;
 
@@ -45,23 +46,16 @@ const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 /// `resolution` is the monitors' size, and stands in for the display's as
 /// well: an instrument deployed to a 4K screen wants its bank at 4K, which is
 /// the case worth timing.
-pub fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> {
+pub async fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> {
     crate::feedback::bank_fits(params, resolution)?;
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: crate::BACKENDS,
-        ..wgpu::InstanceDescriptor::new_without_display_handle_from_env()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        ..Default::default()
-    }))
-    .map_err(|e| format!("no GPU adapter: {e}"))?;
+    // No display handle: nothing here is ever presented to one.
+    let Gpu {
+        adapter,
+        device,
+        queue,
+        ..
+    } = Gpu::open(None, "lightherder bench").await?;
     let name = adapter.get_info().name.clone();
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("lightherder bench"),
-        ..Default::default()
-    }))
-    .map_err(|e| format!("adapter {name} refused a device: {e}"))?;
 
     let (width, height) = resolution;
     let mut feedback = Feedback::new(&device, width, height, params);

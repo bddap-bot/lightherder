@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use web_time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -10,6 +11,7 @@ use winit::window::{Window, WindowId};
 
 use crate::cli::Cli;
 use crate::feedback::Feedback;
+use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::keys::{action_for, Action};
 use crate::midi::{Map, Midi};
@@ -26,14 +28,15 @@ fn borderless(fullscreen: bool) -> Option<winit::window::Fullscreen> {
 struct Live {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     feedback: Feedback,
     present: Present,
 }
 
 pub struct App {
+    /// Opened before the run loop starts, because on the web nothing may
+    /// block and `resumed` is not a place to wait for an adapter.
+    gpu: Gpu,
     params: Params,
     /// What Reset restores: the graph as it was loaded, not the single
     /// preset's knobs.
@@ -48,7 +51,7 @@ pub struct App {
     /// Where the automation's clock is read from. Not reset by Reset: a knob
     /// jumping back to where it was is what Reset is for, and a phase jumping
     /// with it would show up as a lurch in every LFO at once.
-    started: std::time::Instant,
+    started: Instant,
     /// The running external inputs, in `params.inputs` order, which is the
     /// order `Feedback::write_input` indexes them by.
     sources: Vec<Source>,
@@ -70,8 +73,38 @@ pub struct App {
     /// by the vertical blank, so this reads the refresh rate until a frame
     /// stops fitting inside one — which is the whole reason to print it.
     frames: u32,
-    metered: std::time::Instant,
+    metered: Instant,
     live: Option<Live>,
+}
+
+/// The window the instrument opens in. On the web it is the page's own
+/// canvas — the one the stylesheet has already stretched over the viewport,
+/// so "fullscreen" there is the page rather than anything winit does.
+#[cfg(target_arch = "wasm32")]
+fn attributes(_fullscreen: bool) -> winit::window::WindowAttributes {
+    use winit::platform::web::WindowAttributesExtWebSys;
+    Window::default_attributes().with_canvas(Some(crate::web::canvas()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn attributes(fullscreen: bool) -> winit::window::WindowAttributes {
+    Window::default_attributes()
+        .with_title("lightherder")
+        .with_fullscreen(borderless(fullscreen))
+}
+
+/// Hand the run loop over. Native gives it the thread, which it keeps until
+/// the instrument is closed; the browser owns its own loop, so there it is
+/// handed to the page and this returns at once.
+#[cfg(target_arch = "wasm32")]
+fn start(event_loop: EventLoop<()>, app: App) -> Result<(), Box<dyn std::error::Error>> {
+    winit::platform::web::EventLoopExtWebSys::spawn_app(event_loop, app);
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn start(event_loop: EventLoop<()>, mut app: App) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(event_loop.run_app(&mut app)?)
 }
 
 /// `params` is the loaded graph, already validated by `config::load`; `cli`
@@ -80,7 +113,11 @@ pub struct App {
 /// The inputs are opened before the window is, so a file that is not there or
 /// a device that will not open says so on the terminal instead of behind a
 /// black layer of a running instrument.
-pub fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+///
+/// Async because opening a GPU is, and because the one caller that cannot
+/// block on it — the browser — is the reason the adapter is opened out here
+/// instead of inside `resumed`.
+pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     crate::feedback::bank_fits(&params, cli.resolution)?;
     let sources = params
         .inputs
@@ -105,72 +142,55 @@ pub fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Error>> 
     let midi = Midi::new(map)?;
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    Ok(event_loop.run_app(&mut App {
-        initial: params.clone(),
-        params,
-        focus: Focus::default(),
-        // So `p` does something worth seeing before any knob has been turned.
-        touched: Knob::Rotation,
-        started: std::time::Instant::now(),
-        sources,
-        slots,
-        midi,
-        shift: false,
-        resolution: cli.resolution,
-        fullscreen: cli.fullscreen,
-        frames: 0,
-        metered: std::time::Instant::now(),
-        live: None,
-    })?)
+    // Through the event loop's own display connection rather than a window's:
+    // the adapter is chosen before there is a window, and wgpu forbids a
+    // surface created against a different one later.
+    let gpu = Gpu::open(Some(event_loop.owned_display_handle()), "lightherder").await?;
+    start(
+        event_loop,
+        App {
+            gpu,
+            initial: params.clone(),
+            params,
+            focus: Focus::default(),
+            // So `p` does something worth seeing before any knob has been turned.
+            touched: Knob::Rotation,
+            started: Instant::now(),
+            sources,
+            slots,
+            midi,
+            shift: false,
+            resolution: cli.resolution,
+            fullscreen: cli.fullscreen,
+            frames: 0,
+            metered: Instant::now(),
+            live: None,
+        },
+    )
 }
 
 impl Live {
-    async fn new(
+    fn new(
         event_loop: &ActiveEventLoop,
+        gpu: &Gpu,
         params: &Params,
         resolution: (u32, u32),
         fullscreen: bool,
     ) -> Live {
         let window = Arc::new(
             event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("lightherder")
-                        .with_fullscreen(borderless(fullscreen)),
-                )
+                .create_window(attributes(fullscreen))
                 .expect("create window"),
         );
         window.set_cursor_visible(!fullscreen);
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: crate::BACKENDS,
-            // Some backends need a display handle before any surface exists.
-            ..wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()))
-        });
-        let surface = instance
+        let surface = gpu
+            .instance
             .create_surface(window.clone())
             .expect("create surface");
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            })
-            .await
-            .expect("no GPU adapter can draw to this window");
-        log::info!("adapter: {:?}", adapter.get_info());
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("lightherder"),
-                ..Default::default()
-            })
-            .await
-            .expect("request device");
-
         let size = window.inner_size();
         let mut config = surface
-            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+            .get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1))
             .expect("adapter cannot draw to this surface");
         // The vertical blank is this instrument's clock, and not for smoothness:
         // the loop evolves one pass per frame, so the frame rate is a tempo. A
@@ -182,7 +202,7 @@ impl Live {
         // taken. Fifo is the one every backend must support.
         config.present_mode = wgpu::PresentMode::Fifo;
         let format = config.format;
-        surface.configure(&device, &config);
+        surface.configure(&gpu.device, &config);
         log::info!(
             "window {}x{} {}, presenting {:?} at {format:?}",
             config.width,
@@ -197,30 +217,28 @@ impl Live {
 
         // wgpu zero-initialises textures, so the monitors start black without
         // an explicit clear.
-        let feedback = Feedback::new(&device, resolution.0, resolution.1, params);
-        let present = Present::new(&device, &feedback, format);
+        let feedback = Feedback::new(&gpu.device, resolution.0, resolution.1, params);
+        let present = Present::new(&gpu.device, &feedback, format);
 
         Live {
             window,
             surface,
-            device,
-            queue,
             config,
             feedback,
             present,
         }
     }
 
-    fn resize(&mut self, width: u32, height: u32) {
+    fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        self.surface.configure(&gpu.device, &self.config);
     }
 
-    fn render(&mut self, params: &Params, sources: &mut [Source]) {
+    fn render(&mut self, gpu: &Gpu, params: &Params, sources: &mut [Source]) {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -230,7 +248,7 @@ impl Live {
             // compositor restarts. Reconfiguring and skipping one frame is the
             // whole recovery.
             Cst::Outdated | Cst::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                self.surface.configure(&gpu.device, &self.config);
                 return;
             }
             other => {
@@ -245,19 +263,19 @@ impl Live {
         // Before the cameras read the bank, not after.
         for (i, source) in sources.iter_mut().enumerate() {
             if let Some(frame) = source.frame() {
-                self.feedback.write_input(&self.queue, i, &frame);
+                self.feedback.write_input(&gpu.queue, i, &frame);
             }
         }
 
-        self.feedback.step(&self.device, &self.queue, params);
+        self.feedback.step(&gpu.device, &gpu.queue, params);
         self.present.draw(
-            &self.device,
-            &self.queue,
+            &gpu.device,
+            &gpu.queue,
             &target,
             (self.config.width, self.config.height),
             &self.feedback,
         );
-        self.queue.present(frame);
+        gpu.queue.present(frame);
     }
 }
 
@@ -309,7 +327,7 @@ impl App {
         let fps = self.frames as f64 / elapsed.as_secs_f64();
         log::info!("{fps:.0} fps ({:.1} ms/frame)", 1e3 / fps);
         self.frames = 0;
-        self.metered = std::time::Instant::now();
+        self.metered = Instant::now();
     }
 
     /// One action, from wherever it came. The keyboard and the control
@@ -385,7 +403,7 @@ impl App {
             }
             Action::Clear => {
                 if let Some(live) = self.live.as_mut() {
-                    live.feedback.clear(&live.device, &live.queue);
+                    live.feedback.clear(&self.gpu.device, &self.gpu.queue);
                     log::info!("cleared");
                 }
             }
@@ -406,13 +424,13 @@ impl ApplicationHandler for App {
         if self.live.is_some() {
             return;
         }
-        // The one place this program blocks.
-        let live = pollster::block_on(Live::new(
+        let live = Live::new(
             event_loop,
+            &self.gpu,
             &self.params,
             self.resolution,
             self.fullscreen,
-        ));
+        );
         log::info!(
             "{} monitors of {}x{}, {} cameras, {} inputs",
             self.params.monitors.len(),
@@ -427,7 +445,7 @@ impl ApplicationHandler for App {
         // adapter, the device and the pipelines were built — half a second of
         // startup inside the first window would report a rate the instrument
         // never ran at, and that first line is what a deploy is read off.
-        self.metered = std::time::Instant::now();
+        self.metered = Instant::now();
         self.frames = 0;
         self.live = Some(live);
     }
@@ -438,7 +456,7 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
             WindowEvent::Resized(size) => {
                 if let Some(live) = self.live.as_mut() {
-                    live.resize(size.width, size.height);
+                    live.resize(&self.gpu, size.width, size.height);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -464,7 +482,7 @@ impl ApplicationHandler for App {
                 // driving them at this instant, and `self.params` — what the
                 // keys turn and what a preset slot saves — is untouched.
                 let now = self.started.elapsed().as_secs_f64();
-                live.render(&self.params.modulated(now), &mut self.sources);
+                live.render(&self.gpu, &self.params.modulated(now), &mut self.sources);
                 live.window.request_redraw();
                 self.meter();
             }
