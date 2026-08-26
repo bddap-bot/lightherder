@@ -11,7 +11,7 @@ character — the lens's bloom, composite chroma bleed, grain — and each monit
 its own amplifier rail. Cameras can also be aimed at things that are not
 monitors: test patterns, video files, capture devices. Any knob can be set
 turning itself, and the whole panel saves to and recalls from eight slots.
-Later increments add MIDI control and a browser build.
+Later increments add a browser build.
 
 ## How it works
 
@@ -218,6 +218,82 @@ inputs — so a slot with a different number of monitors, or different inputs,
 is refused with the reason; start it from the command line with that file instead. Cameras,
 routing, every knob and all the automation are free to differ.
 
+## The control surface
+
+The instrument is played from a **Korg nanoKONTROL2**, plugged in whenever —
+before it starts or halfway through a piece. There is nothing to set up: while
+there is no surface, the app reads `/dev/snd` once a second looking for one
+whose card is named in `/proc/asound/cards`, and when the cable comes out the
+read ends and it goes back to looking. ALSA raw MIDI and no library — a
+controller is `/dev/snd/midiC<card>D0`, and reading it gives the wire bytes.
+
+Out of the box, with no configuration:
+
+| control | is |
+|---|---|
+| faders 1–8 | the focused **monitor**: seed, hue, saturation, brightness, contrast, gamma, headroom, loop gain |
+| rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, bloom, bloom radius, chroma bleed, noise |
+| S 1–8 | recall preset slot 1–8 |
+| R 1–8 | store preset slot 1–8 |
+| M 1–4 | next camera, next monitor, blank the monitors, reset |
+| ▶ | automation on the last control touched: off / sine / ramp |
+| ◀◀ ▶▶ | its rate, slower and faster |
+| ⏮ ⏭ | its swing, narrower and wider |
+
+So the left hand works one monitor and the right hand one camera, and M1 and
+M2 move which. Nothing is bound to quit: a slipped finger during a performance
+must not be able to stop the instrument. The three per-channel gain trims are
+the only knobs not on the surface — there are nineteen knobs and sixteen
+controls, and those three trim a rigid gain that is itself on a fader.
+
+**A fader does not take its knob over until it has passed through where the
+knob already is.** A fader sends where it is standing, so without that,
+plugging in mid-piece throws every knob to wherever its fader was left — with
+the headroom fader slamming a monitor to white. Sweep the fader and it picks
+its knob up on the way past, and from then on the fader is the knob. It lets
+go on an unplug and on a recall, which are the two ways the panel moves
+without a fader moving with it.
+
+The buttons are read on the way down, which assumes the surface's buttons are
+**momentary** rather than latching — Korg's editor calls it Button Behavior.
+A latching button plays on every second press.
+
+### Mapping config
+
+`$XDG_CONFIG_HOME/lightherder/midi.toml`, beside the preset slots. If it is not
+there you get the layout above; if it is there and will not load, the
+instrument says why and does not start.
+
+```toml
+# Matched case-insensitively against the card's line in /proc/asound/cards.
+device = "nanoKONTROL"
+
+[[fader]]
+cc = 0
+knob = "hue"        # any knob name the printed help uses
+
+[[button]]
+cc = 41
+key = "p"           # any key label the printed help uses
+
+[[button]]
+cc = 64
+key = "shift f1"
+```
+
+A fader names a **knob** and spans its whole travel — for the two knobs that
+wrap, rotation and hue, that is one full revolution from bottom to top. A
+button names a **key**, spelled the way the startup help spells it, and does
+exactly what pressing that key does. Naming a key rather than an action of its
+own is what keeps the surface from growing a second vocabulary beside the
+keyboard's: everything a button can reach is on the help the instrument
+already prints, and a binding added to the keys is playable from the panel the
+same day.
+
+Every channel is listened to, so a surface set to some other MIDI channel
+still works. A control number may only be bound once, and a key label that no
+key answers to is refused at load with the list of the ones that do.
+
 ## Run it
 
 ```
@@ -291,7 +367,7 @@ layout.
 The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (seed, colour and headroom); `n` and `m` walk the two focuses
 through the graph, and the log line names them. Routing and splitter weights
-are config, not knobs — the MIDI increment puts them under fingers.
+are config, not knobs, so nothing on the surface reaches them yet.
 
 `p` acts on the last knob turned rather than on a switch of its own, because
 nineteen knobs would otherwise want nineteen switches and the knob just swept
@@ -364,3 +440,18 @@ after ten thousand modulated frames, and every knob in the instrument driven
 at its widest swing without putting the graph anywhere `validate` refuses.
 The slots round-trip every preset through a real file, and a slot the
 instrument never wrote is validated like any other config.
+
+The surface is tested without one plugged in, at every layer and then through
+all of them at once. The decoder against the ways a fader sweep actually
+arrives — three bytes split across reads, running status with the status byte
+left off, a clock byte landing between a control number and its value, a scene
+dump that must not read as a hundred knob moves, and notes and bends that are
+not knobs. The pickup against a fader that has to reach its knob before it
+moves it, one already standing on it, and one that loses its grip on an
+unplug. The map against a duplicate binding, a key nothing answers to, and a
+literal file rather than a round trip, because a round trip agrees with itself
+whatever the keys are called. The card search against a `/proc/asound/cards`
+with two other cards that also have raw MIDI devices. And the whole path —
+discovery, the open, the reader thread, the decode, the map and the pickup —
+against a device that is not there when the instrument starts, appears, sends
+a sweep down a pipe, and goes away again, which is what hot-plug is.
