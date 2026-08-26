@@ -25,6 +25,7 @@ impl Present {
             monitor.layout(),
             "fs_present",
             format,
+            None,
             "present",
         );
         Present { pipeline }
@@ -34,6 +35,9 @@ impl Present {
     /// cell that keeps the monitor's aspect ratio; the rest of the target
     /// stays black. Stretching instead would undo the aspect correction the
     /// sampling transform and the seed spot both go to trouble to maintain.
+    ///
+    /// `overlay`, when shown, rides the same pass after the monitors: it is
+    /// a caption over the picture, not a second way of drawing one.
     pub fn draw(
         &self,
         device: &wgpu::Device,
@@ -41,6 +45,7 @@ impl Present {
         target: &wgpu::TextureView,
         target_size: (u32, u32),
         monitors: &Feedback,
+        overlay: Option<&crate::overlay::Overlay>,
     ) {
         let (cols, rows) = grid(monitors.monitors());
         let cell = (target_size.0 / cols, target_size.1 / rows);
@@ -85,6 +90,9 @@ impl Present {
                 // carries its own layer index for fs_present.
                 pass.set_bind_group(0, monitors.bind_group(), &[monitors.uniform_offset(m)]);
                 pass.draw(0..3, 0..1);
+            }
+            if let Some(overlay) = overlay {
+                overlay.draw(&mut pass, target_size);
             }
         }
         queue.submit([encoder.finish()]);

@@ -78,7 +78,7 @@ pub async fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> 
 
     let frame = |feedback: &mut Feedback| {
         feedback.step(&device, &queue, params);
-        present.draw(&device, &queue, &view, resolution, feedback);
+        present.draw(&device, &queue, &view, resolution, feedback, None);
     };
     for _ in 0..WARMUP {
         frame(&mut feedback);

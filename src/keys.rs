@@ -34,6 +34,8 @@ pub enum Action {
     Clear,
     /// Cover the display, or stop covering it.
     Fullscreen,
+    /// Show or hide the controls overlay drawn over the picture.
+    Overlay,
     Quit,
 }
 
@@ -122,7 +124,11 @@ const AXES: &[Axis] = &[
     axis(Knob::Route, KeyCode::Slash, "/", KeyCode::Backslash, "\\"),
 ];
 
-const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
+/// Each command's last column is the label the on-screen overlay prints
+/// beside the control — at most two words, which is the ceiling for
+/// text on the panel. It lives here beside the full description so the two
+/// name the same action or fail the same test, never a table apart.
+const COMMANDS: &[(KeyCode, &str, Action, &str, &str)] = &[
     // The automation, on the last knob turned rather than on a knob of its
     // own: twenty knobs would otherwise need twenty switches, and the
     // knob a performer just swept is the one they want to set moving.
@@ -131,57 +137,81 @@ const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
         "p",
         Action::Motion,
         "the last knob turned: off / sine / ramp",
+        "motion",
     ),
     (
         KeyCode::Digit7,
         "7",
         Action::MotionRate(-1.0),
         "its rate, slower",
+        "rate -",
     ),
     (
         KeyCode::Digit8,
         "8",
         Action::MotionRate(1.0),
         "its rate, faster",
+        "rate +",
     ),
     (
         KeyCode::Digit9,
         "9",
         Action::MotionDepth(-1.0),
         "its swing, narrower",
+        "swing -",
     ),
     (
         KeyCode::Digit0,
         "0",
         Action::MotionDepth(1.0),
         "its swing, wider",
+        "swing +",
     ),
     (
         KeyCode::KeyN,
         "n",
         Action::NextCamera,
         "focus the next camera",
+        "cam >",
     ),
     (
         KeyCode::KeyM,
         "m",
         Action::NextMonitor,
         "focus the next monitor",
+        "mon >",
     ),
     (
         KeyCode::Space,
         "space",
         Action::Clear,
         "blank every monitor",
+        "blank",
     ),
-    (KeyCode::KeyR, "r", Action::Reset, "reset every knob"),
+    (
+        KeyCode::KeyR,
+        "r",
+        Action::Reset,
+        "reset every knob",
+        "reset",
+    ),
     (
         KeyCode::F11,
         "f11",
         Action::Fullscreen,
         "cover the display, or stop",
+        "fullscreen",
     ),
-    (KeyCode::Escape, "esc", Action::Quit, "quit"),
+    // Backquote because it is the traditional lid over a console, and the
+    // last unclaimed key in easy reach of a resting hand.
+    (
+        KeyCode::Backquote,
+        "`",
+        Action::Overlay,
+        "the controls overlay, on or off",
+        "help",
+    ),
+    (KeyCode::Escape, "esc", Action::Quit, "quit", "quit"),
 ];
 
 const fn axis(
@@ -219,8 +249,8 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
     }
     COMMANDS
         .iter()
-        .find(|(bound, _, _, _)| *bound == key)
-        .map(|(_, _, action, _)| *action)
+        .find(|(bound, _, _, _, _)| *bound == key)
+        .map(|(_, _, action, _, _)| *action)
 }
 
 /// Every key label the help prints, in the order it prints them.
@@ -232,7 +262,7 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
 pub fn labels() -> impl Iterator<Item = &'static str> {
     AXES.iter()
         .flat_map(|axis| [axis.down.1, axis.up.1])
-        .chain(COMMANDS.iter().map(|(_, label, _, _)| *label))
+        .chain(COMMANDS.iter().map(|(_, label, _, _, _)| *label))
         .chain(SLOT_KEYS.iter().map(|(_, label)| *label))
 }
 
@@ -247,7 +277,7 @@ pub fn action_for_label(label: &str) -> Option<Action> {
     let key = AXES
         .iter()
         .flat_map(|axis| [axis.down, axis.up])
-        .chain(COMMANDS.iter().map(|(key, label, _, _)| (*key, *label)))
+        .chain(COMMANDS.iter().map(|(key, label, _, _, _)| (*key, *label)))
         .chain(SLOT_KEYS.iter().copied())
         .find(|(_, bound)| *bound == label)?
         .0;
@@ -276,8 +306,35 @@ pub fn describes(label: &str) -> Option<String> {
     }
     COMMANDS
         .iter()
-        .find(|(_, bound, _, _)| *bound == bare)
-        .map(|(_, _, _, what)| (*what).to_string())
+        .find(|(_, bound, _, _, _)| *bound == bare)
+        .map(|(_, _, _, what, _)| (*what).to_string())
+}
+
+/// What the key spelled `label` does, in the two words the on-screen overlay
+/// has room for. The same tables as [`describes`], read for their short
+/// column — so a control cannot be captioned one thing on the overlay and
+/// another on the card. `None` for a label no table claims.
+pub fn short(label: &str) -> Option<String> {
+    let (shift, bare) = match label.strip_prefix("shift ") {
+        Some(rest) => (true, rest),
+        None => (false, label),
+    };
+    if let Some(slot) = SLOT_KEYS.iter().position(|(_, bound)| *bound == bare) {
+        let what = if shift { "save" } else { "slot" };
+        return Some(format!("{what} {}", slot + 1));
+    }
+    for axis in AXES {
+        if axis.down.1 == bare {
+            return Some(format!("{} -", axis.knob.name()));
+        }
+        if axis.up.1 == bare {
+            return Some(format!("{} +", axis.knob.name()));
+        }
+    }
+    COMMANDS
+        .iter()
+        .find(|(_, bound, _, _, _)| *bound == bare)
+        .map(|(_, _, _, _, short)| (*short).to_string())
 }
 
 pub fn help() -> String {
@@ -286,7 +343,7 @@ pub fn help() -> String {
         let keys = format!("{} / {}", axis.down.1, axis.up.1);
         out.push_str(&format!("  {keys:<12} {} down / up\n", axis.knob.name()));
     }
-    for (_, label, _, what) in COMMANDS {
+    for (_, label, _, what, _) in COMMANDS {
         out.push_str(&format!("  {label:<12} {what}\n"));
     }
     // Off the table's own labels, like the two above it: a slot rebound to a
@@ -307,7 +364,7 @@ mod tests {
     fn every_key() -> Vec<KeyCode> {
         AXES.iter()
             .flat_map(|a| [a.down.0, a.up.0])
-            .chain(COMMANDS.iter().map(|(key, _, _, _)| *key))
+            .chain(COMMANDS.iter().map(|(key, _, _, _, _)| *key))
             .chain(SLOT_KEYS.iter().map(|(key, _)| *key))
             .collect()
     }
@@ -468,6 +525,38 @@ mod tests {
     }
 
     #[test]
+    fn every_label_has_a_short_caption_and_it_names_the_same_action() {
+        // The overlay captions a button by its key's short; a label with no
+        // short is a lit control with nothing written on it. Two words at
+        // most, which is the ceiling for text on the panel — the
+        // axes are exempt only where the knob's own name already spends two,
+        // and the sign rides along.
+        for label in labels() {
+            for label in [label.to_string(), format!("shift {label}")] {
+                let short = short(&label).unwrap_or_else(|| panic!("{label}: no caption"));
+                assert!(!short.is_empty(), "{label}: an empty caption");
+            }
+        }
+        assert_eq!(short("f3").as_deref(), Some("slot 3"));
+        assert_eq!(short("shift f3").as_deref(), Some("save 3"));
+        assert_eq!(short("=").as_deref(), Some("zoom +"));
+        assert_eq!(short("-").as_deref(), Some("zoom -"));
+        assert_eq!(short("space").as_deref(), Some("blank"));
+        assert_eq!(short("p").as_deref(), Some("motion"));
+        assert_eq!(short("`").as_deref(), Some("help"));
+        assert_eq!(short("wiggle"), None);
+    }
+
+    #[test]
+    fn the_overlay_toggle_is_reachable_from_keyboard_and_label_alike() {
+        assert_eq!(action_for(KeyCode::Backquote, false), Some(Action::Overlay));
+        // Held shift must not hide the help from a hand that happens to be
+        // storing a slot with the other.
+        assert_eq!(action_for(KeyCode::Backquote, true), Some(Action::Overlay));
+        assert_eq!(action_for_label("`"), Some(Action::Overlay));
+    }
+
+    #[test]
     fn a_label_reaches_the_same_action_the_key_does() {
         assert_eq!(action_for_label("p"), Some(Action::Motion));
         assert_eq!(action_for_label("space"), Some(Action::Clear));
@@ -510,7 +599,7 @@ mod tests {
                 assert_eq!(action_for_label(label), action_for(key, false));
             }
         }
-        for (key, label, _, _) in COMMANDS {
+        for (key, label, _, _, _) in COMMANDS {
             assert_eq!(action_for_label(label), action_for(*key, false));
         }
         for (key, label) in SLOT_KEYS {

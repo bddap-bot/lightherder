@@ -258,6 +258,7 @@ Out of the box, with no configuration:
 | ▶ | automation on the last control touched: off / sine / ramp |
 | ◀◀ ▶▶ | its rate, slower and faster |
 | ⏮ ⏭ | its swing, narrower and wider |
+| ⟳ cycle | the on-screen controls overlay, on or off |
 
 So the left hand works one monitor, the right hand one camera, and the top
 fader is the switcher crosspoint joining the two the hands are on. M1 and
@@ -446,8 +447,11 @@ bytes a texel, half a gigabyte for `insanity` at 4K, and refused past two.
 
 The binding list prints on startup, together with the control surface under
 whatever map is in force; `--cheatsheet` prints the same card without starting
-anything. Every knob logs its new value on change. Keys are physical
-positions, so the punctuation below assumes a US layout.
+anything. On the glass, `` ` `` — or the surface's cycle button — toggles a
+controls overlay in the bottom-right corner: the panel drawn as it is
+actually mapped, each control captioned in a couple of words. Every knob logs
+its new value on change. Keys are physical positions, so the punctuation
+below assumes a US layout.
 
 | key | effect |
 | --- | --- |
@@ -482,6 +486,7 @@ positions, so the punctuation below assumes a US layout.
 | space | blank every monitor |
 | `r` | reset every knob |
 | `f11` | cover the display, or stop covering it |
+| `` ` `` | the controls overlay, on or off |
 | esc | quit |
 
 The knobs act on the focused camera (framing, gain and character) and the

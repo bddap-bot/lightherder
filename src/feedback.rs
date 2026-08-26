@@ -340,6 +340,7 @@ impl Feedback {
             &layout,
             "fs_camera",
             MONITOR_FORMAT,
+            None,
             "camera",
         );
 

@@ -13,6 +13,7 @@ pub mod input;
 pub mod keys;
 pub mod midi;
 pub mod motion;
+pub mod overlay;
 pub mod params;
 pub mod present;
 pub mod slots;
@@ -33,13 +34,15 @@ pub fn cheatsheet() -> Result<String, String> {
 pub const BACKENDS: wgpu::Backends = wgpu::Backends::PRIMARY;
 
 /// Every pass here draws one full-screen triangle over a bound texture, so
-/// they differ only in fragment entry point and target format.
+/// they differ only in fragment entry point, target format, and — for the
+/// overlay, which composites rather than replaces — blend state.
 pub(crate) fn fullscreen_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     bind_group_layout: &wgpu::BindGroupLayout,
     fragment_entry: &str,
     format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
     label: &str,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -62,7 +65,7 @@ pub(crate) fn fullscreen_pipeline(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: None,
+                blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
