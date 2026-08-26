@@ -75,7 +75,7 @@ pub struct App {
     fullscreen: bool,
     /// Whether the controls overlay is showing. Off at startup: the overlay
     /// is help, and help is what the cycle button and backquote are for.
-    overlay: bool,
+    overlay_shown: bool,
     /// Frames since the last rate line, and when that was. The loop is paced
     /// by the vertical blank, so this reads the refresh rate until a frame
     /// stops fitting inside one — which is the whole reason to print it.
@@ -169,7 +169,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             shift: false,
             resolution: cli.resolution,
             fullscreen: cli.fullscreen,
-            overlay: false,
+            overlay_shown: false,
             frames: 0,
             metered: Instant::now(),
             live: None,
@@ -260,7 +260,7 @@ impl Live {
         self.surface.configure(&gpu.device, &self.config);
     }
 
-    fn render(&mut self, gpu: &Gpu, params: &Params, sources: &mut [Source], overlay: bool) {
+    fn render(&mut self, gpu: &Gpu, params: &Params, sources: &mut [Source], overlay_shown: bool) {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -296,7 +296,7 @@ impl Live {
             &target,
             (self.config.width, self.config.height),
             &self.feedback,
-            overlay.then_some(&self.overlay),
+            overlay_shown.then_some(&self.overlay),
         );
         gpu.queue.present(frame);
     }
@@ -472,8 +472,15 @@ impl App {
                 }
             }
             Action::Overlay => {
-                self.overlay = !self.overlay;
-                log::info!("overlay {}", if self.overlay { "shown" } else { "hidden" });
+                self.overlay_shown = !self.overlay_shown;
+                log::info!(
+                    "overlay {}",
+                    if self.overlay_shown {
+                        "shown"
+                    } else {
+                        "hidden"
+                    }
+                );
             }
             Action::Quit => event_loop.exit(),
         }
@@ -548,7 +555,7 @@ impl ApplicationHandler for App {
                     &self.gpu,
                     &self.params.modulated(now),
                     &mut self.sources,
-                    self.overlay,
+                    self.overlay_shown,
                 );
                 live.window.request_redraw();
                 self.meter();
@@ -617,7 +624,7 @@ mod tests {
             shift: false,
             resolution,
             fullscreen: false,
-            overlay: false,
+            overlay_shown: false,
             frames: 0,
             metered: Instant::now(),
             live: None,

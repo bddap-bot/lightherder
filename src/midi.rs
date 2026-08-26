@@ -241,6 +241,70 @@ impl Map {
     }
 }
 
+/// Where a control number sits on a nanoKONTROL2's panel: the one copy of
+/// the device's physical facts. [`silkscreen`] names a spot and the overlay
+/// places one, both off this table, so the card and the picture cannot call
+/// the same number two different controls.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Spot {
+    Fader(u8),
+    Rotary(u8),
+    S(u8),
+    M(u8),
+    R(u8),
+    Transport(&'static TransportButton),
+}
+
+/// One button of the transport strip: what is printed on it, and where it
+/// sits in the strip's grid of three rows.
+#[derive(Debug)]
+pub(crate) struct TransportButton {
+    cc: u8,
+    pub(crate) name: &'static str,
+    pub(crate) row: u8,
+    pub(crate) col: u8,
+}
+
+const fn transport(cc: u8, name: &'static str, row: u8, col: u8) -> TransportButton {
+    TransportButton { cc, name, row, col }
+}
+
+/// The transport strip as the device has it: track prev/next on top, cycle
+/// beside the three marker buttons, and the tape row underneath.
+pub(crate) const TRANSPORT: &[TransportButton] = &[
+    transport(58, "track prev", 0, 0),
+    transport(59, "track next", 0, 1),
+    transport(46, "cycle", 1, 0),
+    transport(60, "marker set", 1, 1),
+    transport(61, "marker prev", 1, 2),
+    transport(62, "marker next", 1, 3),
+    transport(43, "rewind", 2, 0),
+    transport(44, "forward", 2, 1),
+    transport(42, "stop", 2, 2),
+    transport(41, "play", 2, 3),
+    transport(45, "record", 2, 4),
+];
+
+pub(crate) fn spot(cc: u8) -> Option<Spot> {
+    let block = |first: u8| (cc >= first && cc < first + 8).then(|| cc - first);
+    if let Some(i) = block(0) {
+        return Some(Spot::Fader(i));
+    }
+    if let Some(i) = block(16) {
+        return Some(Spot::Rotary(i));
+    }
+    if let Some(i) = block(32) {
+        return Some(Spot::S(i));
+    }
+    if let Some(i) = block(48) {
+        return Some(Spot::M(i));
+    }
+    if let Some(i) = block(64) {
+        return Some(Spot::R(i));
+    }
+    TRANSPORT.iter().find(|t| t.cc == cc).map(Spot::Transport)
+}
+
 /// What is printed beside control `cc` on the surface named `device`. Off the
 /// nanoKONTROL2's factory CC layout, the same one [`Map::nano_kontrol2`] is
 /// written against — so a map that moves a knob to another control still
@@ -254,32 +318,15 @@ pub fn silkscreen(device: &str, cc: u8) -> String {
     if !nano_kontrol2(device) {
         return format!("cc {cc}");
     }
-    let numbered = |first: u8, name: &str| {
-        (cc >= first && cc < first + 8).then(|| format!("{name}{}", cc - first + 1))
-    };
-    numbered(0, "fader ")
-        .or_else(|| numbered(16, "rotary "))
-        .or_else(|| numbered(32, "S"))
-        .or_else(|| numbered(48, "M"))
-        .or_else(|| numbered(64, "R"))
-        .or_else(|| {
-            let transport = match cc {
-                41 => "play",
-                42 => "stop",
-                43 => "rewind",
-                44 => "forward",
-                45 => "record",
-                46 => "cycle",
-                58 => "track prev",
-                59 => "track next",
-                60 => "marker set",
-                61 => "marker prev",
-                62 => "marker next",
-                _ => return None,
-            };
-            Some(transport.into())
-        })
-        .unwrap_or_else(|| format!("cc {cc}"))
+    match spot(cc) {
+        Some(Spot::Fader(i)) => format!("fader {}", i + 1),
+        Some(Spot::Rotary(i)) => format!("rotary {}", i + 1),
+        Some(Spot::S(i)) => format!("S{}", i + 1),
+        Some(Spot::M(i)) => format!("M{}", i + 1),
+        Some(Spot::R(i)) => format!("R{}", i + 1),
+        Some(Spot::Transport(t)) => t.name.into(),
+        None => format!("cc {cc}"),
+    }
 }
 
 /// Whether `device` is the surface whose silkscreen and physical layout this
@@ -740,6 +787,24 @@ mod tests {
         // cannot find is worse than one naming the number they can.
         assert_eq!(silkscreen("Launchpad", 0), "cc 0");
         assert_eq!(silkscreen("Launchpad", 41), "cc 41");
+    }
+
+    #[test]
+    fn the_transport_grid_is_arranged_the_way_the_device_is() {
+        // The names are pinned above; the grid is the other fact the table
+        // carries, and a swapped row or column draws the overlay's caption
+        // on a neighbouring button.
+        let at = |cc| match spot(cc) {
+            Some(Spot::Transport(t)) => (t.row, t.col),
+            other => panic!("cc {cc}: {other:?}"),
+        };
+        assert_eq!(at(58), (0, 0));
+        assert_eq!(at(59), (0, 1));
+        assert_eq!(at(46), (1, 0));
+        assert_eq!(at(62), (1, 3));
+        assert_eq!(at(43), (2, 0));
+        assert_eq!(at(41), (2, 3));
+        assert_eq!(at(45), (2, 4));
     }
 
     #[test]

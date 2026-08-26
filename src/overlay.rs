@@ -12,13 +12,13 @@
 //! render architecture, and a texture built at startup works the same in a
 //! browser as on the deployed display.
 
-use crate::midi::{nano_kontrol2, Map};
+use crate::midi::{nano_kontrol2, spot, Map, Spot, TRANSPORT};
 
 /// The image, `width * height` RGBA texels, row 0 at the top.
-pub struct Raster {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>,
+struct Raster {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
 }
 
 /// The panel's backdrop: dark but not opaque, so the picture keeps playing
@@ -55,63 +55,6 @@ const PANEL_H: i32 = 152;
 /// The pitch of the plain text lines: overflow bindings under the panel, and
 /// the whole listing for a surface whose shape this crate does not know.
 const LINE: i32 = 10;
-
-/// Where a control number sits on a nanoKONTROL2's panel.
-///
-/// A second copy of the physical facts [`crate::midi::silkscreen`] spells as
-/// names — that one prints, this one places, and the test below holds each
-/// entry to the name silkscreen gives the same number so the two cannot
-/// drift.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Spot {
-    Fader(u8),
-    Rotary(u8),
-    S(u8),
-    M(u8),
-    R(u8),
-    /// `(row, column)` in [`ROWS_Y`].
-    Transport(u8, u8),
-}
-
-/// The transport strip's grid, `(cc, row, column)`, in the arrangement the
-/// device has them: track prev/next on top, cycle beside the three marker
-/// buttons, and the tape row underneath.
-const TRANSPORT: &[(u8, u8, u8)] = &[
-    (58, 0, 0),
-    (59, 0, 1),
-    (46, 1, 0),
-    (60, 1, 1),
-    (61, 1, 2),
-    (62, 1, 3),
-    (43, 2, 0),
-    (44, 2, 1),
-    (42, 2, 2),
-    (41, 2, 3),
-    (45, 2, 4),
-];
-
-fn spot(cc: u8) -> Option<Spot> {
-    let block = |first: u8| (cc >= first && cc < first + 8).then(|| cc - first);
-    if let Some(i) = block(0) {
-        return Some(Spot::Fader(i));
-    }
-    if let Some(i) = block(16) {
-        return Some(Spot::Rotary(i));
-    }
-    if let Some(i) = block(32) {
-        return Some(Spot::S(i));
-    }
-    if let Some(i) = block(48) {
-        return Some(Spot::M(i));
-    }
-    if let Some(i) = block(64) {
-        return Some(Spot::R(i));
-    }
-    TRANSPORT
-        .iter()
-        .find(|(t, _, _)| *t == cc)
-        .map(|(_, row, col)| Spot::Transport(*row, *col))
-}
 
 /// An RGBA image being drawn. Every mark goes through [`Canvas::set`], which
 /// drops texels outside the image — so a caption longer than the room it was
@@ -280,14 +223,14 @@ fn place(c: &mut Canvas, spot: Spot, label: &str) {
         Spot::S(i) => beside(c, i, 0, label),
         Spot::M(i) => beside(c, i, 1, label),
         Spot::R(i) => beside(c, i, 2, label),
-        Spot::Transport(row, col) => {
-            transport_button(c, row, col, LIT);
-            let x = PAD + col as i32 * BUTTON_PITCH;
+        Spot::Transport(t) => {
+            transport_button(c, t.row, t.col, LIT);
+            let x = PAD + t.col as i32 * BUTTON_PITCH;
             // Two texels in from the frame: "swing -" is seven glyphs, and
             // the button is sized to hold exactly them.
             c.text(
                 x + 2,
-                ROWS_Y[row as usize] + 4,
+                ROWS_Y[t.row as usize] + 4,
                 label,
                 x + BUTTON_W - 1,
                 LIT,
@@ -315,7 +258,7 @@ fn labels(map: &Map) -> impl Iterator<Item = (u8, String)> + '_ {
 /// shape of is drawn as that panel; any other is a listing, because a drawn
 /// panel the performer's hands cannot find is worse than the list they can
 /// read — the same retreat [`crate::midi::silkscreen`] makes to numbers.
-pub fn rasterize(map: &Map) -> Raster {
+fn rasterize(map: &Map) -> Raster {
     if !nano_kontrol2(&map.device) {
         return listing(map);
     }
@@ -332,8 +275,8 @@ pub fn rasterize(map: &Map) -> Raster {
     for i in 0..8 {
         strip_chrome(&mut c, i);
     }
-    for (_, row, col) in TRANSPORT {
-        transport_button(&mut c, *row, *col, DIM);
+    for t in TRANSPORT {
+        transport_button(&mut c, t.row, t.col, DIM);
     }
     for (cc, label) in labels(map) {
         if let Some(spot) = spot(cc) {
@@ -518,40 +461,6 @@ impl Overlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::midi::silkscreen;
-
-    #[test]
-    fn the_geometry_and_the_silkscreen_name_the_same_controls() {
-        // Two encodings of one panel: silkscreen prints a control's name,
-        // this module places it. Every number one knows, the other must know
-        // the same way — otherwise the overlay draws "hue" on a control whose
-        // card says another.
-        for cc in 0..=127u8 {
-            let name = silkscreen("nanoKONTROL", cc);
-            let expected = match spot(cc) {
-                Some(Spot::Fader(i)) => format!("fader {}", i + 1),
-                Some(Spot::Rotary(i)) => format!("rotary {}", i + 1),
-                Some(Spot::S(i)) => format!("S{}", i + 1),
-                Some(Spot::M(i)) => format!("M{}", i + 1),
-                Some(Spot::R(i)) => format!("R{}", i + 1),
-                // The transport is placed by grid position and named by
-                // word, so position is checked against the strip's table
-                // and the name only for being one the silkscreen has.
-                Some(Spot::Transport(..)) => {
-                    assert!(!name.starts_with("cc "), "cc {cc} placed but unnamed");
-                    continue;
-                }
-                None => format!("cc {cc}"),
-            };
-            assert_eq!(name, expected, "cc {cc}");
-        }
-        // And the strip's own arrangement matches the device: the top row is
-        // the track pair, cycle starts the middle row, the tape row is five.
-        assert_eq!(spot(58), Some(Spot::Transport(0, 0)));
-        assert_eq!(spot(46), Some(Spot::Transport(1, 0)));
-        assert_eq!(spot(41), Some(Spot::Transport(2, 3)));
-        assert_eq!(spot(45), Some(Spot::Transport(2, 4)));
-    }
 
     /// The texels that differ between two images — the overlay's whole claim
     /// is that the picture follows the map, which is a claim about texels.
