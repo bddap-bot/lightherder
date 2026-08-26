@@ -33,15 +33,15 @@ pub enum Action {
 /// The preset slots. Function keys because they are the only block of eight
 /// that is not already a knob, and because a slip onto one mid-performance
 /// should not be a knob moving.
-const SLOT_KEYS: [KeyCode; SLOTS] = [
-    KeyCode::F1,
-    KeyCode::F2,
-    KeyCode::F3,
-    KeyCode::F4,
-    KeyCode::F5,
-    KeyCode::F6,
-    KeyCode::F7,
-    KeyCode::F8,
+const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
+    (KeyCode::F1, "f1"),
+    (KeyCode::F2, "f2"),
+    (KeyCode::F3, "f3"),
+    (KeyCode::F4, "f4"),
+    (KeyCode::F5, "f5"),
+    (KeyCode::F6, "f6"),
+    (KeyCode::F7, "f7"),
+    (KeyCode::F8, "f8"),
 ];
 
 /// A knob and the two keys that turn it. Physical key positions, so the
@@ -171,7 +171,7 @@ const fn axis(
 /// and store is the press you have to mean, because storing over a slot
 /// during a performance cannot be undone and recalling can.
 pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
-    if let Some(slot) = SLOT_KEYS.iter().position(|bound| *bound == key) {
+    if let Some(slot) = SLOT_KEYS.iter().position(|(bound, _)| *bound == key) {
         return Some(if shift {
             Action::Store(slot)
         } else {
@@ -201,9 +201,12 @@ pub fn help() -> String {
     for (_, label, _, what) in COMMANDS {
         out.push_str(&format!("  {label:<12} {what}\n"));
     }
-    let keys = format!("f1 / f{SLOTS}");
+    // Off the table's own labels, like the two above it: a slot rebound to a
+    // different key must not leave the help naming the old one.
+    let (first, last) = (SLOT_KEYS[0].1, SLOT_KEYS[SLOTS - 1].1);
+    let keys = format!("{first} / {last}");
     out.push_str(&format!("  {keys:<12} recall preset slot 1 to {SLOTS}\n"));
-    let keys = format!("shift f1 / f{SLOTS}");
+    let keys = format!("shift {first} / {last}");
     out.push_str(&format!("  {keys:<12} store preset slot 1 to {SLOTS}\n"));
     out
 }
@@ -217,7 +220,7 @@ mod tests {
         AXES.iter()
             .flat_map(|a| [a.down.0, a.up.0])
             .chain(COMMANDS.iter().map(|(key, _, _, _)| *key))
-            .chain(SLOT_KEYS)
+            .chain(SLOT_KEYS.iter().map(|(key, _)| *key))
             .collect()
     }
 
@@ -276,9 +279,10 @@ mod tests {
 
     #[test]
     fn the_slot_keys_recall_and_shift_stores() {
-        for (slot, key) in SLOT_KEYS.iter().enumerate() {
+        for (slot, (key, label)) in SLOT_KEYS.iter().enumerate() {
             assert_eq!(action_for(*key, false), Some(Action::Recall(slot)));
             assert_eq!(action_for(*key, true), Some(Action::Store(slot)));
+            assert!(help().contains(label) || (1..SLOTS - 1).contains(&slot));
         }
     }
 
@@ -287,7 +291,7 @@ mod tests {
         // Held shift must not make a knob key mean something else: on a
         // physical layout it is held for all sorts of reasons.
         for key in every_key() {
-            if SLOT_KEYS.contains(&key) {
+            if SLOT_KEYS.iter().any(|(bound, _)| *bound == key) {
                 continue;
             }
             assert_eq!(action_for(key, true), action_for(key, false), "{key:?}");

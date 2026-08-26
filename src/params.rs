@@ -529,8 +529,25 @@ impl Params {
             return Cow::Borrowed(self);
         }
         let mut out = self.clone();
-        for lfo in &self.motion {
-            out.nudge(lfo.knob, lfo.offset(seconds), lfo.focus);
+        for (i, lfo) in self.motion.iter().enumerate() {
+            // Totalled per knob before anything is applied, rather than
+            // nudged one at a time. `nudge` clamps, so a sequence of offsets
+            // stops one of them against a rail that the total would have
+            // cleared — and which one depends on the order the list happens
+            // to be in. Skipping the ones already totalled is what keeps a
+            // knob from being nudged twice.
+            if self.motion[..i]
+                .iter()
+                .any(|before| before.same_target(lfo))
+            {
+                continue;
+            }
+            let offset: f32 = self.motion[i..]
+                .iter()
+                .filter(|other| other.same_target(lfo))
+                .map(|other| other.offset(seconds))
+                .sum();
+            out.nudge(lfo.knob, offset, lfo.focus);
         }
         Cow::Owned(out)
     }
@@ -566,25 +583,39 @@ impl Params {
     /// off again. A cycle rather than a switch and a shape selector, because
     /// with two shapes those are the same three states and one binding is
     /// cheaper than two.
-    pub fn motion_cycle(&mut self, knob: Knob, focus: Focus) {
-        match self.motion_index(knob, focus) {
-            None => self.motion.push(Lfo::new(knob, focus, Shape::Sine)),
+    ///
+    /// `seconds` is the instrument's clock, and every state this reaches is
+    /// seated to start from rest at it — switching a swing on, or changing
+    /// its shape, must not jump the knob to wherever a cycle running since
+    /// startup has got to.
+    pub fn motion_cycle(&mut self, knob: Knob, focus: Focus, seconds: f64) {
+        let i = match self.motion_index(knob, focus) {
+            None => {
+                self.motion.push(Lfo::new(knob, focus, Shape::Sine));
+                self.motion.len() - 1
+            }
             Some(i) => match self.motion[i].shape {
-                Shape::Sine => self.motion[i].shape = Shape::Ramp,
-                Shape::Ramp => drop(self.motion.remove(i)),
+                Shape::Sine => {
+                    self.motion[i].shape = Shape::Ramp;
+                    i
+                }
+                Shape::Ramp => {
+                    self.motion.remove(i);
+                    return;
+                }
             },
-        }
+        };
+        self.motion[i].restart(seconds);
     }
 
     /// Move the rate of the automation on `knob` by `steps` presses. Nothing
     /// driving that knob is nothing to speed up, not an error.
-    pub fn motion_rate(&mut self, knob: Knob, focus: Focus, steps: f32) {
+    pub fn motion_rate(&mut self, knob: Knob, focus: Focus, steps: f32, seconds: f64) {
         if let Some(i) = self.motion_index(knob, focus) {
-            self.motion[i].scale_rate(steps);
+            self.motion[i].scale_rate(steps, seconds);
         }
     }
 
-    /// Move its depth by `steps` presses.
     pub fn motion_depth(&mut self, knob: Knob, focus: Focus, steps: f32) {
         if let Some(i) = self.motion_index(knob, focus) {
             self.motion[i].nudge_depth(steps);
@@ -1038,7 +1069,7 @@ mod tests {
             monitor: 1,
         };
         for knob in Knob::ALL {
-            params.motion_cycle(knob, focus);
+            params.motion_cycle(knob, focus, 0.0);
             let lfo = params.motion_of(knob, focus).expect("switched on");
             assert_eq!(lfo.shape, Shape::Sine);
             // Found from the other half of the focus too: a monitor knob's
@@ -1061,9 +1092,9 @@ mod tests {
                 moved == elsewhere
             );
 
-            params.motion_cycle(knob, focus);
+            params.motion_cycle(knob, focus, 0.0);
             assert_eq!(params.motion_of(knob, focus).unwrap().shape, Shape::Ramp);
-            params.motion_cycle(knob, focus);
+            params.motion_cycle(knob, focus, 0.0);
             assert!(params.motion_of(knob, focus).is_none(), "{knob:?} stuck on");
         }
         assert!(params.motion.is_empty(), "the list is not being emptied");
@@ -1082,10 +1113,10 @@ mod tests {
                 monitor: 0,
             },
         );
-        params.motion_cycle(Knob::Zoom, a);
-        params.motion_cycle(Knob::Zoom, b);
+        params.motion_cycle(Knob::Zoom, a, 0.0);
+        params.motion_cycle(Knob::Zoom, b, 0.0);
         let before = *params.motion_of(Knob::Zoom, b).unwrap();
-        params.motion_rate(Knob::Zoom, a, 3.0);
+        params.motion_rate(Knob::Zoom, a, 3.0, 0.0);
         params.motion_depth(Knob::Zoom, a, -1.0);
         let after = params.motion_of(Knob::Zoom, a).unwrap();
         assert!(after.rate > before.rate && after.depth < before.depth);
@@ -1095,7 +1126,7 @@ mod tests {
             "hit camera 2"
         );
         // A knob nothing is driving is nothing to speed up.
-        params.motion_rate(Knob::Hue, a, 3.0);
+        params.motion_rate(Knob::Hue, a, 3.0, 0.0);
         assert!(params.motion_of(Knob::Hue, a).is_none());
     }
 
@@ -1137,6 +1168,32 @@ mod tests {
         };
         assert_eq!(focus.clamped(&crate::config::insanity()), focus);
         assert_eq!(focus.clamped(&Params::default()), Focus::default());
+        // A graph with different counts on the two sides, from a focus with
+        // different indices: symmetric cases cannot tell the two apart, and
+        // this is the shape a recall actually lands on.
+        let lopsided = crate::config::external(); // two cameras, one monitor
+        assert_eq!(
+            Focus {
+                camera: 1,
+                monitor: 3
+            }
+            .clamped(&lopsided),
+            Focus {
+                camera: 1,
+                monitor: 0
+            }
+        );
+        assert_eq!(
+            Focus {
+                camera: 5,
+                monitor: 0
+            }
+            .clamped(&lopsided),
+            Focus {
+                camera: 1,
+                monitor: 0
+            }
+        );
     }
 
     #[test]
@@ -1144,16 +1201,26 @@ mod tests {
         // Automation the readout does not mention is a knob moving for no
         // reason a performer can see.
         let mut params = crate::config::crossed();
+        // On camera 2 and monitor 2, so the line has to name the node it is
+        // really on rather than the 1 that a default focus prints either way.
+        let far = Focus {
+            camera: 1,
+            monitor: 1,
+        };
         for knob in Knob::ALL {
-            params.motion_cycle(knob, Focus::default());
+            params.motion_cycle(knob, far, 0.0);
         }
+        // Read from the focus at the *other* corner: every LFO is listed, not
+        // the focused node's.
         let line = params.describe(Focus::default());
         for knob in Knob::ALL {
+            let lfo = params.motion_of(knob, far).expect("switched on");
             assert!(
-                line.contains(&format!("motion: {}", knob.name())),
-                "{} is not in the readout",
-                knob.name()
+                line.contains(&lfo.describe()),
+                "the readout is missing {:?}\n{line}",
+                lfo.describe()
             );
+            assert!(line.contains(if knob.is_camera() { "cam 2" } else { "mon 2" }));
         }
     }
 

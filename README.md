@@ -170,10 +170,14 @@ motion = [
 ]
 ```
 
-`knob` is the name the key help prints — that string *is* the knob's serde, so
-there is no second spelling to get wrong. `rate` is in cycles per second and
-stops at half the frame rate, since past Nyquist an LFO does not go faster, it
-goes somewhere else. `depth` is half the swing in the knob's own units, capped
+`knob` is the name the startup help prints, and that string *is* the knob's
+serde, so there is no second spelling to get wrong — `zoom`, `rotation`,
+`pan x`, `pan y`, `loop gain`, `loop gain, red`/`green`/`blue`, `bloom`,
+`bloom radius`, `chroma bleed`, `noise`, `seed`, `hue`, `saturation`,
+`brightness`, `contrast`, `gamma`, `headroom`. `rate` is in cycles per second
+and stops at 30 Hz — half the sixty frames a second the instrument is drawn
+at, since past Nyquist an LFO does not go faster, it goes somewhere else.
+`depth` is half the swing in the knob's own units, capped
 at the knob's own travel — or at a half turn for the knobs that wrap, where a
 ramp then makes exactly one revolution per cycle. `phase` offsets one against
 another: a quarter cycle apart on the two pan axes is a circle. `focus` picks
@@ -190,10 +194,13 @@ can put a value somewhere a hand could not.
 
 The `kinetic` preset is the single loop with one ramp on it, right round every
 twenty seconds. Two details it earned on hardware: its base rotation is
-`single`'s rather than zero, so switching the motor off leaves `single` and
-not a camera parked square on — and its amplifier's rail sits below white,
-because even *passing* through square-on the trail piles up on the seed faster
-than it winds away, and without the rail that flare reaches flat white.
+`single`'s rather than zero, so switching the motor off leaves `single`'s
+spiral rather than a camera parked square on — and its amplifier's rail sits
+below white, because even *passing* through square-on the trail piles up on
+the seed faster than it winds away. Measured on an RTX 2080: with the rail
+wide open the flare reaches 255 as the sweep passes 0.05 rad, and 155 with the
+rail at 0.9. Switching the motor off leaves the rail down; it is part of the
+preset, not part of the motor.
 
 ## Preset slots
 
@@ -208,7 +215,7 @@ A recall keeps the loops running: it changes the knobs the next pass reads,
 not the light already on the glass. What it may not change is what would have
 to be rebuilt to serve it — the monitor bank and the processes feeding the
 inputs — so a slot with a different number of monitors, or different inputs,
-is refused with the reason and is started with that file instead. Cameras,
+is refused with the reason; start it from the command line with that file instead. Cameras,
 routing, every knob and all the automation are free to differ.
 
 ## Run it
@@ -255,15 +262,15 @@ layout.
 | key | effect |
 | --- | --- |
 | `-` `=` | zoom out / in, per pass |
-| `,` `.` | rotate, per pass |
-| arrows | pan |
+| `,` `.` | rotation, per pass |
+| arrows | pan x, pan y |
 | `[` `]` | loop gain, all channels at once |
-| `1`…`6` | loop gain per channel (r-, r+, g-, g+, b-, b+) |
+| `1`…`6` | loop gain, red / green / blue (down, up each) |
 | `g` `h` | bloom, i.e. how much the lens scatters |
 | `j` `k` | bloom radius |
 | `y` `u` | chroma bleed |
-| `i` `o` | grain |
-| `;` `'` | seed brightness |
+| `i` `o` | noise, i.e. the grain |
+| `;` `'` | seed |
 | `a` `s` | hue, per pass |
 | `d` `f` | saturation |
 | `z` `x` | brightness, i.e. black level |

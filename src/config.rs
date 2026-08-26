@@ -74,8 +74,9 @@ pub fn analog() -> Params {
 /// square-on, and winds the other, over and over.
 ///
 /// The base rotation is [`single`]'s rather than zero, so switching the motor
-/// off with `p` leaves exactly `single` running. At zero it would leave a
-/// camera pointed square on, and a loop whose trail never winds away from the
+/// off with `p` leaves `single`'s spiral — the rail stays down. At zero it
+/// would leave a camera pointed square on, and a loop whose trail never winds
+/// away from the
 /// seed piles up on it until the monitor clips — the same reason [`crossed`]
 /// and [`insanity`] spin all their cameras the same way. Sweeping *through*
 /// square-on is fine; stopping there is not.
@@ -84,7 +85,7 @@ pub fn analog() -> Params {
 /// trail piles up faster than it winds away, and on hardware that flare
 /// reached flat white. So the amplifier's rail sits below white, the way
 /// [`analog`]'s does: the flare compresses into a bloom instead of clipping,
-/// which is the rail doing the job stage four built it for.
+/// which is the rail doing the job it exists for.
 pub fn kinetic() -> Params {
     let mut params = single();
     params.monitors[0].headroom = 0.9;
@@ -394,15 +395,25 @@ pub fn validate(params: &Params) -> Result<(), String> {
                 )));
             }
         }
-        // Both rails read off the knob itself, so an automation range and the
-        // knob's range cannot come apart.
-        let Limit::Clamp(_, fastest) = Lfo::RATE else {
-            unreachable!("the rate clamps")
-        };
-        if !(0.0..=fastest).contains(&lfo.rate) {
+        // The same two rails the keys work between: a rate the keys cannot
+        // reach is a rate the instrument cannot get back from.
+        if !(Lfo::SLOWEST..=Lfo::FASTEST).contains(&lfo.rate) {
             return Err(at(format!(
-                "runs at {} Hz; between 0 and {fastest} — half the frame rate",
-                lfo.rate
+                "runs at {} Hz; between {} and {} — a hundred seconds a cycle \
+                 up to half the frame rate. A knob that should not move wants \
+                 no automation, not a slow one.",
+                lfo.rate,
+                Lfo::SLOWEST,
+                Lfo::FASTEST
+            )));
+        }
+        // A position within the cycle. Anything else folds, but silently:
+        // above 2^53 a frame's worth of advance vanishes into the rounding
+        // and the swing freezes with nothing said.
+        if !(0.0..=1.0).contains(&lfo.phase) {
+            return Err(at(format!(
+                "starts at {} of the way through its cycle; between 0 and 1",
+                lfo.phase
             )));
         }
         let widest = Lfo::depth_limit(lfo.knob);
@@ -528,7 +539,7 @@ mod tests {
     fn a_config_file_round_trips() {
         let dir = std::env::temp_dir().join(format!("lightherder-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // Between them these three carry a non-default value in every field
+        // Between them these carry a non-default value in every field
         // the format has: the routing and splitter weights, the character and
         // the rail, the inputs, and the automation.
         for params in [crossed(), analog(), external(), kinetic()] {
@@ -572,8 +583,9 @@ mod tests {
             // `kinetic` runs it below white too — on purpose, and for a
             // different reason: it sweeps through square-on, where the trail
             // piles up on the seed instead of winding away from it, and the
-            // rail is what bounds that pile-up. Verified on hardware by
-            // `the_turning_camera_keeps_an_image_all_the_way_round`.
+            // rail is what bounds that pile-up. Measured on an RTX 2080: with
+            // the rail at `KNEE_AT_WHITE` the flare reaches 255 as the sweep
+            // passes 0.05 rad, and 155 with it at 0.9.
             let open_rail = params
                 .monitors
                 .iter()
@@ -830,9 +842,21 @@ mod tests {
                     ..lfo(Knob::Hue)
                 }]
             }),
+            ("a rate slower than the keys can undo", |p| {
+                p.motion = vec![Lfo {
+                    rate: 0.0,
+                    ..lfo(Knob::Hue)
+                }]
+            }),
             ("a negative rate", |p| {
                 p.motion = vec![Lfo {
                     rate: -1.0,
+                    ..lfo(Knob::Hue)
+                }]
+            }),
+            ("a phase outside its cycle", |p| {
+                p.motion = vec![Lfo {
+                    phase: 1e18,
                     ..lfo(Knob::Hue)
                 }]
             }),
@@ -898,7 +922,8 @@ mod tests {
                 Shape::Sine,
             ),
             Lfo {
-                rate: 0.0,
+                rate: Lfo::SLOWEST,
+                phase: 1.0,
                 ..lfo(Knob::Gamma)
             },
         ];

@@ -1369,7 +1369,18 @@ fn the_turning_camera_keeps_an_image_all_the_way_round() {
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
+    // The rail, in levels: the preset runs its amplifier below white on
+    // purpose, so `< 250` would be free — it is what the rail asymptotes to
+    // that the picture has to stay under, and the rail is not allowed to be
+    // the only thing holding it there either.
+    let rail = p.monitors[0].headroom * 255.0;
+    assert!(
+        rail < 250.0,
+        "the rail is not below white; this bar is free"
+    );
+
     let mut samples: Vec<Image> = Vec::new();
+    let mut angles: Vec<f32> = Vec::new();
     // Two revolutions: the first fills the loop from black, the second is
     // the one that is measured.
     for i in 0..frames * 2 {
@@ -1378,11 +1389,30 @@ fn the_turning_camera_keeps_an_image_all_the_way_round() {
         if i >= frames && i.is_multiple_of(30) {
             let img = h.read();
             let (peak, angle) = (img.brightest(), at.cameras[0].framing.rotation);
-            assert!(peak < 250.0, "clipped at {angle:.2} rad: {peak}");
+            assert!(
+                peak < rail - 20.0,
+                "flat against the rail at {angle:.2} rad"
+            );
             assert!(peak > 30.0, "went dark at {angle:.2} rad: {peak}");
             samples.push(img);
+            angles.push(angle);
         }
     }
+
+    // It really went round, once. Measured the shortest way between samples,
+    // which is the only way to add up a wrapping angle without reading its
+    // wrap as a jump — a camera merely wobbling either side of where it
+    // started sums to nothing.
+    use std::f32::consts::{PI, TAU};
+    let turned: f32 = angles
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0] + PI).rem_euclid(TAU) - PI)
+        .sum();
+    assert!(
+        (turned - TAU).abs() < 0.2,
+        "one cycle turned {turned}, not a revolution"
+    );
+
     let moved = samples
         .iter()
         .map(|img| img.differs_from(&samples[0]))
