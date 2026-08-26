@@ -13,11 +13,11 @@ permissions:
   pages: write
   id-token: write
 
-# One deploy at a time, and a newer push wins rather than queueing behind a
-# build whose result it is about to replace.
+# One deploy at a time. Not cancel-in-progress: a cancelled deploy can leave
+# the Pages deployment stuck, and a push that has to wait is cheaper than that.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
