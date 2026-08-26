@@ -12,6 +12,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
+# The overlay's typeface: a public-domain 8x8 bitmap font as const arrays.
+# Pulled in as data rather than retyped here, and instead of a text-shaping
+# stack, because a dozen two-word captions do not justify one.
+font8x8 = { version = "0.3", default-features = false }
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"

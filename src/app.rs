@@ -15,6 +15,7 @@ use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::keys::{action_for, Action};
 use crate::midi::{Map, Midi};
+use crate::overlay::Overlay;
 use crate::params::{Focus, Knob, Params};
 use crate::present::Present;
 
@@ -31,6 +32,9 @@ struct Live {
     config: wgpu::SurfaceConfiguration,
     feedback: Feedback,
     present: Present,
+    /// The controls overlay, built once from the map in force — the map
+    /// cannot change while the instrument runs, so neither can this.
+    overlay: Overlay,
 }
 
 pub struct App {
@@ -69,6 +73,9 @@ pub struct App {
     /// Whether the window covers the display. Kept here rather than asked of
     /// the window, because it is also what the window is *created* with.
     fullscreen: bool,
+    /// Whether the controls overlay is showing. Off at startup: the overlay
+    /// is help, and help is what the cycle button and backquote are for.
+    overlay: bool,
     /// Frames since the last rate line, and when that was. The loop is paced
     /// by the vertical blank, so this reads the refresh rate until a frame
     /// stops fitting inside one — which is the whole reason to print it.
@@ -162,6 +169,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             shift: false,
             resolution: cli.resolution,
             fullscreen: cli.fullscreen,
+            overlay: false,
             frames: 0,
             metered: Instant::now(),
             live: None,
@@ -174,6 +182,7 @@ impl Live {
         event_loop: &ActiveEventLoop,
         gpu: &Gpu,
         params: &Params,
+        map: &Map,
         resolution: (u32, u32),
         fullscreen: bool,
     ) -> Live {
@@ -229,6 +238,7 @@ impl Live {
         // an explicit clear.
         let feedback = Feedback::new(&gpu.device, resolution.0, resolution.1, params);
         let present = Present::new(&gpu.device, &feedback, format);
+        let overlay = Overlay::new(&gpu.device, &gpu.queue, format, map);
 
         Live {
             window,
@@ -236,6 +246,7 @@ impl Live {
             config,
             feedback,
             present,
+            overlay,
         }
     }
 
@@ -249,7 +260,7 @@ impl Live {
         self.surface.configure(&gpu.device, &self.config);
     }
 
-    fn render(&mut self, gpu: &Gpu, params: &Params, sources: &mut [Source]) {
+    fn render(&mut self, gpu: &Gpu, params: &Params, sources: &mut [Source], overlay: bool) {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -285,6 +296,7 @@ impl Live {
             &target,
             (self.config.width, self.config.height),
             &self.feedback,
+            overlay.then_some(&self.overlay),
         );
         gpu.queue.present(frame);
     }
@@ -459,6 +471,10 @@ impl App {
                     live.window.set_cursor_visible(!self.fullscreen);
                 }
             }
+            Action::Overlay => {
+                self.overlay = !self.overlay;
+                log::info!("overlay {}", if self.overlay { "shown" } else { "hidden" });
+            }
             Action::Quit => event_loop.exit(),
         }
     }
@@ -473,6 +489,7 @@ impl ApplicationHandler for App {
             event_loop,
             &self.gpu,
             &self.params,
+            self.midi.map(),
             self.resolution,
             self.fullscreen,
         );
@@ -527,7 +544,12 @@ impl ApplicationHandler for App {
                 // driving them at this instant, and `self.params` — what the
                 // keys turn and what a preset slot saves — is untouched.
                 let now = self.started.elapsed().as_secs_f64();
-                live.render(&self.gpu, &self.params.modulated(now), &mut self.sources);
+                live.render(
+                    &self.gpu,
+                    &self.params.modulated(now),
+                    &mut self.sources,
+                    self.overlay,
+                );
                 live.window.request_redraw();
                 self.meter();
             }
@@ -595,6 +617,7 @@ mod tests {
             shift: false,
             resolution,
             fullscreen: false,
+            overlay: false,
             frames: 0,
             metered: Instant::now(),
             live: None,

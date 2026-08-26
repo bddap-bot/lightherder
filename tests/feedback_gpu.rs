@@ -175,6 +175,7 @@ impl Harness {
             &self.target_view,
             self.target_size,
             &self.feedback,
+            None,
         );
     }
 

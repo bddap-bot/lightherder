@@ -79,17 +79,17 @@ pub struct Map {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fader {
-    cc: u8,
-    knob: Knob,
+    pub(crate) cc: u8,
+    pub(crate) knob: Knob,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Button {
-    cc: u8,
+    pub(crate) cc: u8,
     /// A key, spelled the way the printed help spells it — `"p"`, `"space"`,
     /// `"shift f1"`.
-    key: String,
+    pub(crate) key: String,
 }
 
 const fn fader(cc: u8, knob: Knob) -> Fader {
@@ -112,7 +112,7 @@ impl Map {
     /// the bloom radius are trims of knobs that are on the surface; the
     /// keyer's four wait for a hand that keys more than it bleeds and swaps
     /// this map for its own. They all stay on the keys.
-    fn nano_kontrol2() -> Map {
+    pub(crate) fn nano_kontrol2() -> Map {
         Map {
             device: "nanoKONTROL".into(),
             fader: vec![
@@ -251,7 +251,7 @@ impl Map {
 /// worse than one that prints the number they can. A number no silkscreen
 /// claims prints as itself for the same reason.
 pub fn silkscreen(device: &str, cc: u8) -> String {
-    if !device.to_lowercase().contains("nanokontrol") {
+    if !nano_kontrol2(device) {
         return format!("cc {cc}");
     }
     let numbered = |first: u8, name: &str| {
@@ -280,6 +280,13 @@ pub fn silkscreen(device: &str, cc: u8) -> String {
             Some(transport.into())
         })
         .unwrap_or_else(|| format!("cc {cc}"))
+}
+
+/// Whether `device` is the surface whose silkscreen and physical layout this
+/// crate knows. One test, shared by the card's names and the overlay's
+/// geometry: the two must agree on which surface they are drawing.
+pub(crate) fn nano_kontrol2(device: &str) -> bool {
+    device.to_lowercase().contains("nanokontrol")
 }
 
 fn button(cc: u8, key: impl Into<String>) -> Button {
@@ -312,6 +319,9 @@ fn nano_buttons() -> Vec<Button> {
         button(44, "8"),
         button(58, "9"),
         button(59, "0"),
+        // Cycle shows and hides the overlay that explains all of the above —
+        // the one button whose job survives not knowing what any button does.
+        button(46, "`"),
     ]);
     out
 }
@@ -490,6 +500,13 @@ impl Midi {
             next_scan: Instant::now(),
             complaint: None,
         })
+    }
+
+    /// The map in force, which is what the on-screen overlay draws: the
+    /// overlay must show the surface as it is actually wired, not as the
+    /// factory shipped it.
+    pub fn map(&self) -> &Map {
+        &self.map
     }
 
     /// Look somewhere other than the real ALSA for the surface. Tests only.
@@ -960,6 +977,7 @@ mod tests {
                 button(44, "8"),
                 button(58, "9"),
                 button(59, "0"),
+                button(46, "`"),
             ]
         );
     }
