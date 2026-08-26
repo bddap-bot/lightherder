@@ -5,7 +5,8 @@
 use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
-use crate::params::{Camera, Character, Knob, Limit, Monitor, Params};
+use crate::motion::{Lfo, Shape};
+use crate::params::{Camera, Character, Focus, Knob, Limit, Monitor, Params};
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
@@ -42,6 +43,7 @@ pub fn single() -> Params {
         }],
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
+        motion: Vec::new(),
     }
 }
 
@@ -61,6 +63,23 @@ pub fn analog() -> Params {
         noise: 0.02,
     };
     params.monitors[0].headroom = 0.9;
+    params
+}
+
+/// The camera on a motor: [`single`]'s loop with its rotation swept right
+/// round, once every twenty seconds. That is a ramp at full depth on the
+/// rotation knob and nothing else — the continuous camera rotation of the
+/// real instrument, and the demonstration that automation needs no separate
+/// kinetics beside it. The spiral it draws winds one way, unwinds through
+/// square-on, and winds the other, over and over.
+pub fn kinetic() -> Params {
+    let mut params = single();
+    params.cameras[0].framing.rotation = 0.0;
+    params.motion = vec![Lfo {
+        depth: std::f32::consts::PI,
+        rate: 0.05,
+        ..Lfo::new(Knob::Rotation, Focus::default(), Shape::Ramp)
+    }];
     params
 }
 
@@ -103,6 +122,7 @@ pub fn crossed() -> Params {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
+        motion: Vec::new(),
     }
 }
 
@@ -142,6 +162,7 @@ pub fn insanity() -> Params {
             .collect(),
         inputs: Vec::new(),
         routing: vec![vec![1.0 / N as f32; N]; N],
+        motion: Vec::new(),
     }
 }
 
@@ -178,26 +199,47 @@ pub fn external() -> Params {
         monitors: vec![Monitor::default()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
         routing: vec![vec![1.0, 1.0]],
+        motion: Vec::new(),
     }
 }
+
+/// A preset: the name the command line knows it by, and the graph it builds.
+pub type Preset = (&'static str, fn() -> Params);
+
+/// The presets, by the names the command line and the error messages use.
+pub const PRESETS: [Preset; 6] = [
+    ("single", single as fn() -> Params),
+    ("analog", analog),
+    ("kinetic", kinetic),
+    ("crossed", crossed),
+    ("insanity", insanity),
+    ("external", external),
+];
 
 /// `arg` is a preset name or a path to a TOML file of [`Params`]. Either way
 /// the result is validated, so the GPU side can trust its shape.
 pub fn load(arg: &str) -> Result<Params, String> {
-    let params = match arg {
-        "single" => single(),
-        "analog" => analog(),
-        "crossed" => crossed(),
-        "insanity" => insanity(),
-        "external" => external(),
-        path => {
-            let text = std::fs::read_to_string(path).map_err(|e| {
-                format!("{path}: {e} (presets: single, analog, crossed, insanity, external)")
-            })?;
-            toml::from_str(&text).map_err(|e| format!("{path}: {e}"))?
+    match PRESETS.iter().find(|(name, _)| *name == arg) {
+        Some((_, build)) => {
+            let params = build();
+            validate(&params)?;
+            Ok(params)
         }
-    };
-    validate(&params)?;
+        None => read(std::path::Path::new(arg)).map_err(|e| {
+            let names: Vec<&str> = PRESETS.iter().map(|(name, _)| *name).collect();
+            format!("{e} (presets: {})", names.join(", "))
+        }),
+    }
+}
+
+/// One TOML file of [`Params`], validated. The one way a graph is read off
+/// disk — the preset slots go through here too, so a saved performance and a
+/// hand-written config get the same door and the same checks.
+pub fn read(path: &std::path::Path) -> Result<Params, String> {
+    let shown = path.display();
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
+    let params: Params = toml::from_str(&text).map_err(|e| format!("{shown}: {e}"))?;
+    validate(&params).map_err(|e| format!("{shown}: {e}"))?;
     Ok(params)
 }
 
@@ -326,6 +368,56 @@ pub fn validate(params: &Params) -> Result<(), String> {
             ));
         }
     }
+    for (i, lfo) in params.motion.iter().enumerate() {
+        let at = |e: String| format!("motion {i} ({}) {e}", lfo.knob.name());
+        for (value, what) in [
+            (lfo.rate, "rate"),
+            (lfo.depth, "depth"),
+            (lfo.phase, "phase"),
+        ] {
+            if !value.is_finite() {
+                return Err(at(format!(
+                    "has a {what} of {value}; every number is finite"
+                )));
+            }
+        }
+        // Both rails read off the knob itself, so an automation range and the
+        // knob's range cannot come apart.
+        let Limit::Clamp(_, fastest) = Lfo::RATE else {
+            unreachable!("the rate clamps")
+        };
+        if !(0.0..=fastest).contains(&lfo.rate) {
+            return Err(at(format!(
+                "runs at {} Hz; between 0 and {fastest} — half the frame rate",
+                lfo.rate
+            )));
+        }
+        let widest = Lfo::depth_limit(lfo.knob);
+        if !(0.0..=widest).contains(&lfo.depth) {
+            return Err(at(format!(
+                "swings {}; at most {widest}, which is all the travel that knob has",
+                lfo.depth
+            )));
+        }
+        if lfo.focus.camera >= c || lfo.focus.monitor >= m {
+            return Err(at(format!(
+                "drives camera {} of {c}, monitor {} of {m}",
+                lfo.focus.camera + 1,
+                lfo.focus.monitor + 1
+            )));
+        }
+        // A monitor knob does not read a camera index, so a file that sets
+        // one is saying something the instrument cannot do — and it would
+        // hide the automation from the keys, which look it up narrowed.
+        if lfo.focus != lfo.focus.narrowed(lfo.knob) {
+            let side = if lfo.knob.is_camera() {
+                ("monitor", "a camera knob")
+            } else {
+                ("camera", "a monitor knob")
+            };
+            return Err(at(format!("names a {}; {} has none", side.0, side.1)));
+        }
+    }
     // The flattened routing-times-look products are what the shader
     // iterates, and its uniform array is a fixed size. Counted by the same
     // function that builds them.
@@ -345,14 +437,13 @@ mod tests {
     use super::*;
     use crate::params::Colour;
 
-    fn presets() -> [(&'static str, Params); 5] {
-        [
-            ("single", single()),
-            ("analog", analog()),
-            ("crossed", crossed()),
-            ("insanity", insanity()),
-            ("external", external()),
-        ]
+    /// Off [`PRESETS`] rather than listed again, so a preset added without a
+    /// line here cannot slip past every test in this file.
+    fn presets() -> Vec<(&'static str, Params)> {
+        PRESETS
+            .iter()
+            .map(|(name, build)| (*name, build()))
+            .collect()
     }
 
     #[test]
@@ -426,8 +517,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Between them these three carry a non-default value in every field
         // the format has: the routing and splitter weights, the character and
-        // the rail, and the inputs.
-        for params in [crossed(), analog(), external()] {
+        // the rail, the inputs, and the automation.
+        for params in [crossed(), analog(), external(), kinetic()] {
             let path = dir.join("preset.toml");
             std::fs::write(&path, toml::to_string(&params).unwrap()).unwrap();
             assert_eq!(load(path.to_str().unwrap()).unwrap(), params);
@@ -614,6 +705,175 @@ mod tests {
         assert_eq!(on_input, vec![1]);
         assert_eq!(p.cameras[1].look[..p.monitors.len()], [0.0]);
         assert_eq!(p.cameras[0].look[input], 0.0);
+    }
+
+    #[test]
+    fn automation_spells_itself_the_way_it_is_documented() {
+        // The literal keys and the literal knob name, not a round trip: a
+        // round trip agrees with itself whatever serde is told to call these,
+        // and the README writes them out.
+        let params: Params = toml::from_str(
+            "cameras = [{ look = [1.0] }]\n\
+             monitors = [{}]\n\
+             routing = [[1.0]]\n\
+             motion = [\n\
+             \x20 { knob = \"rotation\", shape = \"ramp\", rate = 0.05, depth = 3.14159 },\n\
+             \x20 { knob = \"hue\", rate = 0.2, depth = 0.4, phase = 0.25 },\n\
+             ]\n",
+        )
+        .unwrap();
+        validate(&params).unwrap();
+        assert_eq!(params.motion[0].knob, Knob::Rotation);
+        assert_eq!(params.motion[0].shape, Shape::Ramp);
+        // The two omitted keys fall to their documented defaults.
+        assert_eq!(params.motion[1].shape, Shape::Sine);
+        assert_eq!(params.motion[1].focus, Focus::default());
+    }
+
+    #[test]
+    fn the_kinetic_preset_is_a_camera_that_keeps_turning() {
+        let p = kinetic();
+        let [lfo] = p.motion[..] else {
+            panic!("kinetic is one turning camera")
+        };
+        assert_eq!(lfo.knob, Knob::Rotation);
+        assert_eq!(lfo.shape, Shape::Ramp);
+        assert_eq!(
+            lfo.depth,
+            Lfo::depth_limit(Knob::Rotation),
+            "not a full turn"
+        );
+        assert!(lfo.rate > 0.0, "the motor is off");
+        // And it is the only preset that moves on its own, so the others are
+        // exactly as they were before this stage.
+        for (name, params) in presets() {
+            assert_eq!(params.motion.is_empty(), name != "kinetic", "{name}");
+        }
+    }
+
+    #[test]
+    fn a_graph_whose_automation_is_out_of_shape_is_refused() {
+        fn lfo(knob: Knob) -> Lfo {
+            Lfo::new(knob, Focus::default(), Shape::Sine)
+        }
+        /// What the poison does, and a name for the failure it stands for.
+        type Poison = (&'static str, fn(&mut Params));
+        let poison: &[Poison] = &[
+            ("a knob on a camera that is not there", |p| {
+                p.motion = vec![Lfo {
+                    focus: Focus {
+                        camera: 9,
+                        monitor: 0,
+                    },
+                    ..Lfo::new(Knob::Zoom, Focus::default(), Shape::Sine)
+                }]
+            }),
+            ("a knob on a monitor that is not there", |p| {
+                p.motion = vec![Lfo {
+                    focus: Focus {
+                        camera: 0,
+                        monitor: 9,
+                    },
+                    ..Lfo::new(Knob::Hue, Focus::default(), Shape::Sine)
+                }]
+            }),
+            ("a monitor knob naming a camera", |p| {
+                p.motion = vec![Lfo {
+                    focus: Focus {
+                        camera: 1,
+                        monitor: 0,
+                    },
+                    ..Lfo::new(Knob::Hue, Focus::default(), Shape::Sine)
+                }]
+            }),
+            ("a camera knob naming a monitor", |p| {
+                p.motion = vec![Lfo {
+                    focus: Focus {
+                        camera: 0,
+                        monitor: 1,
+                    },
+                    ..Lfo::new(Knob::Zoom, Focus::default(), Shape::Sine)
+                }]
+            }),
+            ("a rate past Nyquist", |p| {
+                p.motion = vec![Lfo {
+                    rate: 60.0,
+                    ..lfo(Knob::Hue)
+                }]
+            }),
+            ("a negative rate", |p| {
+                p.motion = vec![Lfo {
+                    rate: -1.0,
+                    ..lfo(Knob::Hue)
+                }]
+            }),
+            ("a swing wider than the knob", |p| {
+                p.motion = vec![Lfo {
+                    depth: 99.0,
+                    ..lfo(Knob::Zoom)
+                }]
+            }),
+            ("a negative swing", |p| {
+                p.motion = vec![Lfo {
+                    depth: -0.1,
+                    ..lfo(Knob::Zoom)
+                }]
+            }),
+            ("a rate that is not a number", |p| {
+                p.motion = vec![Lfo {
+                    rate: f32::NAN,
+                    ..lfo(Knob::Hue)
+                }]
+            }),
+            ("a phase that is not a number", |p| {
+                p.motion = vec![Lfo {
+                    phase: f32::INFINITY,
+                    ..lfo(Knob::Hue)
+                }]
+            }),
+        ];
+        for (what, poison) in poison {
+            // Two cameras and two monitors, so "9" is out of range but "1" is
+            // a real node — the focus rules have to be about the knob's own
+            // side of the graph, not about the index existing.
+            let mut params = crossed();
+            poison(&mut params);
+            assert!(validate(&params).is_err(), "{what} passed");
+        }
+        // And the ones the rules are drawn around still load.
+        let mut params = crossed();
+        params.motion = vec![
+            Lfo::new(
+                Knob::Zoom,
+                Focus {
+                    camera: 1,
+                    monitor: 0,
+                },
+                Shape::Ramp,
+            ),
+            Lfo::new(
+                Knob::Hue,
+                Focus {
+                    camera: 0,
+                    monitor: 1,
+                },
+                Shape::Sine,
+            ),
+            // Two on one knob: a beat, not a conflict.
+            Lfo::new(
+                Knob::Hue,
+                Focus {
+                    camera: 0,
+                    monitor: 1,
+                },
+                Shape::Sine,
+            ),
+            Lfo {
+                rate: 0.0,
+                ..lfo(Knob::Gamma)
+            },
+        ];
+        validate(&params).unwrap();
     }
 
     #[test]
