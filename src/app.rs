@@ -11,7 +11,7 @@ use winit::window::{Window, WindowId};
 use crate::feedback::Feedback;
 use crate::input::Source;
 use crate::keys::{action_for, Action};
-use crate::params::{Focus, Params};
+use crate::params::{Focus, Knob, Params};
 use crate::present::Present;
 
 /// Every monitor is a fixed size, independent of the window. Resizing the
@@ -36,6 +36,13 @@ pub struct App {
     initial: Params,
     /// The camera and monitor the knobs act on.
     focus: Focus,
+    /// The knob the automation keys act on: the last one turned by hand, so
+    /// the switch reaches whatever was just being played with.
+    touched: Knob,
+    /// Where the automation's clock is read from. Not reset by Reset: a knob
+    /// jumping back to where it was is what Reset is for, and a phase jumping
+    /// with it would show up as a lurch in every LFO at once.
+    started: std::time::Instant,
     /// The running external inputs, in `params.inputs` order, which is the
     /// order `Feedback::write_input` indexes them by.
     sources: Vec<Source>,
@@ -62,6 +69,10 @@ pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
         initial: params.clone(),
         params,
         focus: Focus::default(),
+        // The knob the instrument is named for, so the automation switch does
+        // something worth seeing before anything else has been touched.
+        touched: Knob::Rotation,
+        started: std::time::Instant::now(),
         sources,
         live: None,
     })?)
@@ -176,7 +187,11 @@ impl Live {
 
 impl App {
     fn describe(&self) -> String {
-        self.params.describe(self.focus)
+        format!(
+            "{}\nmotion keys on: {}",
+            self.params.describe(self.focus),
+            self.touched.name()
+        )
     }
 }
 
@@ -208,7 +223,12 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => live.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
-                live.render(&self.params, &mut self.sources);
+                // The automation is read here and nowhere else: the knobs the
+                // GPU is handed are the stored ones offset by whatever is
+                // driving them at this instant, and `self.params` — what the
+                // keys turn and what a preset slot saves — is untouched.
+                let now = self.started.elapsed().as_secs_f64();
+                live.render(&self.params.modulated(now), &mut self.sources);
                 live.window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -222,6 +242,19 @@ impl ApplicationHandler for App {
                 match action_for(code) {
                     Some(Action::Nudge(knob, delta)) => {
                         self.params.nudge(knob, delta, self.focus);
+                        self.touched = knob;
+                        log::info!("{}", self.describe());
+                    }
+                    Some(Action::Motion) => {
+                        self.params.motion_cycle(self.touched, self.focus);
+                        log::info!("{}", self.describe());
+                    }
+                    Some(Action::MotionRate(steps)) => {
+                        self.params.motion_rate(self.touched, self.focus, steps);
+                        log::info!("{}", self.describe());
+                    }
+                    Some(Action::MotionDepth(steps)) => {
+                        self.params.motion_depth(self.touched, self.focus, steps);
                         log::info!("{}", self.describe());
                     }
                     Some(Action::NextCamera) => {

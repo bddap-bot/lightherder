@@ -12,6 +12,13 @@ pub enum Action {
     NextCamera,
     /// Move the monitor knobs' focus to the next monitor.
     NextMonitor,
+    /// Switch the automation on the last knob turned through its states: off,
+    /// a sine, a ramp, off.
+    Motion,
+    /// Move that automation's rate, in presses.
+    MotionRate(f32),
+    /// Move its depth, in presses.
+    MotionDepth(f32),
     Reset,
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
@@ -72,6 +79,39 @@ const AXES: &[Axis] = &[
 ];
 
 const COMMANDS: &[(KeyCode, &str, Action, &str)] = &[
+    // The automation, on the last knob turned rather than on a knob of its
+    // own: nineteen knobs would otherwise need nineteen switches, and the
+    // knob a performer just swept is the one they want to set moving.
+    (
+        KeyCode::KeyP,
+        "p",
+        Action::Motion,
+        "the last knob turned: off / sine / ramp",
+    ),
+    (
+        KeyCode::Digit7,
+        "7",
+        Action::MotionRate(-1.0),
+        "its rate, slower",
+    ),
+    (
+        KeyCode::Digit8,
+        "8",
+        Action::MotionRate(1.0),
+        "its rate, faster",
+    ),
+    (
+        KeyCode::Digit9,
+        "9",
+        Action::MotionDepth(-1.0),
+        "its swing, narrower",
+    ),
+    (
+        KeyCode::Digit0,
+        "0",
+        Action::MotionDepth(1.0),
+        "its swing, wider",
+    ),
     (
         KeyCode::KeyN,
         "n",
@@ -198,6 +238,17 @@ mod tests {
         assert_eq!(action_for(KeyCode::Escape), Some(Action::Quit));
         // A key no table claims.
         assert_eq!(action_for(KeyCode::F1), None);
+    }
+
+    #[test]
+    fn the_automation_keys_are_a_switch_and_two_pairs() {
+        assert_eq!(action_for(KeyCode::KeyP), Some(Action::Motion));
+        // The pairs push opposite ways, same as an axis — they are not axes
+        // only because there is no knob to hang them on until one is running.
+        assert_eq!(action_for(KeyCode::Digit7), Some(Action::MotionRate(-1.0)));
+        assert_eq!(action_for(KeyCode::Digit8), Some(Action::MotionRate(1.0)));
+        assert_eq!(action_for(KeyCode::Digit9), Some(Action::MotionDepth(-1.0)));
+        assert_eq!(action_for(KeyCode::Digit0), Some(Action::MotionDepth(1.0)));
     }
 
     #[test]
