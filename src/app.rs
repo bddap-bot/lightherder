@@ -305,7 +305,8 @@ impl Live {
 impl App {
     /// Take `params` as the live graph, rebuilding whatever no longer serves
     /// it: the inputs are reopened when they changed, and the bank and its
-    /// presenter are rebuilt when the layer counts moved — a slot stores the
+    /// presenter are rebuilt when the layer counts moved — which is also when
+    /// the inputs that stayed are asked to upload again. A slot stores the
     /// whole panel, so a recall reconstructs the rig rather than refusing a
     /// graph shaped differently from what is playing. A same-shape adopt
     /// still touches neither, so the loops keep running: what it changes is
@@ -326,11 +327,7 @@ impl App {
         // that moved either one gets a new bank below.
         let rebank = params.monitors.len() != self.params.monitors.len()
             || params.inputs.len() != self.params.inputs.len();
-        // Reopened when the inputs changed — and when the bank is being
-        // replaced, whether they changed or not: a new bank is blank, and a
-        // still pattern hands its frame over exactly once, so a source kept
-        // across the swap would leave its layer black for the rest of the run.
-        let sources = (rebank || params.inputs != self.params.inputs)
+        let sources = (params.inputs != self.params.inputs)
             .then(|| {
                 params
                     .inputs
@@ -339,8 +336,13 @@ impl App {
                     .collect::<Result<Vec<Source>, String>>()
             })
             .transpose()?;
-        if let Some(sources) = sources {
-            self.sources = sources;
+        match sources {
+            Some(sources) => self.sources = sources,
+            // The inputs are the same ones, but a rebuilt bank is a blank
+            // one and a still pattern uploads exactly once — so the sources
+            // that stayed have to hand their frames over again.
+            None if rebank => self.sources.iter_mut().for_each(Source::replay),
+            None => {}
         }
         // Blanked, as any bank is at creation, which is what a rig with
         // different monitors means anyway.

@@ -84,7 +84,7 @@ enum Frames {
     Still {
         /// Kept for the run rather than freed once uploaded, since a borrow
         /// of them is what was handed over — one frame of RGBA8 per still
-        /// input, which is a quarter of what its one bank layer costs.
+        /// input, which is a quarter of the two bank layers it is written to.
         pixels: Vec<u8>,
         /// Whether the pixels have been handed over. A still layer already on
         /// the GPU needs no second upload.
@@ -128,6 +128,22 @@ impl Source {
                 Some(pixels.as_slice())
             }
             Frames::Pipe(pipe) => pipe.take(),
+        }
+    }
+
+    /// Hands the frame the layer is showing over once more, for a caller that
+    /// has replaced the bank that layer lived in. A new bank is blank, and a
+    /// still pattern uploads exactly once, so without this its layer would
+    /// stay black for the rest of the run — as would an ffmpeg's that has
+    /// already ended and will send nothing further.
+    ///
+    /// Cheaper than reopening, and it cannot fail: an exclusive device that
+    /// is already open would refuse a second ffmpeg, which would turn a
+    /// recall into an error over a bank the graph did not even change.
+    pub fn replay(&mut self) {
+        match &mut self.frames {
+            Frames::Still { uploaded, .. } => *uploaded = false,
+            Frames::Pipe(pipe) => pipe.pending = true,
         }
     }
 }

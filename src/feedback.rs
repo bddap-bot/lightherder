@@ -78,12 +78,11 @@ pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
 /// times splitter weight). This is where a camera's two splitter lists become
 /// the one index space the bank is laid out in — the monitors, then the
 /// inputs offset past them, the same layout [`Feedback::write_input`] writes
-/// an input's frame to. The one definition of which edges become taps —
-/// `config::validate` counts these against [`MAX_TAPS`] and [`Feedback::step`]
-/// writes them, so the two cannot drift apart on the zero-weight rule. Note
-/// for the increment that makes routing or look weights live-mutable:
-/// validate-at-load stops bounding the tap count the moment a zero weight can
-/// be swept positive mid-performance, and the bound must move to the nudge.
+/// an input's frame to.
+///
+/// The one definition of which edges become taps, so that what
+/// [`Feedback::step`] writes and what [`reachable_taps`] bounds cannot drift
+/// apart on the zero-weight rule.
 pub(crate) fn taps_of(params: &Params, m: usize) -> impl Iterator<Item = (usize, usize, f32)> + '_ {
     let monitors = params.monitors.len();
     params.routing[m]
