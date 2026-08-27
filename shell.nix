@@ -43,6 +43,8 @@ pkgs.mkShell {
     rustc
     clippy
     rustfmt
+    # test-map.json's web/** rule lints web/build.sh with this.
+    shellcheck
     # An external input that is a file or a device is an ffmpeg reading it,
     # and two of the tests run one.
     ffmpeg
