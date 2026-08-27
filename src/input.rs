@@ -79,22 +79,21 @@ impl fmt::Display for Input {
 ///
 /// A pattern is drawn once and never refilled, which is the state a pipe
 /// reaches the moment its ffmpeg ends: a frame in hand that nothing will
-/// replace. So there is one buffer and one flag here rather than a pair per
-/// kind, and one path through [`Source::frame`] rather than one per kind.
+/// replace. So there is one buffer and one flag here, not a variant per kind.
 pub struct Source {
     /// The frame in hand, and on the layer once it has been handed over.
     /// Kept rather than given away, since a borrow of it is what
-    /// [`Source::frame`] lends out — and for a pipe it is also one of the two
-    /// buffers going round [`Channels`], neither of them allocated or freed
-    /// after startup.
+    /// [`Source::frame`] lends out — and while there is a pipe it is also one
+    /// of the two buffers going round between the reader and here, neither of
+    /// them allocated or freed for as long as frames keep arriving.
     showing: Vec<u8>,
     /// Whether `showing` has yet to be handed over. A frame the layer already
     /// holds is not worth a second upload, so this is what makes a still
     /// pattern upload once and a second [`Source::frame`] between arrivals
     /// answer `None`.
     pending: bool,
-    /// The ffmpeg behind the frames. `None` for a pattern, and for a pipe
-    /// whose ffmpeg has ended: that is what letting it go leaves behind.
+    /// The ffmpeg behind the frames, dropped — and so reaped — as soon as it
+    /// ends. `None` for a pattern, and for a source that has ended.
     pipe: Option<Pipe>,
 }
 
@@ -104,7 +103,7 @@ impl Source {
     /// error here, at startup, rather than a black layer nobody can explain.
     pub fn open(input: &Input, size: (u32, u32)) -> Result<Source, String> {
         // What ffmpeg is told to open is the whole of what the kinds differ
-        // by. A pattern tells it nothing, because it is drawn here instead.
+        // by.
         let ffmpeg = match input {
             Input::Pattern(pattern) => {
                 return Ok(Source {
@@ -131,19 +130,17 @@ impl Source {
     ///
     /// The next frame in order, not the newest ffmpeg has produced: nothing
     /// is dropped on the way here, because a bound of one frame in flight
-    /// blocks ffmpeg on its own pipe instead — see [`Channels`].
+    /// blocks ffmpeg on its own pipe instead.
     ///
-    /// Borrowed rather than handed over, because the buffer behind it is one
-    /// of the two this input owns for good.
+    /// Borrowed rather than handed over, because the source keeps the buffer
+    /// behind it either way.
     pub fn frame(&mut self) -> Option<&[u8]> {
         let arrived = self.pipe.as_ref().map(|pipe| pipe.swap(&mut self.showing));
         match arrived {
             Some(Ok(())) => self.pending = true,
-            // The reader ends once and for all, so this is the one moment the
-            // pipe can be let go — which joins that thread and reaps the
-            // ffmpeg, rather than leaving a defunct child until the process
-            // exits. What is left behind is a still: the last whole frame,
-            // and nothing that will replace it.
+            // This is the one moment the pipe can be let go: dropping it
+            // joins the reader and reaps the ffmpeg, rather than leaving a
+            // defunct child for the rest of the run.
             Some(Err(TryRecvError::Disconnected)) => self.pipe = None,
             // Between frames, or no pipe at all: either way the layer keeps
             // what it has.
@@ -165,6 +162,7 @@ impl Source {
         self.pending = true;
     }
 }
+
 /// The circuit two frame buffers travel round: full ones coming up from the
 /// reader, spent ones going back down to it. No third buffer is ever
 /// allocated — one is being read into while the other is on the layer — which
@@ -181,6 +179,7 @@ struct Channels {
     full: Receiver<Vec<u8>>,
     spent: SyncSender<Vec<u8>>,
 }
+
 /// An ffmpeg writing raw frames down a pipe, and the thread draining it.
 struct Pipe {
     child: Child,
@@ -208,9 +207,9 @@ impl Drop for Pipe {
 }
 
 impl Pipe {
-    /// The ffmpeg, the thread draining it, and the first frame it produced —
-    /// which is the caller's to keep, since a [`Source`] holds one frame
-    /// whether or not there is a pipe behind it.
+    /// The first frame comes back beside the pipe rather than inside it,
+    /// since a [`Source`] holds one frame whether or not there is a pipe
+    /// behind it.
     fn spawn(
         input: &Input,
         source: Vec<String>,
@@ -271,9 +270,7 @@ impl Pipe {
             reader: Some(reader),
         };
         // A dead ffmpeg drops its end of the channel, so this returns as soon
-        // as it exits rather than waiting out the timeout. Handed back rather
-        // than kept, because the frame in hand is the caller's one buffer
-        // whichever kind of input it came from — see [`Source::showing`].
+        // as it exits rather than waiting out the timeout.
         let first = pipe
             .channels
             .as_ref()
@@ -290,8 +287,7 @@ impl Pipe {
     ///
     /// The error is the channel's own: `Empty` while ffmpeg is between
     /// frames, and `Disconnected` once the reader has ended, which it only
-    /// ever does for good — the same answer a pipe already being dropped
-    /// gives, since neither will produce another frame.
+    /// ever does for good.
     fn swap(&self, showing: &mut Vec<u8>) -> Result<(), TryRecvError> {
         let channels = self.channels.as_ref().ok_or(TryRecvError::Disconnected)?;
         let next = channels.full.try_recv()?;
@@ -614,8 +610,7 @@ mod tests {
         }
         assert!(source.pipe.is_none(), "the pipe outlived its ffmpeg");
         // A child nobody has waited for stays in the table as a zombie; one
-        // that has been waited for is gone from it entirely. Read rather than
-        // waited for a second time, since the waiting is what is under test.
+        // that has been waited for is gone from it entirely.
         assert!(
             !std::path::Path::new(&format!("/proc/{pid}")).exists(),
             "ffmpeg {pid} is still in the process table"
