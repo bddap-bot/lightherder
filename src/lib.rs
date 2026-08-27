@@ -11,6 +11,7 @@ pub mod feedback;
 pub mod gpu;
 pub mod input;
 pub mod keys;
+pub(crate) mod lamps;
 pub mod midi;
 pub mod motion;
 pub mod overlay;

@@ -14,6 +14,13 @@
 //! and reading it gives the wire bytes. Nothing here needs the sequencer's
 //! routing or its timestamps — the instrument acts on a message when it
 //! arrives — so libasound would be a dependency bought for a `File::open`.
+//!
+//! The same node is opened a second time for writing, which is what lights
+//! the focused camera's button — see [`crate::lamps`]. A second open rather
+//! than one read-write handle: a raw MIDI node's two directions are separate
+//! substreams, so the read this instrument has always depended on — the one
+//! that reports the unplug by ending — is left exactly as it was, and a
+//! surface whose output will not open is still a surface that plays.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -24,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
 use crate::keys::{action_for_label, labels, Action};
+use crate::lamps::{Lamps, Msg};
 use crate::params::{Focus, Knob, Limit, Params};
 
 /// Where ALSA puts its character devices.
@@ -399,6 +407,19 @@ fn nano_buttons() -> Vec<Button> {
     out
 }
 
+/// One thing off the wire. A knob or a button is a control change; a system
+/// exclusive frame is how the surface answers a question about itself, which
+/// is the whole of the conversation that puts its lights under the host.
+enum Message {
+    Control(ControlChange),
+    Sysex(Vec<u8>),
+}
+
+/// The longest system exclusive frame worth keeping. A scene dump is 402
+/// bytes and nothing else is asked for, so this is where a frame that has
+/// lost its end — a cable pulled mid-message — stops growing.
+const SYSEX_MAX: usize = 512;
+
 /// The MIDI byte stream, decoded as it arrives.
 ///
 /// A stream, not a parser over a buffer, because a `read` lands wherever it
@@ -412,23 +433,54 @@ struct Stream {
     status: u8,
     data: [u8; 2],
     have: usize,
+    /// The system exclusive frame being collected, its leading `F0` and all.
+    /// `None` between frames, which is nearly always.
+    sysex: Option<Vec<u8>>,
 }
 
 impl Stream {
-    /// Feed one byte in, and push out any control change it completed.
-    fn push(&mut self, byte: u8, out: &mut Vec<ControlChange>) {
+    /// Feed one byte in, and push out any message it completed.
+    fn push(&mut self, byte: u8, out: &mut Vec<Message>) {
         match byte {
             // Real time. Interleaved anywhere, even between a control number
-            // and its value, and it does not disturb running status.
+            // and its value or inside a system exclusive frame, and it
+            // disturbs neither.
             0xF8..=0xFF => {}
-            // System exclusive and system common. No running status survives
-            // one, which is the whole of what a scene dump needs: its payload
-            // is data bytes with no status in force, and the branch below
-            // drops those. Nothing has to know a dump is being read.
-            0xF0..=0xF7 => self.status = 0,
+            // No running status survives a system message, so the data bytes
+            // of a frame cannot be read as knob moves however this ends.
+            0xF0 => {
+                self.status = 0;
+                self.sysex = Some(vec![0xF0]);
+            }
+            0xF7 => {
+                self.status = 0;
+                if let Some(mut frame) = self.sysex.take() {
+                    frame.push(0xF7);
+                    out.push(Message::Sysex(frame));
+                }
+            }
+            // System common, and any channel message: either ends a frame
+            // that never got its `F7`, which is what a surface unplugged
+            // mid-dump leaves behind.
+            0xF1..=0xF6 => {
+                self.status = 0;
+                self.sysex = None;
+            }
             0x80..=0xEF => {
                 self.status = byte;
                 self.have = 0;
+                self.sysex = None;
+            }
+            _ if self.sysex.is_some() => {
+                let frame = self.sysex.as_mut().expect("just checked");
+                frame.push(byte);
+                // Longer than anything this asks for: dropped here rather
+                // than grown until a frame with no end is the whole of
+                // memory. The bytes after it are data under no status, which
+                // nothing decodes.
+                if frame.len() > SYSEX_MAX {
+                    self.sysex = None;
+                }
             }
             _ if self.status == 0 => {}
             _ => {
@@ -445,10 +497,10 @@ impl Stream {
                 }
                 self.have = 0;
                 if self.status & 0xF0 == 0xB0 {
-                    out.push(ControlChange {
+                    out.push(Message::Control(ControlChange {
                         control: self.data[0],
                         value: self.data[1],
-                    });
+                    }));
                 }
             }
         }
@@ -535,6 +587,11 @@ pub struct Midi {
     /// acted on when it goes down, so a surface whose buttons latch — the
     /// nanoKONTROL2 can be set either way — plays every other press.
     held: Vec<bool>,
+    /// The control number of the button that selects each camera, by camera.
+    /// That button's lamp is the one that says where the knobs are, so it is
+    /// read off the map in force rather than off the factory layout: a
+    /// `midi.toml` that moves the select row moves the light with it.
+    solo: Vec<Option<u8>>,
     next_scan: Instant,
     /// The last thing that went wrong looking for the surface, so a device
     /// that is there and will not open is said once rather than sixty times a
@@ -545,6 +602,27 @@ pub struct Midi {
 struct Port {
     path: PathBuf,
     rx: Receiver<ControlChange>,
+    /// The surface's lights, when its output opened. `None` is a surface
+    /// that plays and does not light, which is every surface before this.
+    lamps: Option<Lamps>,
+}
+
+/// Which camera each button selects, by control number — the lamp table
+/// [`Midi::solo`] is built from. The first button that names a camera wins,
+/// so a map with two buttons on one camera lights the one it lists first
+/// rather than whichever came last.
+fn solo_lamps(map: &Map, action: &[Action]) -> Vec<Option<u8>> {
+    let mut solo: Vec<Option<u8>> = Vec::new();
+    for (b, a) in map.button.iter().zip(action) {
+        let Action::FocusCamera(camera) = a else {
+            continue;
+        };
+        if solo.len() <= *camera {
+            solo.resize(camera + 1, None);
+        }
+        solo[*camera].get_or_insert(b.cc);
+    }
+    solo
 }
 
 impl Midi {
@@ -552,12 +630,14 @@ impl Midi {
     /// refuse, so nothing downstream has to handle one.
     pub fn new(map: Map) -> Result<Midi, String> {
         map.validate()?;
+        let action: Vec<Action> = map
+            .button
+            .iter()
+            .map(|b| action_for_label(&b.key).expect("validate checked every label"))
+            .collect();
         Ok(Midi {
-            action: map
-                .button
-                .iter()
-                .map(|b| action_for_label(&b.key).expect("validate checked every label"))
-                .collect(),
+            solo: solo_lamps(&map, &action),
+            action,
             pickup: vec![Pickup::default(); map.fader.len()],
             held: vec![false; map.button.len()],
             map,
@@ -616,6 +696,21 @@ impl Midi {
             self.drop_port();
         }
         messages
+    }
+
+    /// Say which camera the knobs are on, so its Solo button lights and no
+    /// other. Called once a frame with whatever the focus is now, rather
+    /// than at each of the several places the focus moves — the frame loop
+    /// is the one place that cannot miss one, and saying the same thing
+    /// again costs nothing on the wire.
+    ///
+    /// A camera past the end of the select row goes dark: a graph may run
+    /// deeper than the eight strips the surface has, and a lamp on the wrong
+    /// button is worse than no lamp.
+    pub fn show(&self, camera: usize) {
+        if let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) {
+            lamps.show(self.solo.get(camera).copied().flatten());
+        }
     }
 
     /// Let go of every fader's grip on its knob. Three times the knobs move
@@ -736,15 +831,32 @@ fn find<'a>(
         .filter(|path| path.exists())
 }
 
-/// Open the device and read it on a thread, decoding as it goes.
+/// Open the device and read it on a thread, decoding as it goes — and open
+/// it a second time for writing, which is what lights its buttons.
 ///
 /// A thread rather than a non-blocking read polled from the frame loop: a
 /// blocking `read` on a device nobody is touching costs nothing, and it is
 /// the same `read` that reports the unplug. The channel is unbounded because
 /// a button press dropped for backpressure is a press that did not happen,
 /// and a surface sends a kilobyte a second at its very worst.
+///
+/// The write half is its own open, its own thread and its own failure: only
+/// the read decides whether there is a surface at all. A node that will not
+/// open for writing — its output substream already taken by something else —
+/// is a surface that plays without lights, said once and then played.
 fn open(path: &Path) -> Result<Port, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let lamps = match std::fs::OpenOptions::new().write(true).open(path) {
+        Ok(out) => Lamps::spawn(out),
+        Err(e) => {
+            log::warn!(
+                "surface: {} will not open for writing ({e}); its buttons light themselves",
+                path.display()
+            );
+            None
+        }
+    };
+    let sysex = lamps.as_ref().map(Lamps::sender);
     let (tx, rx) = std::sync::mpsc::channel();
     let name = path.to_owned();
     std::thread::Builder::new()
@@ -765,15 +877,31 @@ fn open(path: &Path) -> Result<Port, String> {
                 for byte in &buf[..read] {
                     stream.push(*byte, &mut out);
                 }
-                for cc in out.drain(..) {
-                    if tx.send(cc).is_err() {
-                        return;
+                for message in out.drain(..) {
+                    match message {
+                        Message::Control(cc) => {
+                            if tx.send(cc).is_err() {
+                                return;
+                            }
+                        }
+                        // The lights' half of the conversation. A frame that
+                        // reaches nobody is one asked for by a thread that
+                        // has already given up, which is its own business.
+                        Message::Sysex(frame) => {
+                            if let Some(sysex) = &sysex {
+                                let _ = sysex.send(Msg::Sysex(frame));
+                            }
+                        }
                     }
                 }
             }
         })
         .map_err(|e| format!("{}: {e}", name.display()))?;
-    Ok(Port { path: name, rx })
+    Ok(Port {
+        path: name,
+        rx,
+        lamps,
+    })
 }
 
 #[cfg(test)]
@@ -856,13 +984,33 @@ mod tests {
         vec![0xB0, control, value]
     }
 
-    fn decode(bytes: &[u8]) -> Vec<ControlChange> {
+    fn messages(bytes: &[u8]) -> Vec<Message> {
         let mut stream = Stream::default();
         let mut out = Vec::new();
         for byte in bytes {
             stream.push(*byte, &mut out);
         }
         out
+    }
+
+    fn decode(bytes: &[u8]) -> Vec<ControlChange> {
+        messages(bytes)
+            .into_iter()
+            .filter_map(|m| match m {
+                Message::Control(cc) => Some(cc),
+                Message::Sysex(_) => None,
+            })
+            .collect()
+    }
+
+    fn sysex(bytes: &[u8]) -> Vec<Vec<u8>> {
+        messages(bytes)
+            .into_iter()
+            .filter_map(|m| match m {
+                Message::Sysex(frame) => Some(frame),
+                Message::Control(_) => None,
+            })
+            .collect()
     }
 
     fn message(control: u8, value: u8) -> ControlChange {
@@ -902,12 +1050,69 @@ mod tests {
         // request. It has to arrive with running status in force, which is
         // the only state in which its payload could be read as knob moves —
         // a dump on its own is data under no status, which nothing decodes.
+        let dump = [0xF0, 0x42, 0x40, 0x00, 0x01, 0x13, 0x00, 0x7F, 0xF7];
         let mut bytes = cc(1, 9);
-        bytes.extend([0xF0, 0x42, 0x40, 0x00, 0x01, 0x13, 0x00, 0x7F, 0xF7]);
+        bytes.extend(dump);
         // And no status survives the dump, so the pair after it belongs to
         // nothing rather than to the fader that moved before it.
         bytes.extend([0x02, 0x05]);
         assert_eq!(decode(&bytes), [message(1, 9)]);
+        // The frame itself comes out whole, `F0` and `F7` and all: it is the
+        // surface's answer about itself, and the lights are read out of it.
+        assert_eq!(sysex(&bytes), [dump.to_vec()]);
+    }
+
+    #[test]
+    fn a_frame_that_never_ends_is_dropped_rather_than_kept() {
+        // A cable pulled mid-dump, and then the surface plugged back in and
+        // played. Without a cap the frame grows for as long as the
+        // instrument runs; without an end on a status byte the knob moves
+        // after it are swallowed by it.
+        let mut bytes = vec![0xF0, 0x42];
+        bytes.extend(std::iter::repeat_n(0x00, SYSEX_MAX * 2));
+        bytes.extend(cc(7, 64));
+        assert_eq!(decode(&bytes), [message(7, 64)]);
+        assert!(sysex(&bytes).is_empty(), "an endless frame came out");
+
+        // A frame cut short by the next status byte rather than by length.
+        let mut cut = vec![0xF0, 0x42, 0x40];
+        cut.extend(cc(7, 65));
+        assert_eq!(decode(&cut), [message(7, 65)]);
+        assert!(sysex(&cut).is_empty(), "a frame with no end came out");
+
+        // And one exactly at the cap still arrives: a scene dump is 402
+        // bytes and a cap that clipped it would be a handshake that never
+        // completes.
+        let mut whole = vec![0xF0];
+        whole.extend(std::iter::repeat_n(0x01, SYSEX_MAX - 2));
+        whole.push(0xF7);
+        assert_eq!(whole.len(), SYSEX_MAX);
+        assert_eq!(sysex(&whole), [whole.clone()]);
+    }
+
+    #[test]
+    fn a_real_time_byte_inside_a_frame_is_not_part_of_it() {
+        // Clock is interleaved anywhere at all, and a scene dump takes long
+        // enough on the wire to catch several.
+        let bytes = [0xF0, 0x42, 0xF8, 0x40, 0xFE, 0xF7];
+        assert_eq!(sysex(&bytes), [vec![0xF0, 0x42, 0x40, 0xF7]]);
+    }
+
+    #[test]
+    fn the_lamp_of_each_camera_is_the_button_that_selects_it() {
+        // Off the map, so the factory Solo row and a `midi.toml` that moved
+        // it both light the button a hand actually reaches for.
+        let midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        assert_eq!(midi.solo, (32..40).map(Some).collect::<Vec<_>>());
+
+        let mut map = Map::nano_kontrol2();
+        map.button.retain(|b| !(32..40).contains(&b.cc));
+        map.button.push(button(90, "num2"));
+        let midi = Midi::new(map).unwrap();
+        assert_eq!(midi.solo, [None, Some(90)]);
+        // A camera past the end of the select row has no lamp rather than
+        // the nearest one: a graph may run deeper than the surface.
+        assert_eq!(midi.solo.get(7).copied().flatten(), None);
     }
 
     #[test]

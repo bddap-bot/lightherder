@@ -304,6 +304,35 @@ The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.
 A latching button plays on every second press.
 
+### The lit button
+
+**The focused camera's Solo button is lit**, so the panel says where the knobs
+are without anyone reading the log line. It follows the focus from wherever
+the focus moved — a number key, the Solo row, the markers, a preset recall —
+and goes out when the instrument does. A camera past the eighth has no button
+to light, and lights none.
+
+That takes setting up, and the app does the setting up. A nanoKONTROL2 leaves
+the factory in **LED Mode: Internal**, where a button lights itself when
+pressed and ignores the host, and Korg's only supported way to change that is
+the KONTROL Editor — Windows and macOS. So the app asks the surface for the
+scene it is playing, sets the one byte that is the LED mode, and hands the
+same scene back. Nothing else in the scene is touched, so a performer's own
+control assignments survive it; nothing is written to the surface's flash, so
+a surface plugged into something else afterwards is the one its owner set up.
+The cost of that is a handshake on every connect, which is where it belongs.
+
+A surface that will not take the mode still plays exactly as it did before,
+and says so once on the log. So does one whose device node will not open for
+writing, and one that does not answer as a nanoKONTROL2 at all — that last is
+never written to, because what a control change does to a device this does not
+recognise is not knowable from here.
+
+None of it happens on a frame. The handshake waits on replies that may never
+come and a MIDI write blocks when the wire is full, so the lights are a thread
+of their own; the frame loop's whole part is to say which camera is focused,
+down a channel, once a frame.
+
 ### Mapping config
 
 `$XDG_CONFIG_HOME/lightherder/midi.toml`, beside the preset slots. If it is not
@@ -615,6 +644,20 @@ with two other cards that also have raw MIDI devices. And the whole path —
 discovery, the open, the reader thread, the decode, the map and the pickup —
 against a device that is not there when the instrument starts, appears, sends
 a sweep down a pipe, and goes away again, which is what hot-plug is.
+
+The lights are tested at the file descriptor, over a socket pair standing in
+for the device node: what the instrument writes really leaves a descriptor and
+is really read back on the other side, byte for byte. Korg's seven-bit packing
+against numbers worked out by hand, since a packer and its own inverse agree
+on any bit order at all — the reversed one included. The handshake against a
+surface that hands over an internal scene, which must come back with one byte
+changed and 338 untouched; one already in external mode, which must be left
+alone; one that answers as some other maker's device, which must never be
+written to at all; and one that answers nothing, which must give up on its own
+and still leave the surface played. The lamps against a focus that moves — out
+first, then on, because two lit at once is a panel claiming the knobs are in
+two places — against the same focus said sixty times, which must put nothing
+on the wire, and against the exit, which must put them out.
 
 ## In a browser
 
