@@ -241,12 +241,14 @@ editor, keeps in a repository, or comes straight back as the graph the
 instrument starts on. There is no second format for a saved state, because a
 saved state is a graph.
 
-A recall keeps the loops running: it changes the knobs the next pass reads,
-not the light already on the glass. What it may not change is what would have
-to be rebuilt to serve it — the monitor bank and the processes feeding the
-inputs — so a slot with a different number of monitors, or different inputs,
-is refused with the reason; start it from the command line with that file instead. Cameras,
-routing, every knob and all the automation are free to differ.
+A slot with the same number of monitors and the same inputs keeps the loops
+running: it changes the knobs the next pass reads, not the light already on
+the glass. One input that differs reopens them all; a changed monitor or
+input count gets a new bank, blank the way every bank starts. Cameras,
+routing, every knob and all the automation are free to differ without
+costing even that. The only refusals are the command line's own — a slot
+that will not load, an input that will not open, a bank past the cap — each
+leaving the rig playing untouched.
 
 ## The control surface
 
