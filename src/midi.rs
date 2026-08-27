@@ -95,7 +95,7 @@ pub struct Fader {
 #[serde(deny_unknown_fields)]
 pub struct Button {
     pub(crate) cc: u8,
-    /// A key, spelled the way the printed help spells it — `"p"`, `"space"`,
+    /// A key, spelled the way the printed help spells it — `"r"`, `"space"`,
     /// `"shift f1"`.
     pub(crate) key: String,
 }
@@ -411,14 +411,9 @@ fn nano_buttons() -> Vec<Button> {
         button(60, "n"),
         button(61, "m"),
         button(62, "space"),
-        // Stop, for the one button that puts the whole panel back.
+        // Stop, for the one button that puts the whole panel back. Nothing
+        // is bound to quit.
         button(42, "r"),
-        // Transport, where the automation belongs. Nothing is bound to quit.
-        button(41, "p"),
-        button(43, "7"),
-        button(44, "8"),
-        button(58, "9"),
-        button(59, "0"),
         // Cycle shows and hides the overlay that explains all of the above —
         // the one button whose job survives not knowing what any button does.
         button(46, "`"),
@@ -1353,11 +1348,6 @@ mod tests {
                 button(61, "m"),
                 button(62, "space"),
                 button(42, "r"),
-                button(41, "p"),
-                button(43, "7"),
-                button(44, "8"),
-                button(58, "9"),
-                button(59, "0"),
                 button(46, "`"),
             ]
         );
@@ -1661,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn the_buttons_reach_the_cameras_the_slots_and_the_automation() {
+    fn the_buttons_reach_the_cameras_the_slots_and_the_transport() {
         let (mut midi, params) = surface();
         // One from each row, at both ends of it: the rows are three
         // eight-wide blocks of control numbers, and a block written from the
@@ -1678,15 +1668,17 @@ mod tests {
         assert_eq!(feed(&mut midi, &params, &cc(55, 127)), [Action::Recall(7)]);
         assert_eq!(feed(&mut midi, &params, &cc(64, 127)), [Action::Store(0)]);
         assert_eq!(feed(&mut midi, &params, &cc(71, 127)), [Action::Store(7)]);
-        assert_eq!(feed(&mut midi, &params, &cc(41, 127)), [Action::Motion]);
-        assert_eq!(
-            feed(&mut midi, &params, &cc(44, 127)),
-            [Action::MotionRate(1.0)]
-        );
-        assert_eq!(
-            feed(&mut midi, &params, &cc(59, 127)),
-            [Action::MotionDepth(1.0)]
-        );
+        // The transport strip: stop puts the panel back, cycle lifts the
+        // overlay.
+        assert_eq!(feed(&mut midi, &params, &cc(42, 127)), [Action::Reset]);
+        assert_eq!(feed(&mut midi, &params, &cc(46, 127)), [Action::Overlay]);
+        // And the five the automation used to hold are bound to nothing —
+        // named by number, because the next thing to want them must be
+        // choosing them rather than inheriting them.
+        for control in [41, 43, 44, 58, 59] {
+            let acted = feed(&mut midi, &params, &cc(control, 127));
+            assert_eq!(acted, [], "cc {control}");
+        }
     }
 
     #[test]

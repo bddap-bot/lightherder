@@ -62,7 +62,6 @@ fn graph(s: &Single) -> Params {
         }],
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
-        motion: Vec::new(),
     }
 }
 
@@ -273,19 +272,6 @@ impl Image {
 
     fn brightest(&self) -> f32 {
         self.brightest_in(0.0, 0.0, 1.0, 1.0)
-    }
-
-    /// Mean absolute difference from another frame, in levels. The oracle
-    /// for whether the picture is still moving — the total is not, since a
-    /// rotation moves light around without making or losing any.
-    fn differs_from(&self, other: &Image) -> f64 {
-        let sum: f64 = self
-            .pixels
-            .iter()
-            .zip(&other.pixels)
-            .map(|(a, b)| (f64::from(*a) - f64::from(*b)).abs())
-            .sum();
-        sum / self.pixels.len() as f64
     }
 
     /// The brightest one channel gets inside a uv rectangle. Separate from
@@ -1142,7 +1128,6 @@ fn the_routing_matrix_sends_each_camera_across() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
-        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1213,7 +1198,6 @@ fn mix_weights_scale_each_camera_s_contribution() {
         }],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 0.0]],
-        motion: Vec::new(),
     };
     h.step_graph(&p);
     let seed = h.feedback.seed_uv();
@@ -1252,7 +1236,6 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![1.0], vec![0.0]],
-        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1289,7 +1272,6 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
             .collect(),
         inputs: Vec::new(),
         routing: vec![vec![0.25; 4]; 4],
-        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
         return;
@@ -1316,10 +1298,6 @@ fn the_shipped_presets_settle_without_clipping() {
     // every monitor of every preset keeps an image — not flat white, not
     // black. Off `PRESETS` rather than listed here, so a preset shipped
     // without a line in this test cannot slip past it.
-    //
-    // Run through `modulated` on a sixty-a-second clock, because a preset
-    // that moves has to hold up while it is moving; for the presets that do
-    // not, `modulated` hands the same graph straight back.
     for (name, build) in lightherder::config::PRESETS {
         let p = build();
         let n = p.monitors.len();
@@ -1328,11 +1306,10 @@ fn the_shipped_presets_settle_without_clipping() {
             return;
         };
         feed_inputs(&mut h, &p);
-        for i in 0..399 {
-            h.feedback
-                .step(h.device, h.queue, &p.modulated(f64::from(i) / 60.0));
+        for _ in 0..399 {
+            h.feedback.step(h.device, h.queue, &p);
         }
-        h.step_graph(&p.modulated(399.0 / 60.0));
+        h.step_graph(&p);
         let img = h.read();
         for m in 0..n {
             let (u0, v0) = tile(n, m, 0.0, 0.0);
@@ -1353,79 +1330,6 @@ fn the_shipped_presets_settle_without_clipping() {
             }
         }
     }
-}
-
-#[test]
-fn the_turning_camera_keeps_an_image_all_the_way_round() {
-    // The stage's headline claim, on hardware. `kinetic` sweeps its rotation
-    // right round, so the structure has to survive every angle it passes
-    // through — including the half turn, where a point comes back beside
-    // where it started every second pass instead of winding away from it.
-    //
-    // And it has to keep moving. A loop whose camera is not turning settles
-    // and then hands back the same frame every time, so a picture that is
-    // still changing a revolution in is what says the automation reached the
-    // shader at all rather than the instrument quietly running `single`.
-    // Frame against frame, not total against total: a rotation moves light
-    // around without making or losing any, so the totals barely move.
-    let p = lightherder::config::kinetic();
-    const FPS: f64 = 60.0;
-    let frames = (FPS / f64::from(p.motion[0].rate)) as usize;
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
-        return;
-    };
-    // The rail, in levels: the preset runs its amplifier below white on
-    // purpose, so `< 250` would be free — it is what the rail asymptotes to
-    // that the picture has to stay under, and the rail is not allowed to be
-    // the only thing holding it there either.
-    let rail = p.monitors[0].headroom * 255.0;
-    assert!(
-        rail < 250.0,
-        "the rail is not below white; this bar is free"
-    );
-
-    let mut samples: Vec<Image> = Vec::new();
-    let mut angles: Vec<f32> = Vec::new();
-    // Two revolutions: the first fills the loop from black, the second is
-    // the one that is measured.
-    for i in 0..frames * 2 {
-        let at = p.modulated(i as f64 / FPS);
-        h.step_graph(&at);
-        if i >= frames && i.is_multiple_of(30) {
-            let img = h.read();
-            let (peak, angle) = (img.brightest(), at.cameras[0].framing.rotation);
-            assert!(
-                peak < rail - 20.0,
-                "flat against the rail at {angle:.2} rad"
-            );
-            assert!(peak > 30.0, "went dark at {angle:.2} rad: {peak}");
-            samples.push(img);
-            angles.push(angle);
-        }
-    }
-
-    // It really went round, once. Measured the shortest way between samples,
-    // which is the only way to add up a wrapping angle without reading its
-    // wrap as a jump — a camera merely wobbling either side of where it
-    // started sums to nothing.
-    use std::f32::consts::{PI, TAU};
-    let turned: f32 = angles
-        .windows(2)
-        .map(|pair| (pair[1] - pair[0] + PI).rem_euclid(TAU) - PI)
-        .sum();
-    assert!(
-        (turned - TAU).abs() < 0.2,
-        "one cycle turned {turned}, not a revolution"
-    );
-
-    let moved = samples
-        .iter()
-        .map(|img| img.differs_from(&samples[0]))
-        .fold(0.0, f64::max);
-    assert!(
-        moved > 5.0,
-        "the picture barely moved over a whole revolution: {moved} levels"
-    );
 }
 
 #[test]
@@ -1688,7 +1592,6 @@ fn each_camera_carries_its_own_character() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
-        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1800,8 +1703,8 @@ fn the_grain_is_monochrome_and_signed() {
 // ---- External inputs: sources the cameras can be aimed at ----------------
 
 /// Opens a graph's own inputs and puts a frame of each on its layer. The
-/// shipped patterns are still, so one delivery is the whole of it; a source
-/// with motion in it would want this every step, as the app does.
+/// shipped patterns are still, so one delivery is the whole of it; a moving
+/// source would want this every step, as the app does.
 fn feed_inputs(h: &mut Harness, params: &Params) {
     for (i, input) in params.inputs.iter().enumerate() {
         let frame = match input {
@@ -1863,7 +1766,6 @@ fn one_camera_on_one_input() -> Params {
         monitors: vec![silent_monitor()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
         routing: vec![vec![1.0]],
-        motion: Vec::new(),
     }
 }
 
@@ -1928,7 +1830,6 @@ fn each_input_lands_on_its_own_layer() {
         monitors: vec![silent_monitor(), silent_monitor()],
         inputs: vec![Input::Pattern(Pattern::Bars); 2],
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
-        motion: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;

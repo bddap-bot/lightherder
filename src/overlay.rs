@@ -38,8 +38,10 @@ const GLYPH: i32 = 8;
 /// One channel strip's width: room for the widest single word a knob's name
 /// carries ("saturation", ten glyphs) with a texel of air either side.
 const STRIP_W: i32 = 84;
-/// A transport button and the pitch between them, sized to a caption of
-/// seven glyphs — "swing +" — with a texel each side.
+/// A transport button and the pitch between them. Seven glyphs and a texel
+/// each side: a map may bind any key to any button, so the width is a
+/// ceiling on what fits rather than a fit to one caption — a longer one is
+/// clipped at the frame.
 const BUTTON_W: i32 = 60;
 const BUTTON_H: i32 = 16;
 const BUTTON_PITCH: i32 = 64;
@@ -273,8 +275,9 @@ fn place(c: &mut Canvas, spot: Spot, label: &str) {
         Spot::Transport(t) => {
             transport_button(c, t.row, t.col, LIT);
             let x = button_x(t.col);
-            // Two texels in from the frame: "swing -" is seven glyphs, and
-            // the button is sized to hold exactly them.
+            // Two texels in from the frame, and clipped at the far one:
+            // the button holds seven glyphs, and a map may bind a key whose
+            // caption is longer.
             c.text(
                 x + 2,
                 ROWS_Y[t.row as usize] + 4,

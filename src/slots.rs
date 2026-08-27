@@ -72,9 +72,7 @@ mod tests {
     #[test]
     fn a_slot_holds_the_whole_panel() {
         let dir = scratch("round-trip");
-        // Between them these carry every part of the format, and `kinetic`
-        // is the one that carries the automation — the part a preset saves
-        // that a preset could not save before this stage.
+        // Between them the shipped presets carry every part of the format.
         for (slot, params) in config::PRESETS.iter().enumerate() {
             let params = params.1();
             store(&dir, slot % SLOTS, &params).unwrap();
@@ -88,7 +86,7 @@ mod tests {
         // The whole reason a slot is TOML and not a private format: what the
         // instrument writes, the command line can open.
         let dir = scratch("command-line");
-        let mut params = config::kinetic();
+        let mut params = config::analog();
         params.monitors[0].colour.hue = 0.7;
         let written = store(&dir, 4, &params).unwrap();
         assert!(written.ends_with("slot-5.toml"), "{}", written.display());

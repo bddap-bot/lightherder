@@ -22,13 +22,6 @@ pub enum Action {
     /// the graph. A select rather than a step: a hand that means "that one"
     /// should not have to walk past the ones it does not mean.
     FocusCamera(usize),
-    /// Switch the automation on the last knob turned through its states: off,
-    /// a sine, a ramp, off.
-    Motion,
-    /// Move that automation's rate, in presses.
-    MotionRate(f32),
-    /// Move its depth, in presses.
-    MotionDepth(f32),
     Reset,
     /// Write the whole panel to a preset slot.
     Store(usize),
@@ -163,44 +156,6 @@ struct Command {
 }
 
 const COMMANDS: &[Command] = &[
-    // The automation, on the last knob turned rather than on a knob of its
-    // own: twenty knobs would otherwise need twenty switches, and the
-    // knob a performer just swept is the one they want to set moving.
-    cmd(
-        KeyCode::KeyP,
-        "p",
-        Action::Motion,
-        "the last knob turned: off / sine / ramp",
-        "motion",
-    ),
-    cmd(
-        KeyCode::Digit7,
-        "7",
-        Action::MotionRate(-1.0),
-        "its rate, slower",
-        "rate -",
-    ),
-    cmd(
-        KeyCode::Digit8,
-        "8",
-        Action::MotionRate(1.0),
-        "its rate, faster",
-        "rate +",
-    ),
-    cmd(
-        KeyCode::Digit9,
-        "9",
-        Action::MotionDepth(-1.0),
-        "its swing, narrower",
-        "swing -",
-    ),
-    cmd(
-        KeyCode::Digit0,
-        "0",
-        Action::MotionDepth(1.0),
-        "its swing, wider",
-        "swing +",
-    ),
     cmd(
         KeyCode::KeyN,
         "n",
@@ -519,29 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn the_automation_keys_are_a_switch_and_two_pairs() {
-        assert_eq!(action_for(KeyCode::KeyP, false), Some(Action::Motion));
-        // The pairs push opposite ways, same as an axis — they are not axes
-        // only because there is no knob to hang them on until one is running.
-        assert_eq!(
-            action_for(KeyCode::Digit7, false),
-            Some(Action::MotionRate(-1.0))
-        );
-        assert_eq!(
-            action_for(KeyCode::Digit8, false),
-            Some(Action::MotionRate(1.0))
-        );
-        assert_eq!(
-            action_for(KeyCode::Digit9, false),
-            Some(Action::MotionDepth(-1.0))
-        );
-        assert_eq!(
-            action_for(KeyCode::Digit0, false),
-            Some(Action::MotionDepth(1.0))
-        );
-    }
-
-    #[test]
     fn the_help_names_every_binding() {
         let help = help();
         // The header, the line the camera keys share, and the two the slot
@@ -594,10 +526,7 @@ mod tests {
         );
         assert_eq!(describes("=").as_deref(), Some("zoom up"));
         assert_eq!(describes("-").as_deref(), Some("zoom down"));
-        assert_eq!(
-            describes("p").as_deref(),
-            Some("the last knob turned: off / sine / ramp")
-        );
+        assert_eq!(describes("r").as_deref(), Some("reset every knob"));
         assert_eq!(describes("wiggle"), None);
     }
 
@@ -619,7 +548,7 @@ mod tests {
         assert_eq!(short("=").as_deref(), Some("zoom +"));
         assert_eq!(short("-").as_deref(), Some("zoom -"));
         assert_eq!(short("space").as_deref(), Some("blank"));
-        assert_eq!(short("p").as_deref(), Some("motion"));
+        assert_eq!(short("r").as_deref(), Some("reset"));
         assert_eq!(short("`").as_deref(), Some("help"));
         assert_eq!(short("wiggle"), None);
     }
@@ -635,7 +564,7 @@ mod tests {
 
     #[test]
     fn a_label_reaches_the_same_action_the_key_does() {
-        assert_eq!(action_for_label("p"), Some(Action::Motion));
+        assert_eq!(action_for_label("r"), Some(Action::Reset));
         assert_eq!(action_for_label("space"), Some(Action::Clear));
         assert_eq!(action_for_label("f3"), Some(Action::Recall(2)));
         assert_eq!(action_for_label("shift f3"), Some(Action::Store(2)));
@@ -648,7 +577,7 @@ mod tests {
         // "shift" in front of a key that does not read it is that key; the
         // MIDI map refuses such a binding rather than letting it look like
         // it means something.
-        assert_eq!(action_for_label("shift p"), Some(Action::Motion));
+        assert_eq!(action_for_label("shift r"), Some(Action::Reset));
     }
 
     #[test]

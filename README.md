@@ -9,9 +9,8 @@ monitor, beam splitters let one camera watch a blend of monitors, and each
 monitor keeps its own colour controls. Each path carries its own analog
 character — the lens's bloom, composite chroma bleed, grain — and each monitor
 its own amplifier rail. Cameras can also be aimed at things that are not
-monitors: test patterns, video files, capture devices. Any knob can be set
-turning itself, and the whole panel saves to and recalls from eight slots.
-Later increments add a browser build.
+monitors: test patterns, video files, capture devices. The whole panel saves
+to and recalls from eight slots. Later increments add a browser build.
 
 ## How it works
 
@@ -162,8 +161,8 @@ the room feeds nothing. The **chroma key** cuts the pixels leaning toward its
 key colour — named as a hue, the way this instrument names every colour —
 with a tolerance for how much of it a pixel may carry; at the top of its
 travel the key is off, so grey and the far hues always pass. All four are
-ordinary knobs: on the keys, mappable from a MIDI surface, saved in slots,
-and as automatable as the rest of the panel. On the camera rather than on the
+ordinary knobs: on the keys, mappable from a MIDI surface, and saved in
+slots. On the camera rather than on the
 input, because that is where the gain and the framing already are — a camera
 aimed at an input through its key is the webcam rig, and a key on a loop
 camera is a gate on the feedback itself, which is its own instrument to play.
@@ -184,54 +183,6 @@ Out of the box the default knobs settle into a spiral: the camera pulls back
 spread across the channels, so the trail cools from white to blue as it winds
 in.
 
-## Automation
-
-There is no separate kinetics. A camera on a motor is its rotation swept
-through a full turn, which is a ramp at full depth on the rotation knob — so
-continuous camera rotation and an LFO on any parameter are one mechanism, and
-the instrument has one of it rather than two that drift apart. Any knob takes
-one; several on one knob sum, which is how you get a beat.
-
-```toml
-motion = [
-  { knob = "rotation", shape = "ramp", rate = 0.05, depth = 3.14159 },
-  { knob = "hue", shape = "sine", rate = 0.2, depth = 0.4, phase = 0.25 },
-  { knob = "pan x", rate = 0.1, depth = 0.3, focus = { camera = 1 } },
-]
-```
-
-`knob` is the name the startup help prints, and that string *is* the knob's
-serde, so there is no second spelling to get wrong — `zoom`, `rotation`,
-`pan x`, `pan y`, `loop gain`, `loop gain, red`/`green`/`blue`, `bloom`,
-`bloom radius`, `chroma bleed`, `noise`, `seed`, `hue`, `saturation`,
-`brightness`, `contrast`, `gamma`, `headroom`. `rate` is in cycles per second
-and stops at 30 Hz — half the sixty frames a second the instrument is drawn
-at, since past Nyquist an LFO does not go faster, it goes somewhere else.
-`depth` is half the swing in the knob's own units, capped
-at the knob's own travel — or at a half turn for the knobs that wrap, where a
-ramp then makes exactly one revolution per cycle. `phase` offsets one against
-another: a quarter cycle apart on the two pan axes is a circle. `focus` picks
-the node, and only the half the knob reads may be set, because a monitor knob
-has no camera.
-
-An LFO does not own its knob. It is an offset added to whatever the hand left
-there, recomputed from the stored value every frame. So a swing cannot
-compound, the keys keep working on a knob while it moves, switching one off
-leaves its knob exactly where the hand did, and what a slot saves is the panel
-rather than wherever the swing happened to be at the moment of writing. Every
-offset goes through the same limit a key press does, so nothing an LFO does
-can put a value somewhere a hand could not.
-
-The `kinetic` preset is the single loop with one ramp on it, right round every
-twenty seconds. Two details it earned on hardware: its base rotation is
-`single`'s rather than zero, so switching the motor off leaves `single`'s
-spiral rather than a camera parked square on — and its amplifier's rail sits
-below white, because even *passing* through square-on the trail piles up on
-the seed faster than it winds away. Measured on an RTX 2080: with the rail
-wide open the flare reaches 255 as the sweep passes 0.05 rad, and 155 with the
-rail at 0.9. Switching the motor off leaves the rail down; it is part of the
-preset, not part of the motor.
-
 ## Preset slots
 
 `f1` to `f8` recall; hold shift to store. A slot is a config file and nothing
@@ -245,8 +196,7 @@ A slot with the same number of monitors and the same inputs keeps the loops
 running: it changes the knobs the next pass reads, not the light already on
 the glass. One input that differs reopens them all; a changed monitor or
 input count gets a new bank, blank the way every bank starts. Cameras,
-routing, every knob and all the automation are free to differ without
-costing even that. The only refusals are the command line's own — a slot
+routing and every knob are free to differ without costing even that. The only refusals are the command line's own — a slot
 that will not load, an input that will not open, a bank past the cap — each
 leaving the rig playing untouched.
 
@@ -270,9 +220,6 @@ Out of the box, with no configuration:
 | R 1–8 | store preset slot 1–8 |
 | marker set, prev, next | next camera, next monitor, blank the monitors |
 | ■ stop | reset every knob |
-| ▶ | automation on the last control touched: off / sine / ramp |
-| ◀◀ ▶▶ | its rate, slower and faster |
-| ⏮ ⏭ | its swing, narrower and wider |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 
 So the left hand works one monitor, the right hand one camera, and the top
@@ -368,7 +315,7 @@ knob = "hue"        # any knob name the printed help uses
 
 [[button]]
 cc = 41
-key = "p"           # any key label the printed help uses
+key = "space"       # any key label the printed help uses
 
 [[button]]
 cc = 64
@@ -393,7 +340,6 @@ key answers to is refused at load with the list of the ones that do.
 ```
 nix-shell --run "cargo run --release"                    # the single loop
 nix-shell --run "cargo run --release analog"             # the same, with the signal path on
-nix-shell --run "cargo run --release kinetic"            # the camera on a motor
 nix-shell --run "cargo run --release crossed"            # two crossed structures
 nix-shell --run "cargo run --release insanity"           # four, all-to-all
 nix-shell --run "cargo run --release external"           # a test pattern driving the loop
@@ -504,7 +450,6 @@ stepped and presented into a target the size of the display.
 | graph | 1920x1080 | 3840x2160 |
 | --- | --- | --- |
 | `single` | 0.16 ms | 0.38 ms |
-| `kinetic` | 0.14 | 0.42 |
 | `external` | 0.16 | 0.45 |
 | `analog` | 0.22 | 0.72 |
 | `crossed` (2 monitors) | 0.23 | 0.72 |
@@ -553,9 +498,6 @@ below assumes a US layout.
 | `q` `w` | gamma |
 | `e` `t` | headroom, i.e. where the amplifier's rails are |
 | `/` `\` | the crosspoint: how much of the focused camera the focused monitor shows |
-| `p` | automation on the last knob turned: off / sine / ramp |
-| `7` `8` | its rate, slower / faster |
-| `9` `0` | its swing, narrower / wider |
 | `n` | focus the next camera |
 | `num1`…`num8` | focus camera 1–8 outright |
 | `m` | focus the next monitor |
@@ -575,9 +517,7 @@ the only way to the cameras. Routing and splitter weights
 are config; the crosspoint that joins the two focused nodes is not — `/` and
 `\` sweep it, and it is fader 8 on the surface.
 
-`p` acts on the last knob turned rather than on a switch of its own, because
-twenty knobs would otherwise want twenty switches and the knob just swept
-is the one you mean; the log line names which. Shift is read by the slot keys
+Shift is read by the slot keys
 and nothing else — recall is one press, store is the press you have to mean.
 Both are irreversible, since a recall walks over a live panel nothing has
 stored; the modifier is there because a hand mid-piece reaches for a slot far
@@ -625,10 +565,6 @@ two paths in one graph take their character separately. External inputs get
 the same: what was written to an input's layer is what a camera aimed at it
 sees, it is current in whichever bank the cameras read, blanking the monitors
 leaves it alone, and a splitter and a zoom act on it exactly as on a monitor.
-The automation is checked where it ends up mattering: a full revolution of
-`kinetic` sampled the whole way round, holding an image at every angle it
-passes through and still moving a revolution in — frame against frame, since
-a rotation moves light around without making any, so the totals barely budge.
 On a machine with no adapter each one prints the reason straight to the
 process's stderr and returns; libtest still counts them as passed.
 
@@ -640,12 +576,6 @@ decoded, and a file that is not there refused at once rather than after the
 first-frame timeout. Outside the pinned shell the ones that need ffmpeg print
 a skip, on the same terms as the GPU tests.
 
-So is the automation's arithmetic: a sine that averages to nothing over its
-cycle and a ramp that climbs to exactly one swing, a full-depth ramp on the
-rotation knob covering one revolution in even steps and closing, two LFOs a
-quarter cycle apart tracing a circle, a knob whose stored value has not moved
-after ten thousand modulated frames, and every knob in the instrument driven
-at its widest swing without putting the graph anywhere `validate` refuses.
 The slots round-trip every preset through a real file, and a slot the
 instrument never wrote is validated like any other config.
 

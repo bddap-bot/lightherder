@@ -17,7 +17,7 @@ use crate::input::Source;
 use crate::keys::{action_for, Action};
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
-use crate::params::{Focus, Knob, Params};
+use crate::params::{Focus, Params};
 use crate::present::Present;
 
 /// Borderless rather than exclusive: the instrument renders at its own
@@ -73,15 +73,6 @@ pub struct App {
     initial: Params,
     /// The camera and monitor the knobs act on.
     focus: Focus,
-    /// Which knob the automation keys act on: the last one turned by hand.
-    /// The *node* they act on is `focus`, the same one every other key
-    /// follows — so `p` and `a` reach the same monitor, always. The readout
-    /// names the knob, since nothing on screen otherwise would.
-    touched: Knob,
-    /// Where the automation's clock is read from. Not reset by Reset: a knob
-    /// jumping back to where it was is what Reset is for, and a phase jumping
-    /// with it would show up as a lurch in every LFO at once.
-    started: Instant,
     /// The running external inputs, in `params.inputs` order, which is the
     /// order `Feedback::write_input` indexes them by.
     sources: Vec<Source>,
@@ -201,9 +192,6 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             initial: params.clone(),
             params,
             focus: Focus::default(),
-            // So `p` does something worth seeing before any knob has been turned.
-            touched: Knob::Rotation,
-            started: Instant::now(),
             sources,
             slots,
             midi,
@@ -454,7 +442,7 @@ impl App {
             Err(why) => return log::error!("slot {}: {why}", slot + 1),
         };
         match self.adopt(params) {
-            Ok(()) => log::info!("slot {}: {}", slot + 1, self.describe()),
+            Ok(()) => log::info!("slot {}: {}", slot + 1, self.params.describe(self.focus)),
             Err(why) => log::error!("slot {}: {why}", slot + 1),
         }
     }
@@ -488,15 +476,7 @@ impl App {
             self.focus = focus;
             self.midi.release();
         }
-        log::info!("{}", self.describe());
-    }
-
-    fn describe(&self) -> String {
-        format!(
-            "{}\nmotion keys on: {}",
-            self.params.describe(self.focus),
-            self.touched.name()
-        )
+        log::info!("{}", self.params.describe(self.focus));
     }
 
     /// One line a second on how the tempo is going, counting the passes that
@@ -524,28 +504,11 @@ impl App {
         match action {
             Action::Nudge(knob, delta) => {
                 self.params.nudge(knob, delta, self.focus);
-                self.touched = knob;
-                log::info!("{}", self.describe());
+                log::info!("{}", self.params.describe(self.focus));
             }
             Action::Set(knob, value) => {
                 self.params.set(knob, value, self.focus);
-                self.touched = knob;
-                log::info!("{}", self.describe());
-            }
-            Action::Motion => {
-                let now = self.started.elapsed().as_secs_f64();
-                self.params.motion_cycle(self.touched, self.focus, now);
-                log::info!("{}", self.describe());
-            }
-            Action::MotionRate(steps) => {
-                let now = self.started.elapsed().as_secs_f64();
-                self.params
-                    .motion_rate(self.touched, self.focus, steps, now);
-                log::info!("{}", self.describe());
-            }
-            Action::MotionDepth(steps) => {
-                self.params.motion_depth(self.touched, self.focus, steps);
-                log::info!("{}", self.describe());
+                log::info!("{}", self.params.describe(self.focus));
             }
             Action::NextCamera => {
                 let camera = (self.focus.camera + 1) % self.params.cameras.len();
@@ -568,7 +531,7 @@ impl App {
             },
             Action::Recall(slot) => self.recall(slot),
             Action::Reset => match self.adopt(self.initial.clone()) {
-                Ok(()) => log::info!("reset: {}", self.describe()),
+                Ok(()) => log::info!("reset: {}", self.params.describe(self.focus)),
                 Err(why) => log::error!("reset: {why}"),
             },
             Action::Clear => {
@@ -645,7 +608,7 @@ impl ApplicationHandler for App {
             self.params.cameras.len(),
             self.params.inputs.len(),
         );
-        log::info!("{}", self.describe());
+        log::info!("{}", self.params.describe(self.focus));
         live.window.request_redraw();
         // The rate is counted from the first frame, not from before the
         // adapter, the device and the pipelines were built — half a second of
@@ -694,14 +657,9 @@ impl ApplicationHandler for App {
                 if Instant::now() < self.due {
                     return;
                 }
-                // The automation is read here and nowhere else: the knobs the
-                // GPU is handed are the stored ones offset by whatever is
-                // driving them at this instant, and `self.params` — what the
-                // keys turn and what a preset slot saves — is untouched.
-                let now = self.started.elapsed().as_secs_f64();
                 let ran = live.render(
                     &self.gpu,
-                    &self.params.modulated(now),
+                    &self.params,
                     &mut self.sources,
                     self.overlay_shown,
                 );
@@ -767,8 +725,6 @@ mod tests {
             initial: params.clone(),
             params,
             focus: Focus::default(),
-            touched: Knob::Rotation,
-            started: Instant::now(),
             sources,
             slots: slots.clone(),
             // No file in a scratch directory, so this is the factory map.
