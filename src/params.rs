@@ -325,8 +325,7 @@ impl Default for Params {
 /// Which camera and which monitor the knobs act on. Named fields on purpose:
 /// two bare `usize`s in a row would let a swapped pair compile and silently
 /// edit the wrong node.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Focus {
     pub camera: usize,
     pub monitor: usize,
@@ -734,15 +733,16 @@ impl Params {
         }
     }
 
-    /// The focused camera and monitor, every knob's value in one line: the
-    /// only readout the instrument has.
+    /// The focused camera and monitor, and every knob's value: the only
+    /// readout the instrument has.
     pub fn describe(&self, focus: Focus) -> String {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         format!(
-            // Two lines rather than one: at twenty knobs a single line
-            // wraps in a terminal, and consecutive presses stop lining up —
-            // which was the only thing a single line was buying.
+            // A line per side of the graph rather than one for the lot: at
+            // twenty knobs a single line wraps in a terminal, and
+            // consecutive presses stop lining up — which was the only thing
+            // a single line was buying.
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
              bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  \
              key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\

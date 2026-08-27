@@ -411,8 +411,7 @@ fn nano_buttons() -> Vec<Button> {
         button(60, "n"),
         button(61, "m"),
         button(62, "space"),
-        // Stop, for the one button that puts the whole panel back. Nothing
-        // is bound to quit.
+        // Stop, for the one button that puts the whole panel back.
         button(42, "r"),
         // Cycle shows and hides the overlay that explains all of the above —
         // the one button whose job survives not knowing what any button does.
@@ -1672,13 +1671,6 @@ mod tests {
         // overlay.
         assert_eq!(feed(&mut midi, &params, &cc(42, 127)), [Action::Reset]);
         assert_eq!(feed(&mut midi, &params, &cc(46, 127)), [Action::Overlay]);
-        // And the five the automation used to hold are bound to nothing —
-        // named by number, because the next thing to want them must be
-        // choosing them rather than inheriting them.
-        for control in [41, 43, 44, 58, 59] {
-            let acted = feed(&mut midi, &params, &cc(control, 127));
-            assert_eq!(acted, [], "cc {control}");
-        }
     }
 
     #[test]

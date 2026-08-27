@@ -162,8 +162,8 @@ key colour — named as a hue, the way this instrument names every colour —
 with a tolerance for how much of it a pixel may carry; at the top of its
 travel the key is off, so grey and the far hues always pass. All four are
 ordinary knobs: on the keys, mappable from a MIDI surface, and saved in
-slots. On the camera rather than on the
-input, because that is where the gain and the framing already are — a camera
+slots. On the camera rather than on the input, because that is where the gain
+and the framing already are — a camera
 aimed at an input through its key is the webcam rig, and a key on a loop
 camera is a gate on the feedback itself, which is its own instrument to play.
 
@@ -196,9 +196,10 @@ A slot with the same number of monitors and the same inputs keeps the loops
 running: it changes the knobs the next pass reads, not the light already on
 the glass. One input that differs reopens them all; a changed monitor or
 input count gets a new bank, blank the way every bank starts. Cameras,
-routing and every knob are free to differ without costing even that. The only refusals are the command line's own — a slot
-that will not load, an input that will not open, a bank past the cap — each
-leaving the rig playing untouched.
+routing and every knob are free to differ without costing even that. The only
+refusals are the command line's own — a slot that will not load, an input
+that will not open, a bank past the cap — each leaving the rig playing
+untouched.
 
 ## The control surface
 
@@ -513,15 +514,14 @@ The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (seed, colour and headroom); `n` and `m` walk the two focuses
 through the graph and `num1`…`num8` pick a camera outright, and the log line
 names them. Those eight are keypad keys, so on a board with no keypad `n` is
-the only way to the cameras. Routing and splitter weights
-are config; the crosspoint that joins the two focused nodes is not — `/` and
-`\` sweep it, and it is fader 8 on the surface.
+the only way to the cameras. Routing and splitter weights are config; the
+crosspoint that joins the two focused nodes is not — `/` and `\` sweep it,
+and it is fader 8 on the surface.
 
-Shift is read by the slot keys
-and nothing else — recall is one press, store is the press you have to mean.
-Both are irreversible, since a recall walks over a live panel nothing has
-stored; the modifier is there because a hand mid-piece reaches for a slot far
-more often than it writes one.
+Shift is read by the slot keys and nothing else — recall is one press, store
+is the press you have to mean. Both are irreversible, since a recall walks
+over a live panel nothing has stored; the modifier is there because a hand
+mid-piece reaches for a slot far more often than it writes one.
 
 The colour and character knobs start neutral, so the instrument out of the box
 is the loop described above and nothing else. Turn one against it: `s` held

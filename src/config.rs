@@ -498,8 +498,6 @@ mod tests {
                 .iter()
                 .all(|c| c.character == Character::CLEAN);
             assert_eq!(clean, name != "analog", "{name}");
-            // The amplifier's rail is the other half of that stage, and
-            // `analog` is the only preset that brings it down.
             let open_rail = params
                 .monitors
                 .iter()
@@ -687,6 +685,7 @@ mod tests {
             assert_eq!(keyed, name == "webcam", "{name}");
         }
     }
+
     #[test]
     fn a_config_with_a_misspelled_key_is_refused() {
         // deny_unknown_fields, so a typo cannot silently leave a knob at its
