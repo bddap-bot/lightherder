@@ -680,13 +680,8 @@ impl ApplicationHandler for App {
                     };
                     self.apply(action, event_loop);
                 }
-                // And the surface is written once a frame: the focused
-                // camera's Solo button, lit. Here rather than at each of the
-                // several places the focus moves — a number key, the select
-                // row, the markers, a preset recall, a graph that got
-                // shorter — because this is the one place that cannot miss
-                // one. Saying the same focus again puts nothing on the wire,
-                // and nothing here waits for the surface.
+                // And the panel is written every redraw — see [`Midi::show`]
+                // for why every redraw and not each place the focus moves.
                 self.midi.show(self.focus.camera);
                 let Some(live) = self.live.as_mut() else {
                     return;

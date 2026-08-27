@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
 use crate::keys::{action_for_label, labels, Action};
-use crate::lamps::{Lamps, Msg};
+use crate::lamps::{Lamplight, Lamps};
 use crate::params::{Focus, Knob, Limit, Params};
 
 /// Where ALSA puts its character devices.
@@ -591,7 +591,10 @@ pub struct Midi {
     /// That button's lamp is the one that says where the knobs are, so it is
     /// read off the map in force rather than off the factory layout: a
     /// `midi.toml` that moves the select row moves the light with it.
-    solo: Vec<Option<u8>>,
+    ///
+    /// Indexed by **camera**, unlike every other list here, which is indexed
+    /// by button.
+    lamp: Vec<Option<u8>>,
     next_scan: Instant,
     /// The last thing that went wrong looking for the surface, so a device
     /// that is there and will not open is said once rather than sixty times a
@@ -599,30 +602,18 @@ pub struct Midi {
     complaint: Option<String>,
 }
 
+/// A control number as one bit of a lamp mask. Safe for every control a map
+/// can name: [`Map::validate`] refuses one past 127.
+fn bit(cc: u8) -> Lamplight {
+    1 << cc
+}
+
 struct Port {
     path: PathBuf,
     rx: Receiver<ControlChange>,
     /// The surface's lights, when its output opened. `None` is a surface
-    /// that plays and does not light, which is every surface before this.
+    /// that plays and does not light.
     lamps: Option<Lamps>,
-}
-
-/// Which camera each button selects, by control number — the lamp table
-/// [`Midi::solo`] is built from. The first button that names a camera wins,
-/// so a map with two buttons on one camera lights the one it lists first
-/// rather than whichever came last.
-fn solo_lamps(map: &Map, action: &[Action]) -> Vec<Option<u8>> {
-    let mut solo: Vec<Option<u8>> = Vec::new();
-    for (b, a) in map.button.iter().zip(action) {
-        let Action::FocusCamera(camera) = a else {
-            continue;
-        };
-        if solo.len() <= *camera {
-            solo.resize(camera + 1, None);
-        }
-        solo[*camera].get_or_insert(b.cc);
-    }
-    solo
 }
 
 impl Midi {
@@ -636,7 +627,21 @@ impl Midi {
             .map(|b| action_for_label(&b.key).expect("validate checked every label"))
             .collect();
         Ok(Midi {
-            solo: solo_lamps(&map, &action),
+            // Indexed by camera: the button whose lamp says the knobs are on
+            // it. The first button that names a camera wins, so a map that
+            // binds two to one camera lights the one it lists first.
+            lamp: action
+                .iter()
+                .zip(&map.button)
+                .fold(Vec::new(), |mut lamp, (action, button)| {
+                    if let Action::FocusCamera(camera) = action {
+                        if lamp.len() <= *camera {
+                            lamp.resize(camera + 1, None);
+                        }
+                        lamp[*camera].get_or_insert(button.cc);
+                    }
+                    lamp
+                }),
             action,
             pickup: vec![Pickup::default(); map.fader.len()],
             held: vec![false; map.button.len()],
@@ -698,19 +703,34 @@ impl Midi {
         messages
     }
 
-    /// Say which camera the knobs are on, so its Solo button lights and no
-    /// other. Called once a frame with whatever the focus is now, rather
-    /// than at each of the several places the focus moves — the frame loop
-    /// is the one place that cannot miss one, and saying the same thing
-    /// again costs nothing on the wire.
+    /// Light the panel for a focus on `camera`: that camera's select button,
+    /// and every button a finger is on.
     ///
-    /// A camera past the end of the select row goes dark: a graph may run
-    /// deeper than the eight strips the surface has, and a lamp on the wrong
-    /// button is worse than no lamp.
+    /// The held ones are not decoration. Taking the surface's LED mode takes
+    /// every button's light at once — see [`crate::lamps`] — so a button that
+    /// lit itself under a finger has to be lit here or it goes dark for good,
+    /// and the Record row that overwrites a preset slot is on that list.
+    ///
+    /// Said again every redraw rather than at each of the several places the
+    /// focus moves: this is the one call that cannot miss one, and it also
+    /// catches a surface plugged in halfway through a piece, where no focus
+    /// change follows to light it. Saying the same panel again costs nothing
+    /// on the wire.
+    ///
+    /// A camera past the end of the select row lights nothing: a graph may
+    /// run deeper than the eight strips the surface has, and a lamp on the
+    /// wrong button is worse than no lamp.
     pub fn show(&self, camera: usize) {
-        if let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) {
-            lamps.show(self.solo.get(camera).copied().flatten());
+        let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) else {
+            return;
+        };
+        let mut want = self.lamp.get(camera).copied().flatten().map_or(0, bit);
+        for (button, held) in self.map.button.iter().zip(&self.held) {
+            if *held {
+                want |= bit(button.cc);
+            }
         }
+        lamps.show(want);
     }
 
     /// Let go of every fader's grip on its knob. Three times the knobs move
@@ -748,9 +768,12 @@ impl Midi {
             // in for the whole session.
             Err(e) => return self.complain(format!("{}: {e}", self.cards.display())),
         };
+        // Every control number a button of the map answers to, which is the
+        // whole of what the surface may ever be told to light.
+        let buttons = self.map.button.iter().fold(0, |mask, b| mask | bit(b.cc));
         let mut last = None;
         for path in find(&self.snd, &cards, &self.map.device) {
-            match open(&path) {
+            match open(&path, buttons) {
                 Ok(port) => {
                     log::info!("surface: {} on {}", self.map.device, port.path.display());
                     self.complaint = None;
@@ -844,19 +867,24 @@ fn find<'a>(
 /// the read decides whether there is a surface at all. A node that will not
 /// open for writing — its output substream already taken by something else —
 /// is a surface that plays without lights, said once and then played.
-fn open(path: &Path) -> Result<Port, String> {
+fn open(path: &Path, buttons: Lamplight) -> Result<Port, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let lamps = match std::fs::OpenOptions::new().write(true).open(path) {
-        Ok(out) => Lamps::spawn(out),
-        Err(e) => {
+    let lamps = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| e.to_string())
+        .and_then(|out| Lamps::spawn(out, buttons));
+    let lamps = match lamps {
+        Ok(lamps) => Some(lamps),
+        Err(why) => {
             log::warn!(
-                "surface: {} will not open for writing ({e}); its buttons light themselves",
+                "surface: {} has no lights for the instrument ({why}); its buttons light themselves",
                 path.display()
             );
             None
         }
     };
-    let sysex = lamps.as_ref().map(Lamps::sender);
+    let frames = lamps.as_ref().map(Lamps::frames);
     let (tx, rx) = std::sync::mpsc::channel();
     let name = path.to_owned();
     std::thread::Builder::new()
@@ -884,12 +912,9 @@ fn open(path: &Path) -> Result<Port, String> {
                                 return;
                             }
                         }
-                        // The lights' half of the conversation. A frame that
-                        // reaches nobody is one asked for by a thread that
-                        // has already given up, which is its own business.
                         Message::Sysex(frame) => {
-                            if let Some(sysex) = &sysex {
-                                let _ = sysex.send(Msg::Sysex(frame));
+                            if let Some(frames) = &frames {
+                                frames.say(frame);
                             }
                         }
                     }
@@ -1103,16 +1128,16 @@ mod tests {
         // Off the map, so the factory Solo row and a `midi.toml` that moved
         // it both light the button a hand actually reaches for.
         let midi = Midi::new(Map::nano_kontrol2()).unwrap();
-        assert_eq!(midi.solo, (32..40).map(Some).collect::<Vec<_>>());
+        assert_eq!(midi.lamp, (32..40).map(Some).collect::<Vec<_>>());
 
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| !(32..40).contains(&b.cc));
         map.button.push(button(90, "num2"));
         let midi = Midi::new(map).unwrap();
-        assert_eq!(midi.solo, [None, Some(90)]);
+        assert_eq!(midi.lamp, [None, Some(90)]);
         // A camera past the end of the select row has no lamp rather than
         // the nearest one: a graph may run deeper than the surface.
-        assert_eq!(midi.solo.get(7).copied().flatten(), None);
+        assert_eq!(midi.lamp.get(7).copied().flatten(), None);
     }
 
     #[test]

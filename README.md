@@ -313,25 +313,41 @@ and goes out when the instrument does. A camera past the eighth has no button
 to light, and lights none.
 
 That takes setting up, and the app does the setting up. A nanoKONTROL2 leaves
-the factory in **LED Mode: Internal**, where a button lights itself when
-pressed and ignores the host, and Korg's only supported way to change that is
-the KONTROL Editor — Windows and macOS. So the app asks the surface for the
-scene it is playing, sets the one byte that is the LED mode, and hands the
-same scene back. Nothing else in the scene is touched, so a performer's own
-control assignments survive it; nothing is written to the surface's flash, so
-a surface plugged into something else afterwards is the one its owner set up.
-The cost of that is a handshake on every connect, which is where it belongs.
+the factory in **LED Mode: Internal**, where a button lights itself while it is
+held and ignores the host, and Korg's only supported way to change that is the
+KONTROL Editor — Windows and macOS. So the app asks the surface for the scene
+it is playing, sets the one byte that is the LED mode, and hands the same scene
+back. Nothing else in the scene is touched, so a performer's own control
+assignments survive it; nothing is written to the surface's flash, so a replug
+is always the surface its owner set up. The cost is a handshake on every
+connect, which is where it belongs.
+
+**That switch is one switch for the whole panel**, which is why the app then
+drives every button rather than the eight it came for: external mode takes the
+Mute and Record rows' lights along with the Solo row's, and the Record row
+overwrites a preset slot unguarded. So a button the map binds is lit while it
+is held — exactly what internal mode did for it — and the focused camera's is
+lit whether or not a finger is on it. What the instrument adds is one lamp;
+what it takes away is nothing. A button the map binds nothing to stays dark,
+which is now what it means.
+
+The mode goes back to Internal on the way out, so the surface lights its own
+buttons again for whatever is played next. On the way in the panel is blanked
+first, before any lamp: external mode lives in the device's RAM, so a run
+killed without a chance to tidy up leaves both the mode set and its lamp
+burning, and the next run must put out what it finds rather than take a dark
+panel on faith.
 
 A surface that will not take the mode still plays exactly as it did before,
 and says so once on the log. So does one whose device node will not open for
 writing, and one that does not answer as a nanoKONTROL2 at all — that last is
-never written to, because what a control change does to a device this does not
-recognise is not knowable from here.
+written nothing after the inquiry, because what a control change does to a
+device this does not recognise is not knowable from here.
 
 None of it happens on a frame. The handshake waits on replies that may never
 come and a MIDI write blocks when the wire is full, so the lights are a thread
-of their own; the frame loop's whole part is to say which camera is focused,
-down a channel, once a frame.
+of their own; the frame loop's whole part is to say which lamps it wants, down
+a channel.
 
 ### Mapping config
 
@@ -651,13 +667,17 @@ is really read back on the other side, byte for byte. Korg's seven-bit packing
 against numbers worked out by hand, since a packer and its own inverse agree
 on any bit order at all — the reversed one included. The handshake against a
 surface that hands over an internal scene, which must come back with one byte
-changed and 338 untouched; one already in external mode, which must be left
-alone; one that answers as some other maker's device, which must never be
-written to at all; and one that answers nothing, which must give up on its own
-and still leave the surface played. The lamps against a focus that moves — out
-first, then on, because two lit at once is a panel claiming the knobs are in
-two places — against the same focus said sixty times, which must put nothing
-on the wire, and against the exit, which must put them out.
+changed and 338 untouched; one already external, which must be sent no scene
+to get it there; one whose scene disagrees with the channel it answered on,
+which must not be written back at all; one that answers as some other maker's
+device, which must be written nothing after the inquiry; and one that answers
+nothing, which must give up on its own, in bounded time, and still leave the
+surface played. The lamps against a focus that moves — out first, then on,
+because two lit at once is a panel claiming the knobs are in two places —
+against the same focus said sixty times, which must put nothing on the wire,
+against a held button, which must light with the focus rather than instead of
+it, against a lamp no button of the map answers to, which must never reach the
+wire, and against the exit, which must put the lamps out and the mode back.
 
 ## In a browser
 
