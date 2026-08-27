@@ -993,43 +993,33 @@ mod tests {
 
     #[test]
     fn the_transport_grid_is_arranged_the_way_the_device_is() {
-        // The names are pinned above; the grid is the other fact the table
-        // carries, and a swapped row or column draws the overlay's caption
-        // on a neighbouring button.
-        let at = |cc| match spot(cc) {
-            Some(Spot::Transport(t)) => (t.row, t.col),
-            other => panic!("cc {cc}: {other:?}"),
-        };
-        assert_eq!(at(58), (0, 0));
-        assert_eq!(at(59), (0, 1));
-        assert_eq!(at(46), (1, 0));
-        // Cycle sits alone: the markers start two columns right of it, not
-        // beside it, and the middle row's second column is bare.
-        assert_eq!(at(60), (1, 2));
-        assert_eq!(at(62), (1, 4));
-        assert!(!TRANSPORT.iter().any(|t| (t.row, t.col) == (1, 1)));
-        assert_eq!(at(43), (2, 0));
-        assert_eq!(at(41), (2, 3));
-        assert_eq!(at(45), (2, 4));
-    }
-
-    #[test]
-    fn the_printed_groups_name_the_buttons_the_silkscreen_brackets() {
-        // The group a button is in is what the overlay spans its printed
-        // label over, so a button that joined or left one moves the word.
-        let group = |cc| match spot(cc) {
-            Some(Spot::Transport(t)) => t.group,
-            other => panic!("cc {cc}: {other:?}"),
-        };
-        assert_eq!(group(58), Some("TRACK"));
-        assert_eq!(group(59), Some("TRACK"));
-        assert_eq!(group(60), Some("MARKER"));
-        assert_eq!(group(61), Some("MARKER"));
-        assert_eq!(group(62), Some("MARKER"));
-        // Cycle and the tape row carry no printed group of their own.
-        assert_eq!(group(46), None);
-        assert_eq!(group(41), None);
-        assert_eq!(group(45), None);
+        // The names are pinned above; the geometry is the rest of what the
+        // table carries, and the overlay draws its left cluster off it —
+        // so a swapped row, column or group prints a caption over a button
+        // the performer's hand will not be on. Whole rather than sampled:
+        // the row nobody thought to check is the one that drifts.
+        assert_eq!(
+            TRANSPORT
+                .iter()
+                .map(|t| (t.cc, t.row, t.col, t.group))
+                .collect::<Vec<_>>(),
+            [
+                (58, 0, 0, Some("TRACK")),
+                (59, 0, 1, Some("TRACK")),
+                (46, 1, 0, None),
+                // Cycle sits alone: the markers start two columns right of
+                // it rather than beside it, and column 1 of that row is
+                // bare on the surface.
+                (60, 1, 2, Some("MARKER")),
+                (61, 1, 3, Some("MARKER")),
+                (62, 1, 4, Some("MARKER")),
+                (43, 2, 0, None),
+                (44, 2, 1, None),
+                (42, 2, 2, None),
+                (41, 2, 3, None),
+                (45, 2, 4, None),
+            ],
+        );
     }
 
     #[test]

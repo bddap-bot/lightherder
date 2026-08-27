@@ -24,8 +24,10 @@ struct Raster {
 /// The panel's backdrop: dark but not opaque, so the picture keeps playing
 /// underneath the help rather than stopping for it.
 const BACK: [u8; 4] = [0, 0, 0, 200];
-/// A control the map leaves unbound. Still drawn — the panel should look
-/// like the device, absences included — but visibly asleep.
+/// Everything that is not a binding: the panel's own chrome and printing,
+/// and the controls the map leaves unbound. Those are still drawn — the
+/// panel should look like the device, absences included — but visibly
+/// asleep.
 const DIM: [u8; 4] = [255, 255, 255, 70];
 const LIT: [u8; 4] = [255, 255, 255, 255];
 
@@ -45,8 +47,8 @@ const PAD: i32 = 10;
 /// How far above its row's buttons a printed group label sits: a glyph and
 /// two texels of air, the room the device leaves for the same words.
 const GROUP_LIFT: i32 = GLYPH + 2;
-/// The transport strip: the track pair, then cycle apart from the markers,
-/// then the tape row — three rows, the widest of them five buttons.
+/// The transport strip, whose widest row is five buttons: the last of them
+/// ends at its own width, not at a whole pitch.
 const TRANSPORT_W: i32 = 5 * BUTTON_PITCH - (BUTTON_PITCH - BUTTON_W);
 const STRIPS_X: i32 = PAD + TRANSPORT_W + 16;
 const PANEL_W: i32 = STRIPS_X + 8 * STRIP_W + PAD;
@@ -214,9 +216,8 @@ fn transport_button(c: &mut Canvas, row: u8, col: u8, colour: [u8; 4]) {
 
 /// The words the silkscreen prints above the grouped buttons — TRACK over
 /// the pair, MARKER over the three that sit apart from cycle — each centred
-/// over the columns [`TRANSPORT`] gives its own buttons, so a column moved
-/// there moves the label naming it too. Drawn as chrome, not as a binding:
-/// they are printing on the surface, and nothing is bound to them.
+/// over the columns [`TRANSPORT`] gives its own. They are printing on the
+/// surface rather than controls, so they are drawn as chrome.
 fn group_labels(c: &mut Canvas) {
     for (i, t) in TRANSPORT.iter().enumerate() {
         let Some(name) = t.group else { continue };
@@ -225,13 +226,10 @@ fn group_labels(c: &mut Canvas) {
         if TRANSPORT[..i].iter().any(|e| e.group == Some(name)) {
             continue;
         }
-        let cols = || {
-            TRANSPORT
-                .iter()
-                .filter(|e| e.group == Some(name))
-                .map(|e| e.col)
-        };
-        let (lo, hi) = (cols().min().unwrap_or(t.col), cols().max().unwrap_or(t.col));
+        let (lo, hi) = TRANSPORT
+            .iter()
+            .filter(|e| e.group == Some(name))
+            .fold((t.col, t.col), |(lo, hi), e| (lo.min(e.col), hi.max(e.col)));
         c.text_centred(
             (button_x(lo) + button_x(hi) + BUTTON_W) / 2,
             ROWS_Y[t.row as usize] - GROUP_LIFT,
@@ -527,51 +525,71 @@ mod tests {
         r.pixels.chunks(4).filter(|p| *p == LIT).count()
     }
 
-    /// Texels marked — anything not the backdrop — inside a box, which is
-    /// how a claim about where the picture puts something is checked.
-    fn marks(r: &Raster, x: i32, y: i32, w: i32, h: i32) -> usize {
-        let mut n = 0;
+    /// The texels of a box, so a claim about what the picture puts
+    /// somewhere is checked against the thing itself rather than against
+    /// "something is drawn near here".
+    fn box_of(pixels: &[u8], width: i32, x: i32, y: i32, w: i32, h: i32) -> Vec<[u8; 4]> {
+        let mut out = Vec::new();
         for row in y..y + h {
             for col in x..x + w {
-                let at = ((row * r.width as i32 + col) * 4) as usize;
-                if r.pixels[at..at + 4] != BACK {
-                    n += 1;
-                }
+                let at = ((row * width + col) * 4) as usize;
+                out.push(pixels[at..at + 4].try_into().expect("four channels"));
             }
         }
-        n
+        out
+    }
+
+    fn marked_texels(r: &Raster, x: i32, y: i32, w: i32, h: i32) -> usize {
+        box_of(&r.pixels, r.width as i32, x, y, w, h)
+            .iter()
+            .filter(|p| **p != BACK)
+            .count()
     }
 
     #[test]
     fn the_left_cluster_is_arranged_the_way_the_surface_is() {
-        // A photo of the device: cycle alone under the track
-        // pair, the marker three set apart over the tape row's last three
-        // columns, and TRACK and MARKER printed above their groups.
         let raster = rasterize(&Map::nano_kontrol2());
+        // Every expectation below is in the strip's own texels, so the
+        // strip's own place has to be claimed outright: it starts at the
+        // panel's edge and its widest row stops short of the channel
+        // strips, which it would otherwise draw over.
+        assert_eq!(button_x(0), PAD);
+        assert!(button_x(4) + BUTTON_W < STRIPS_X);
         // The gap. A marker button drawn beside cycle would frame here.
         assert_eq!(
-            marks(&raster, button_x(1), ROWS_Y[1], BUTTON_W, BUTTON_H),
+            marked_texels(&raster, button_x(1), ROWS_Y[1], BUTTON_W, BUTTON_H),
             0,
         );
         for col in [0, 2, 3, 4] {
             assert!(
-                marks(&raster, button_x(col), ROWS_Y[1], BUTTON_W, BUTTON_H) > 0,
+                marked_texels(&raster, button_x(col), ROWS_Y[1], BUTTON_W, BUTTON_H) > 0,
                 "middle row column {col}",
             );
         }
-        // TRACK over the pair, MARKER over the three: the bands the labels
-        // occupy hold nothing else, so a mark in one is the word.
-        let label = |cx: i32, row: usize, chars: i32| {
-            marks(
-                &raster,
-                cx - chars * GLYPH / 2,
-                ROWS_Y[row] - GROUP_LIFT,
-                chars * GLYPH,
-                GLYPH,
-            )
+        // TRACK over the pair and MARKER over the three, each against the
+        // word drawn on its own in a band a glyph wider either side: a
+        // label shifted, doubled, misspelt, or lit as though something were
+        // bound to it all differ from that.
+        let says = |cx: i32, row: usize, word: &str| {
+            let mut want = Canvas::new(PANEL_W, PANEL_H);
+            want.text_centred(cx, ROWS_Y[row] - GROUP_LIFT, word, DIM);
+            let w = word.chars().count() as i32 * GLYPH;
+            let (x, y) = (cx - w / 2 - GLYPH, ROWS_Y[row] - GROUP_LIFT);
+            assert_eq!(
+                box_of(
+                    &raster.pixels,
+                    raster.width as i32,
+                    x,
+                    y,
+                    w + 2 * GLYPH,
+                    GLYPH
+                ),
+                box_of(&want.pixels, want.width, x, y, w + 2 * GLYPH, GLYPH),
+                "{word}",
+            );
         };
-        assert!(label((button_x(0) + button_x(1) + BUTTON_W) / 2, 0, 5) > 0);
-        assert!(label((button_x(2) + button_x(4) + BUTTON_W) / 2, 1, 6) > 0);
+        says((button_x(0) + button_x(1) + BUTTON_W) / 2, 0, "TRACK");
+        says((button_x(2) + button_x(4) + BUTTON_W) / 2, 1, "MARKER");
     }
 
     #[test]
