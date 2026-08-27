@@ -282,8 +282,7 @@ const fn axis(
 /// and store is the press you have to mean. Both are irreversible — a recall
 /// walks over a live panel nothing has stored — but a hand mid-piece reaches
 /// for a slot far more often than it writes one, and the modifier is the
-/// only thing a keyboard has to tell the two apart. A control surface has no
-/// modifier at all, which is why its rows lean on position instead.
+/// only thing a keyboard has to tell the two apart.
 pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
     if let Some(slot) = SLOT_KEYS.iter().position(|(bound, _)| *bound == key) {
         return Some(if shift {

@@ -266,26 +266,26 @@ So the left hand works one monitor, the right hand one camera, and the top
 fader is the switcher crosspoint joining the two the hands are on. A strip's
 three buttons are the three things you do to what that strip stands for, in
 order of how much they commit: Solo points the knobs at camera n, Mute plays
-slot n back, Record writes over it. The markers move the focus the way `n` and
-`m` do, which is how a graph deeper than eight cameras is reached and the only
-way to change which monitor the faders are on. Nothing on the surface is
-guarded: it has no shift, so a single press on the Mute row walks over the
-live panel and one on the Record row walks over a slot. Nothing is bound to
-quit: a slipped finger during a performance must not be able to stop the
-instrument. Eight of the
-twenty-four knobs are not on the surface, which has sixteen controls and no
-more: the three per-channel gain offsets, which colour a rigid gain that is
-itself on a rotary; the bloom radius, which sizes a halo whose amount is; and
-the keyer's four, which wait for a hand that keys more than it bleeds and
-swaps this map for its own. They all stay on the keys.
+slot n back, Record writes over it. The first two markers step the focus the
+way `n` and `m` do, which is how a graph deeper than eight cameras is reached
+and the only way to change which monitor the faders are on. Nothing on the
+surface is guarded: it has no shift, so a single press on the Mute row walks
+over the live panel and one on the Record row walks over a slot. Nothing is
+bound to quit: a slipped finger during a performance must not be able to stop
+the instrument. Eight of the twenty-four knobs are not on the surface, which
+has sixteen controls and no more: the three per-channel gain offsets, which
+colour a rigid gain that is itself on a rotary; the bloom radius, which sizes
+a halo whose amount is; and the keyer's four, which wait for a hand that keys
+more than it bleeds and swaps this map for its own. They all stay on the keys.
 
 **A fader does not take its knob over until it has passed through where the
 knob already is.** A fader sends where it is standing, so without that,
 plugging in mid-piece throws every knob to wherever its fader was left — with
 the headroom fader slamming a monitor to white. Sweep the fader and it picks
 its knob up on the way past, and from then on the fader is the knob. It lets
-go on an unplug, a recall, a reset and a change of focus, which are the four
-ways the panel moves without a fader moving with it.
+go on a recall, a reset and a change of focus — the three ways the panel moves
+without a fader moving with it — and on an unplug, after which nothing knows
+where a fader is standing.
 
 The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.

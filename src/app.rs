@@ -348,10 +348,7 @@ impl App {
         }
         self.focus = self.focus.clamped(&params);
         self.params = params;
-        // The whole panel just moved without a fader moving with it, so every
-        // fader has to find its knob again. Otherwise the first one brushed
-        // afterwards throws its knob back to where the fader was standing,
-        // which is the recall undone one knob at a time.
+        // The whole panel just moved without a fader moving with it.
         self.midi.release();
         Ok(())
     }
@@ -389,15 +386,16 @@ impl App {
     /// new node's is somewhere else entirely — without letting go, the next
     /// rotary touched throws it to wherever the fader is standing.
     ///
-    /// A focus that is not moving is not a move: the select row invites a
+    /// A focus that is not moving costs no grips: the select row invites a
     /// press on the node already under the knobs, and a key held down
-    /// repeats, neither of which should cost a performer their grips.
+    /// repeats. The readout still prints — on a one-node graph that press is
+    /// the only way to ask what the knobs are on, and the log line is the
+    /// only place the answer appears.
     fn refocus(&mut self, focus: Focus) {
-        if focus == self.focus {
-            return;
+        if focus != self.focus {
+            self.focus = focus;
+            self.midi.release();
         }
-        self.focus = focus;
-        self.midi.release();
         log::info!("{}", self.describe());
     }
 

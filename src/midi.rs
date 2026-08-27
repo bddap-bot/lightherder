@@ -287,9 +287,9 @@ pub(crate) const TRANSPORT: &[TransportButton] = &[
 
 /// The control number the first strip's control carries, one per block. The
 /// panel is eight strips wide and each block is that eight in a run, so a
-/// block is named by where it starts. [`nano_buttons`] writes the three
-/// button rows off these, so the map and the panel cannot disagree about
-/// which row a number is on.
+/// block is named by where it starts. [`nano_buttons`] writes its three
+/// button rows off the three below, so the map and the panel cannot
+/// disagree about which row a number is on.
 const FADERS: u8 = 0;
 const ROTARIES: u8 = 16;
 const S_ROW: u8 = 32;
@@ -377,10 +377,10 @@ fn nano_buttons() -> Vec<Button> {
         out.push(button(R_ROW + slot as u8, format!("shift {key}")));
     }
     out.extend([
-        // The markers: which node the knobs are on, and the two that act on
-        // the whole instrument. The camera step stays even though the Solo
-        // row selects, because a graph may run deeper than the eight strips
-        // the surface has.
+        // The markers: the two that move the focus, and the one that blanks
+        // the glass. The camera step stays even though the Solo row selects,
+        // because a graph may run deeper than the eight strips the surface
+        // has.
         button(60, "n"),
         button(61, "m"),
         button(62, "space"),
@@ -618,11 +618,13 @@ impl Midi {
         messages
     }
 
-    /// Let go of every fader's grip on its knob. The four times the knobs
-    /// move without the faders moving with them: an unplug, a recall, a
-    /// reset, and the focus landing on a node whose knobs are somewhere
-    /// else. Without this the next fader brushed throws its knob to wherever
-    /// the fader is standing, which is the recall undone one knob at a time.
+    /// Let go of every fader's grip on its knob. Three times the knobs move
+    /// without the faders moving with them — a recall, a reset, and the
+    /// focus landing on a node whose knobs are somewhere else — and one
+    /// where the faders move without the knobs: an unplug, after which
+    /// nothing can vouch for where a fader is standing. Without this the
+    /// next fader brushed throws its knob to wherever the fader is standing,
+    /// which is the recall undone one knob at a time.
     pub fn release(&mut self) {
         for pickup in &mut self.pickup {
             *pickup = Pickup::default();
@@ -925,8 +927,8 @@ mod tests {
         // Channel pressure carries one data byte where this pairs up two, so
         // it is left half-finished — and the control change straight after it,
         // with nothing in between to absorb the odd byte, must still arrive
-        // whole. Read wrongly it is CC 32, which is the recall button for
-        // slot 1: a surface's touch strip would be recalling presets.
+        // whole. Read wrongly it is CC 32, which is S1: a surface's touch
+        // strip would be throwing the camera knobs onto camera 1.
         assert_eq!(decode(&[0xD0, 0x20, 0xB0, 0x07, 0x40]), [message(7, 0x40)]);
         assert_eq!(decode(&[0xC0, 0x05, 0xB0, 0x07, 0x41]), [message(7, 0x41)]);
     }
