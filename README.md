@@ -104,8 +104,10 @@ all four turned up.
 ## External inputs
 
 A camera can be aimed at something that is not a monitor. An input is a
-further layer of the same source bank, so `look` indexes the monitors and
-then the inputs, and everything already built acts on it unchanged — the
+further layer of the same source bank, addressed by a second splitter list —
+`look` weights the monitors, `look_inputs` the inputs, each counted against
+its own kind, so adding a monitor to a graph cannot renumber what a camera
+was aimed at. Everything already built acts on an input unchanged — the
 switcher routes it, a beam splitter blends it with a monitor, the camera's
 zoom and turn frame it, the lens blooms it. Nothing in the shader knows which
 kind of source it sampled. What an input is *not* is part of the loop: no
@@ -114,20 +116,22 @@ the graph rather than light going round it — the same role the seed spot has.
 
 ```toml
 inputs = [
-  { pattern = "bars" },                                # or "grid"
+  { pattern = "bars" },
   { file = "clip.mp4" },                               # looped, at its own rate
   { capture = { format = "v4l2", device = "/dev/video0" } },
 ]
+cameras = [{ look = [1.0], look_inputs = [0.0, 0.0, 0.0] }]
 ```
 
 A file and a capture device are one implementation — an `ffmpeg` reading
 something and writing raw RGBA down a pipe, scaled and letterboxed to the
 monitor size — so anything ffmpeg can open is an input. That includes its own
 generators (`{ format = "lavfi", device = "testsrc2" }`) and a screen
-(`{ format = "x11grab", device = ":0.0" }`), which is why the drawn patterns
-stop at two: no process, no thread, no decode, and levels a test can assert
-without pinning an ffmpeg version. They are also still — motion is the
-camera's job — so a pattern is uploaded once rather than every frame.
+(`{ format = "x11grab", device = ":0.0" }`), which is why there is exactly one
+drawn pattern: bars earn being drawn with levels a test can assert without
+pinning an ffmpeg version, and geometry ffmpeg can draw itself. A pattern is
+also still — motion is the camera's job — so it is uploaded once rather than
+every frame.
 
 A source that has not produced its first frame by the time the window would
 open is an error on the terminal, not a black layer, and one that ends
@@ -135,11 +139,18 @@ mid-performance says so in the log and leaves its last frame on the layer.
 ffmpeg only has to be on `PATH` if a graph actually asks for a file or a
 device; `shell.nix` has one.
 
+A graph file names what ffmpeg opens, so running someone else's is trusting
+it with that much. A `file` may only be a path — the file protocol is forced,
+so an `http://` URL is refused rather than fetched for as long as the
+instrument runs — but a `capture` is a format and a device string handed
+straight to ffmpeg, and `{ format = "lavfi", device = "movie=/private.mp4" }`
+puts a local file on screen. Read a graph before you play it.
+
 Injection level is just the camera's gain, and near unity a little goes a
-long way. The `external` preset hands over a hundredth of what its camera
-sees, into a loop at 0.985 with the seed switched off: the trickle goes round
-seventy times before it fades, so every photon on that monitor came in from
-outside.
+long way. The `external` preset hands over a seventieth of what its camera
+sees — 0.014 — into a loop at 0.985 with the seed switched off: the trickle
+goes round seventy times before it fades, so every photon on that monitor came
+in from outside.
 
 ### The keyer
 
@@ -564,9 +575,9 @@ a rotation moves light around without making any, so the totals barely budge.
 On a machine with no adapter each one prints the reason straight to the
 process's stderr and returns; libtest still counts them as passed.
 
-The input decoding is tested without a GPU: the drawn patterns against the
-colours and spacings they name, the ffmpeg command lines against the options
-that make them loop and letterbox rather than race and stretch, a capture
+The input decoding is tested without a GPU: the drawn bars against the
+levels they name, the ffmpeg command lines against the options that make them
+loop, letterbox and stay off the network rather than race and stretch, a capture
 source against what ffmpeg was told to generate, a real file written and
 decoded, and a file that is not there refused at once rather than after the
 first-frame timeout. Outside the pinned shell the ones that need ffmpeg print

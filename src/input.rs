@@ -21,7 +21,7 @@ use std::fmt;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{sync_channel, Receiver};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -49,8 +49,10 @@ pub enum Input {
     Capture { format: String, device: String },
 }
 
-/// The patterns that are drawn rather than decoded: one that is all colour
-/// and one that is all geometry, which is the split the knobs divide into.
+/// The patterns that are drawn rather than decoded. One of them, because one
+/// is what drawing earns over `lavfi`: exact levels a test can assert without
+/// pinning an ffmpeg version. Geometry has no such claim — a grid or a
+/// timecode is `{ format = "lavfi", device = "testsrc2" }` and always was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Pattern {
@@ -58,10 +60,6 @@ pub enum Pattern {
     /// blue, black. Every primary and both ends of the scale, which is what
     /// the hue and saturation knobs need to have anything to turn.
     Bars,
-    /// White lines on black, eight cells across the height. Straight edges at
-    /// known spacing, so a camera's zoom, turn and pan are legible in the
-    /// image instead of having to be read off the log line.
-    Grid,
 }
 
 impl fmt::Display for Input {
@@ -80,9 +78,14 @@ pub struct Source {
 }
 
 enum Frames {
-    /// Drawn once and handed over once. `None` after that: a still layer that
-    /// is already on the GPU needs no upload.
-    Still(Option<Vec<u8>>),
+    /// Drawn once and handed over once.
+    Still {
+        pixels: Vec<u8>,
+        /// Whether they have been. A still layer already on the GPU needs no
+        /// second upload, and the pixels stay here either way because a
+        /// borrow of them is what was handed over.
+        uploaded: bool,
+    },
     Pipe(Pipe),
 }
 
@@ -92,8 +95,14 @@ impl Source {
     /// error here, at startup, rather than a black layer nobody can explain.
     pub fn open(input: &Input, size: (u32, u32)) -> Result<Source, String> {
         let frames = match input {
-            Input::Pattern(pattern) => Frames::Still(Some(draw(*pattern, size))),
-            Input::File(_) | Input::Capture { .. } => Frames::Pipe(Pipe::spawn(input, size)?),
+            Input::Pattern(pattern) => Frames::Still {
+                pixels: draw(*pattern, size),
+                uploaded: false,
+            },
+            Input::File(path) => Frames::Pipe(Pipe::spawn(input, file_args(path), size)?),
+            Input::Capture { format, device } => {
+                Frames::Pipe(Pipe::spawn(input, capture_args(format, device), size)?)
+            }
         };
         Ok(Source { frames })
     }
@@ -102,12 +111,28 @@ impl Source {
     /// when nothing has arrived — in which case the layer already holds the
     /// most recent one and wants no upload. A source that has ended returns
     /// `None` for good, and its layer holds still on its last frame.
-    pub fn frame(&mut self) -> Option<Vec<u8>> {
+    ///
+    /// Borrowed rather than handed over, because the buffer behind it is one
+    /// of the two this input owns for good — see [`Pipe::channels`].
+    pub fn frame(&mut self) -> Option<&[u8]> {
         match &mut self.frames {
-            Frames::Still(once) => once.take(),
+            Frames::Still { pixels, uploaded } => {
+                if *uploaded {
+                    return None;
+                }
+                *uploaded = true;
+                Some(pixels.as_slice())
+            }
             Frames::Pipe(pipe) => pipe.take(),
         }
     }
+}
+
+/// Both ends of the loop the two frame buffers travel round: full frames
+/// coming up from the reader, spent ones going back down to it.
+struct Channels {
+    full: Receiver<Vec<u8>>,
+    spent: SyncSender<Vec<u8>>,
 }
 
 /// An ffmpeg writing raw frames down a pipe, and the thread draining it.
@@ -120,18 +145,30 @@ struct Pipe {
     /// A device paces itself well under that rate, so it never blocks and
     /// nothing queues ahead of what is on screen.
     ///
-    /// `None` only while [`Pipe::drop`] is releasing the reader.
-    frames: Option<Receiver<Vec<u8>>>,
+    /// Two buffers go round this pair of channels and no more are ever
+    /// allocated: one is being read into while the other is on the layer, and
+    /// [`Pipe::take`] hands the one it is replacing back up the second
+    /// channel for the reader to fill again. At 1920x1080 that is eight
+    /// megabytes a frame per input not allocated and freed.
+    ///
+    /// One field, not two, because releasing the reader means dropping both
+    /// ends it waits on — a reader parked on either channel wakes when this
+    /// goes to `None`, which is the only time it is `None`, in
+    /// [`Pipe::drop`].
+    channels: Option<Channels>,
     /// The first frame, which [`Pipe::spawn`] took off the channel to prove
     /// the source works before a window ever opens.
     first: Option<Vec<u8>>,
+    /// The frame the layer is showing, kept because that is what
+    /// [`Source::frame`] lends out.
+    showing: Option<Vec<u8>>,
     reader: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Pipe {
-    fn spawn(input: &Input, size: (u32, u32)) -> Result<Pipe, String> {
+    fn spawn(input: &Input, source: Vec<String>, size: (u32, u32)) -> Result<Pipe, String> {
         let mut child = Command::new("ffmpeg")
-            .args(argv(input, size))
+            .args(argv(source, size))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             // ffmpeg's own diagnosis of a file or device that will not open
@@ -143,10 +180,18 @@ impl Pipe {
 
         let bytes = frame_bytes(size);
         let (send, frames) = sync_channel(1);
+        let (spent, empties) = sync_channel(1);
+        // The second of the two buffers, put where the reader will find it
+        // once it has handed the first one over. Without it the reader would
+        // wait for a buffer the layer cannot return until a second frame has
+        // arrived, and no second frame ever would.
+        spent
+            .try_send(vec![0u8; bytes])
+            .expect("a channel of one, still empty");
         let what = input.to_string();
         let reader = std::thread::spawn(move || {
+            let mut frame = vec![0u8; bytes];
             loop {
-                let mut frame = vec![0u8; bytes];
                 // A short read is the stream ending — EOF, a killed child, or
                 // a device pulled out — and a send that fails is this Pipe
                 // being dropped. Either way the last whole frame stays on the
@@ -158,46 +203,65 @@ impl Pipe {
                 if send.send(frame).is_err() {
                     return;
                 }
+                // Blocks until the layer gives one back, which is the same
+                // throttle `frames` is: the reader owns no buffer to read
+                // into until then.
+                match empties.recv() {
+                    Ok(next) => frame = next,
+                    Err(_) => return,
+                }
             }
         });
 
         let mut pipe = Pipe {
             child,
-            frames: Some(frames),
+            channels: Some(Channels {
+                full: frames,
+                spent,
+            }),
             first: None,
+            showing: None,
             reader: Some(reader),
         };
         // Built first, so every way out of here runs Pipe's Drop and reaps
         // the child. A dead ffmpeg drops its end of the channel, so this
         // returns as soon as it exits rather than waiting out the timeout.
+        let channels = pipe.channels.as_ref().expect("just built");
         pipe.first = Some(
-            pipe.frames
-                .as_ref()
-                .expect("just built")
+            channels
+                .full
                 .recv_timeout(FIRST_FRAME_TIMEOUT)
                 .map_err(|e| format!("{input}: no frame ({e}); ffmpeg's own error is above"))?,
         );
         Ok(pipe)
     }
 
-    fn take(&mut self) -> Option<Vec<u8>> {
-        if let Some(first) = self.first.take() {
-            return Some(first);
-        }
+    fn take(&mut self) -> Option<&[u8]> {
+        let channels = self.channels.as_ref()?;
         // Nothing yet and never again are the same answer here: either way
         // the layer keeps what it has.
-        self.frames.as_ref()?.try_recv().ok()
+        let next = match self.first.take() {
+            Some(first) => first,
+            None => channels.full.try_recv().ok()?,
+        };
+        if let Some(done) = self.showing.replace(next) {
+            // The reader is waiting for this one rather than allocating a
+            // replacement. It fails only once the reader is gone, and a
+            // buffer nothing will ever read into is nothing to keep.
+            let _ = channels.spent.try_send(done);
+        }
+        self.showing.as_deref()
     }
 }
 
 impl Drop for Pipe {
     fn drop(&mut self) {
-        // The receiver goes first: a reader blocked handing over a frame is
-        // not reading, so killing the child would not wake it. Dropping the
-        // channel fails that send; killing the child then ends the read the
-        // reader would otherwise be blocked in. Only once it is joined is
-        // there nothing left to reap.
-        self.frames.take();
+        // The channels go first: a reader blocked handing over a frame, or
+        // waiting for one back, is not reading, so killing the child would
+        // not wake it. Dropping both ends fails whichever it is parked on;
+        // killing the child then ends the read the reader would otherwise be
+        // blocked in. Only once it is joined is there nothing left to reap.
+        self.channels.take();
         let _ = self.child.kill();
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
@@ -206,33 +270,54 @@ impl Drop for Pipe {
     }
 }
 
-/// The ffmpeg command line for an input. Every piece is chosen here rather
-/// than taken from the config: a config supplies a path, a format name and a
-/// device name, and each of those lands as the argument of an option, which
-/// ffmpeg reads positionally — so nothing a file can say becomes a flag.
-fn argv(input: &Input, size: (u32, u32)) -> Vec<String> {
+/// The ffmpeg command line around `source`, which is the input-side options
+/// naming what to open — everything up to and including `-i` and its
+/// argument, built by the [`Source::open`] arm that knows which kind it is.
+/// Taking those rather than an [`Input`] is what leaves no case here for a
+/// pattern, which has no ffmpeg to give a command line to.
+///
+/// Every piece not in `source` is chosen here rather than taken from the
+/// config: a config supplies a path, a format name and a device name, and
+/// each of those lands as the argument of an option, which ffmpeg reads
+/// positionally — so nothing a file can say becomes a flag.
+/// The input-side options for a file: at its own frame rate and forever,
+/// through the file protocol and no other.
+///
+/// A file that raced through as fast as the pipe drained would play at the
+/// render rate, and one that stopped would freeze the layer a few seconds in.
+/// The whitelist is there because a graph is someone else's file to write and
+/// ffmpeg opens a URL as readily as a path: without it, `file =
+/// "http://..."` fetches from the network for as long as the instrument runs.
+/// All three are the input's options, so all three come before `-i`.
+fn file_args(path: &std::path::Path) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-protocol_whitelist",
+        "file",
+        "-re",
+        "-stream_loop",
+        "-1",
+        "-i",
+    ]
+    .map(String::from)
+    .into();
+    args.push(path.display().to_string());
+    args
+}
+
+/// The input-side options for a live device. No `-re`: a device paces itself,
+/// and ffmpeg's own advice is not to gate one. A source that does not pace
+/// itself is throttled by the pipe instead — see [`Pipe::channels`].
+fn capture_args(format: &str, device: &str) -> Vec<String> {
+    ["-f", format, "-i", device].map(String::from).into()
+}
+
+fn argv(source: Vec<String>, size: (u32, u32)) -> Vec<String> {
     let (width, height) = size;
     let mut argv: Vec<String> = ["-nostdin", "-loglevel", "error"]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    match input {
-        Input::Pattern(_) => unreachable!("patterns are drawn, not decoded"),
-        Input::File(path) => {
-            // At its own frame rate and forever: a file that raced through as
-            // fast as the pipe drained would play at the render rate, and one
-            // that stopped would freeze the layer a few seconds in. Both
-            // options are the input's, so both come before -i.
-            argv.extend(["-re", "-stream_loop", "-1", "-i"].map(String::from));
-            argv.push(path.display().to_string());
-        }
-        // No -re: a live device paces itself, and ffmpeg's own advice is not
-        // to gate one. A source that does not pace itself is throttled by the
-        // pipe instead — see Pipe::frames.
-        Input::Capture { format, device } => {
-            argv.extend(["-f", format, "-i", device].map(String::from));
-        }
-    }
+    argv.extend(source);
     argv.extend(
         [
             "-an",
@@ -267,7 +352,6 @@ fn draw(pattern: Pattern, size: (u32, u32)) -> Vec<u8> {
         for x in 0..width {
             let rgb = match pattern {
                 Pattern::Bars => bar(x, width),
-                Pattern::Grid => grid(x, y, size),
             };
             let i = ((y * width + x) * 4) as usize;
             pixels[i..i + 3].copy_from_slice(&rgb);
@@ -300,19 +384,6 @@ fn bar(x: u32, width: u32) -> [u8; 3] {
     BARS[(x * 8 / width).min(7) as usize].map(|on| if on { BAR_LEVEL } else { 0 })
 }
 
-fn grid(x: u32, y: u32, size: (u32, u32)) -> [u8; 3] {
-    // Square cells: both spacings come off the height, so the cells stay
-    // square on a monitor that is not, exactly as the seed spot stays round.
-    let cell = (size.1 / 8).max(1);
-    let line = (size.1 / 128).max(1);
-    let on_line = |v: u32| v % cell < line;
-    if on_line(x) || on_line(y) {
-        [255; 3]
-    } else {
-        [0; 3]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,16 +403,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pattern_fills_the_frame_it_was_asked_for() {
-        for pattern in [Pattern::Bars, Pattern::Grid] {
-            for size in [(64, 64), (16, 9), (1, 1)] {
-                let pixels = draw(pattern, size);
-                assert_eq!(pixels.len(), frame_bytes(size), "{pattern:?} at {size:?}");
-                assert!(
-                    pixels.chunks_exact(4).all(|p| p[3] == 255),
-                    "{pattern:?} left a transparent texel"
-                );
-            }
+    fn a_pattern_is_opaque_at_any_size_it_is_asked_for() {
+        // Sizes a monitor is not, down to one texel: the arithmetic that
+        // picks a bar divides by the width, so the degenerate frames are
+        // where an off-by-one would land, and a layer with a transparent
+        // texel is one the cameras would read as black.
+        for size in [(64, 64), (16, 9), (1, 1)] {
+            let pixels = draw(Pattern::Bars, size);
+            assert!(
+                pixels.chunks_exact(4).all(|p| p[3] == 255),
+                "a transparent texel at {size:?}"
+            );
         }
     }
 
@@ -369,25 +441,6 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_is_square_cells_on_a_frame_that_is_not() {
-        // Wider than it is tall, so a spacing taken off the width would come
-        // out twice the spacing taken off the height and the cells would not
-        // be square.
-        let size = (128, 64);
-        let pixels = draw(Pattern::Grid, size);
-        let lit_along = |horizontal: bool| -> Vec<u32> {
-            (0..if horizontal { size.0 } else { size.1 })
-                .filter(|v| {
-                    let (x, y) = if horizontal { (*v, 1) } else { (1, *v) };
-                    rgb(&pixels, size, x, y) == [255; 3]
-                })
-                .collect()
-        };
-        assert_eq!(lit_along(true), (0..16).map(|c| c * 8).collect::<Vec<_>>());
-        assert_eq!(lit_along(false), (0..8).map(|c| c * 8).collect::<Vec<_>>());
-    }
-
-    #[test]
     fn a_still_pattern_is_handed_over_once() {
         let mut source = Source::open(&Input::Pattern(Pattern::Bars), SIZE).unwrap();
         assert_eq!(source.frame().map(|f| f.len()), Some(frame_bytes(SIZE)));
@@ -396,14 +449,19 @@ mod tests {
 
     #[test]
     fn the_file_command_loops_at_the_file_s_own_rate() {
-        let argv = argv(&Input::File("clip.mp4".into()), (320, 240));
+        let argv = argv(file_args("clip.mp4".as_ref()), (320, 240));
         assert!(argv.windows(2).any(|w| w == ["-i", "clip.mp4"]));
         assert!(argv.windows(2).any(|w| w == ["-pix_fmt", "rgba"]));
-        // Both are input options: after -i, ffmpeg reads them as the output's
-        // and neither does anything.
+        // All three are input options: after -i, ffmpeg reads them as the
+        // output's and none of them does anything.
         assert!(at(&argv, "-re") < at(&argv, "-i"));
         assert!(at(&argv, "-stream_loop") < at(&argv, "-i"));
+        assert!(at(&argv, "-protocol_whitelist") < at(&argv, "-i"));
         assert_eq!(argv[at(&argv, "-stream_loop") + 1], "-1");
+        // Only the file protocol, or a graph that named an http URL would
+        // have the instrument fetching from the network for as long as it
+        // runs.
+        assert_eq!(argv[at(&argv, "-protocol_whitelist") + 1], "file");
         let filter = &argv[at(&argv, "-vf") + 1];
         assert!(filter.contains("scale=320:240"), "{filter}");
         // Without both of these the clip is stretched to the monitor's shape
@@ -417,13 +475,7 @@ mod tests {
 
     #[test]
     fn the_capture_command_names_the_format_and_paces_itself() {
-        let argv = argv(
-            &Input::Capture {
-                format: "v4l2".into(),
-                device: "/dev/video0".into(),
-            },
-            (320, 240),
-        );
+        let argv = argv(capture_args("v4l2", "/dev/video0"), (320, 240));
         assert!(argv.windows(2).any(|w| w == ["-f", "v4l2"]));
         assert!(argv.windows(2).any(|w| w == ["-i", "/dev/video0"]));
         assert!(!argv.contains(&"-re".to_string()), "a device is not paced");
@@ -471,9 +523,36 @@ mod tests {
         .unwrap();
         let frame = source.frame().expect("open() waits for the first frame");
         assert_eq!(frame.len(), frame_bytes(SIZE));
-        assert!(mean(&frame, 0) > 200.0, "red {}", mean(&frame, 0));
-        assert!(mean(&frame, 1) < 40.0, "green {}", mean(&frame, 1));
-        assert!(mean(&frame, 2) < 40.0, "blue {}", mean(&frame, 2));
+        assert!(mean(frame, 0) > 200.0, "red {}", mean(frame, 0));
+        assert!(mean(frame, 1) < 40.0, "green {}", mean(frame, 1));
+        assert!(mean(frame, 2) < 40.0, "blue {}", mean(frame, 2));
+    }
+
+    #[test]
+    fn a_pipe_keeps_delivering_past_the_two_buffers_it_owns() {
+        if !have_ffmpeg() {
+            return;
+        }
+        // The whole of the two-buffer scheme: the reader owns no buffer to
+        // read into until the layer hands one back, so a return trip that
+        // never happened would show up as a source that delivered twice and
+        // then stopped forever. Eight frames is several trips round.
+        let mut source = Source::open(
+            &Input::Capture {
+                format: "lavfi".into(),
+                device: "testsrc2=s=32x32".into(),
+            },
+            SIZE,
+        )
+        .unwrap();
+        let mut delivered = 0;
+        let began = std::time::Instant::now();
+        while delivered < 8 && began.elapsed() < FIRST_FRAME_TIMEOUT {
+            if source.frame().is_some() {
+                delivered += 1;
+            }
+        }
+        assert_eq!(delivered, 8, "the pipe stalled after {delivered} frames");
     }
 
     #[test]
@@ -519,7 +598,7 @@ mod tests {
         let mut source = Source::open(&Input::File(path), size).unwrap();
         let frame = source.frame().expect("open() waits for the first frame");
         assert_eq!(frame.len(), frame_bytes(size));
-        let at = |x: u32, y: u32| rgb(&frame, size, x, y);
+        let at = |x: u32, y: u32| rgb(frame, size, x, y);
         assert!(
             at(64, 32)[1] > 100,
             "the middle is not green: {:?}",

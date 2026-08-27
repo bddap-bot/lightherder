@@ -53,6 +53,7 @@ fn graph(s: &Single) -> Params {
             character: s.character,
             key: Key::OFF,
             look: vec![1.0],
+            look_inputs: Vec::new(),
         }],
         monitors: vec![Monitor {
             colour: s.colour,
@@ -1112,6 +1113,7 @@ fn plain_camera(look: Vec<f32>) -> Camera {
         character: Character::CLEAN,
         key: Key::OFF,
         look,
+        look_inputs: Vec::new(),
     }
 }
 
@@ -1325,7 +1327,7 @@ fn the_shipped_presets_settle_without_clipping() {
         let Some(mut h) = graph_harness((SIZE, SIZE), (cols * SIZE, rows * SIZE), &p) else {
             return;
         };
-        feed_inputs(&h, &p);
+        feed_inputs(&mut h, &p);
         for i in 0..399 {
             h.feedback
                 .step(h.device, h.queue, &p.modulated(f64::from(i) / 60.0));
@@ -1800,7 +1802,7 @@ fn the_grain_is_monochrome_and_signed() {
 /// Opens a graph's own inputs and puts a frame of each on its layer. The
 /// shipped patterns are still, so one delivery is the whole of it; a source
 /// with motion in it would want this every step, as the app does.
-fn feed_inputs(h: &Harness, params: &Params) {
+fn feed_inputs(h: &mut Harness, params: &Params) {
     for (i, input) in params.inputs.iter().enumerate() {
         let frame = match input {
             // A capture device is real hardware this suite cannot demand —
@@ -1814,7 +1816,10 @@ fn feed_inputs(h: &Harness, params: &Params) {
             _ => {
                 let mut source = Source::open(input, h.feedback.size())
                     .unwrap_or_else(|e| panic!("input {i}: {e}"));
-                source.frame().expect("open() waits for the first frame")
+                source
+                    .frame()
+                    .expect("open() waits for the first frame")
+                    .to_vec()
             }
         };
         h.feedback.write_input(h.queue, i, &frame);
@@ -1852,11 +1857,9 @@ fn quartered_frame(size: (u32, u32), quarters: [[u8; 3]; 4]) -> Vec<u8> {
 fn one_camera_on_one_input() -> Params {
     Params {
         cameras: vec![Camera {
-            framing: Framing::identity(),
-            gain: [1.0; 3],
-            character: Character::CLEAN,
-            key: Key::OFF,
-            look: vec![0.0, 1.0],
+            look: vec![0.0],
+            look_inputs: vec![1.0],
+            ..plain_camera(Vec::new())
         }],
         monitors: vec![silent_monitor()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
@@ -1918,13 +1921,14 @@ fn each_input_lands_on_its_own_layer() {
     // layer monitors + i has four distinct answers to get wrong instead of
     // the one a single monitor and a single input collapse it to.
     let camera = |on: usize| Camera {
-        look: one_hot(4, 2 + on),
-        ..plain_camera(one_hot(4, 2 + on))
+        look: vec![0.0; 2],
+        look_inputs: one_hot(2, on),
+        ..plain_camera(vec![0.0; 2])
     };
     let p = Params {
         cameras: vec![camera(0), camera(1)],
         monitors: vec![silent_monitor(), silent_monitor()],
-        inputs: vec![Input::Pattern(Pattern::Bars), Input::Pattern(Pattern::Grid)],
+        inputs: vec![Input::Pattern(Pattern::Bars); 2],
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
         motion: Vec::new(),
     };
@@ -1976,7 +1980,8 @@ fn a_splitter_blends_an_input_with_a_monitor() {
     // is which. Unequal weights, so a pair swapped anywhere between the
     // config and the tap cannot come out the same.
     let mut p = one_camera_on_one_input();
-    p.cameras[0].look = vec![0.25, 0.75];
+    p.cameras[0].look = vec![0.25];
+    p.cameras[0].look_inputs = vec![0.75];
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };

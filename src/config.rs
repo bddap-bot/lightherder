@@ -37,6 +37,7 @@ pub fn single() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look: vec![1.0],
+            look_inputs: Vec::new(),
         }],
         monitors: vec![Monitor {
             seed_brightness: 0.10,
@@ -119,6 +120,7 @@ pub fn crossed() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look,
+            look_inputs: Vec::new(),
         }
     };
     Params {
@@ -166,6 +168,7 @@ pub fn insanity() -> Params {
                 character: Character::CLEAN,
                 key: Key::OFF,
                 look,
+                look_inputs: Vec::new(),
             }
         })
         .collect();
@@ -185,10 +188,11 @@ pub fn insanity() -> Params {
 
 /// A test pattern driving the loop instead of the seed spot. One camera is
 /// the classic rig, turning and pulling back on its own monitor; the other is
-/// pointed at the bars and hands over almost nothing — a hundredth of what it
-/// sees. That is the whole point of a loop this close to unity: what settles
-/// is the trickle divided by how far the gain is from 1, so a hundredth of
-/// the bars becomes most of a monitor. The seed is off, so every photon here
+/// pointed at the bars and hands over almost nothing — a seventieth of what
+/// it sees. That is the whole point of a loop this close to unity: what
+/// settles is the trickle divided by how far the gain is from 1, so 0.014 of
+/// the bars over a loop 0.015 short of unity settles at almost the bars'
+/// own brightness. The seed is off, so every photon here
 /// came in from outside, and the gain is flat across the channels because an
 /// input supplies its own colour — there is nothing for a per-channel decay
 /// to add.
@@ -202,7 +206,8 @@ pub fn external() -> Params {
         gain: [0.985; 3],
         character: Character::CLEAN,
         key: Key::OFF,
-        look: vec![1.0, 0.0],
+        look: vec![1.0],
+        look_inputs: vec![0.0],
     };
     let looking_at_the_bars = Camera {
         // Square on, so the pattern arrives as itself and everything that
@@ -211,7 +216,8 @@ pub fn external() -> Params {
         gain: [0.014; 3],
         character: Character::CLEAN,
         key: Key::OFF,
-        look: vec![0.0, 1.0],
+        look: vec![0.0],
+        look_inputs: vec![1.0],
     };
     Params {
         cameras: vec![looking_at_the_loop, looking_at_the_bars],
@@ -341,17 +347,26 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // the only place its weights are decided, and they are checked as
     // written rather than against a rail no key could hit.
     for (i, camera) in params.cameras.iter().enumerate() {
-        if camera.look.len() != params.sources() {
-            return Err(format!(
-                "camera {i}'s look has {} entries; needs one per source, {}",
-                camera.look.len(),
-                params.sources()
-            ));
-        }
-        if let Some(w) = camera.look.iter().find(|w| !w.is_finite() || **w < 0.0) {
-            return Err(format!(
-                "camera {i}'s look contains {w}; weights are finite and >= 0"
-            ));
+        for (weights, what, noun, wanted) in [
+            (&camera.look, "look", "monitor", m),
+            (
+                &camera.look_inputs,
+                "look_inputs",
+                "input",
+                params.inputs.len(),
+            ),
+        ] {
+            if weights.len() != wanted {
+                return Err(format!(
+                    "camera {i}'s {what} has {} entries; needs one per {noun}, {wanted}",
+                    weights.len(),
+                ));
+            }
+            if let Some(w) = weights.iter().find(|w| !w.is_finite() || **w < 0.0) {
+                return Err(format!(
+                    "camera {i}'s {what} contains {w}; weights are finite and >= 0"
+                ));
+            }
         }
     }
     // Every knob, at every focus that names a value of its own, against the
@@ -496,23 +511,18 @@ mod tests {
         // preset settles instead of blooming to white. Near 1, or the trail
         // is not worth seeing.
         //
-        // Over the monitors a camera looks at, and not its inputs: an input
-        // is light entering the graph, so it belongs to what the loop is
-        // driven *by*, not to what it multiplies — the seed is left out of
-        // this sum for exactly the same reason. This is the first place the
-        // one index space over two kinds of source charges rent, and it will
-        // not be the last: anywhere the loop's own gain is reasoned about,
-        // `look` has to be sliced.
+        // `look` and not `look_inputs`: an input is light entering the graph,
+        // so it belongs to what the loop is driven *by*, not to what it
+        // multiplies — the seed is left out of this sum for exactly the same
+        // reason. Reading the loop's own gain is naming one of the two
+        // fields, which is the whole of the argument for their being two.
         for (name, params) in presets() {
-            let monitors = params.monitors.len();
             for (i, row) in params.routing.iter().enumerate() {
                 let sum: f32 = (0..3)
                     .map(|ch| {
                         row.iter()
                             .zip(&params.cameras)
-                            .map(|(route, cam)| {
-                                route * cam.gain[ch] * cam.look[..monitors].iter().sum::<f32>()
-                            })
+                            .map(|(route, cam)| route * cam.gain[ch] * cam.look.iter().sum::<f32>())
                             .sum()
                     })
                     .fold(0.0, f32::max);
@@ -669,7 +679,7 @@ mod tests {
     fn one_of_every_input() -> Params {
         let mut params = external();
         params.inputs = vec![
-            Input::Pattern(Pattern::Grid),
+            Input::Pattern(Pattern::Bars),
             Input::File("clip.mp4".into()),
             Input::Capture {
                 format: "v4l2".into(),
@@ -677,7 +687,7 @@ mod tests {
             },
         ];
         for camera in &mut params.cameras {
-            camera.look.resize(params.monitors.len() + 3, 0.0);
+            camera.look_inputs.resize(3, 0.0);
         }
         params
     }
@@ -689,11 +699,11 @@ mod tests {
         // every line of the README that mentions an input depends on the
         // names rather than on the agreement.
         let params: Params = toml::from_str(
-            "cameras = [{ look = [1.0, 0.0, 0.0, 0.0] }]\n\
+            "cameras = [{ look = [1.0], look_inputs = [0.0, 0.0, 0.0] }]\n\
              monitors = [{}]\n\
              routing = [[1.0]]\n\
              inputs = [\n\
-             \x20 { pattern = \"grid\" },\n\
+             \x20 { pattern = \"bars\" },\n\
              \x20 { file = \"clip.mp4\" },\n\
              \x20 { capture = { format = \"v4l2\", device = \"/dev/video0\" } },\n\
              ]\n",
@@ -707,14 +717,29 @@ mod tests {
     }
 
     #[test]
-    fn a_look_has_to_cover_the_inputs_too() {
-        // The failure this stops is silent: a look one entry short used to be
-        // exactly right, and every camera would still be aimed at something.
+    fn a_splitter_is_counted_against_its_own_kind_of_source() {
+        // A monitor added to a working graph, and nothing else touched. Under
+        // one list over both kinds this validated on length alone — the
+        // camera that was aimed at the input came out aimed at the new
+        // monitor, silently. Two lists make the graph short of a monitor
+        // weight instead, which is a refusal.
         let mut params = external();
-        params.cameras[0].look.pop();
-        params.cameras[1].look.pop();
+        params.monitors.push(params.monitors[0].clone());
+        params.routing = vec![vec![1.0, 1.0]; 2];
         let why = validate(&params).unwrap_err();
-        assert!(why.contains("look"), "refused for the wrong reason: {why}");
+        assert!(
+            why.contains("look has") && why.contains("monitor"),
+            "refused for the wrong reason: {why}"
+        );
+
+        // And the other way: inputs a camera has no weights for.
+        let mut params = external();
+        params.cameras[1].look_inputs.clear();
+        let why = validate(&params).unwrap_err();
+        assert!(
+            why.contains("look_inputs"),
+            "refused for the wrong reason: {why}"
+        );
     }
 
     #[test]
@@ -722,9 +747,7 @@ mod tests {
         let mut params = one_of_every_input();
         params.inputs = vec![Input::Pattern(Pattern::Bars); MAX_INPUTS + 1];
         for camera in &mut params.cameras {
-            camera
-                .look
-                .resize(params.monitors.len() + MAX_INPUTS + 1, 0.0);
+            camera.look_inputs.resize(MAX_INPUTS + 1, 0.0);
         }
         let why = validate(&params).unwrap_err();
         assert!(
@@ -741,13 +764,12 @@ mod tests {
         // One camera in the loop, one on the input, and no camera doing both:
         // the injection level is that camera's gain, which is only true while
         // it sees nothing else.
-        let input = p.monitors.len();
         let on_input: Vec<usize> = (0..p.cameras.len())
-            .filter(|c| p.cameras[*c].look[input] > 0.0)
+            .filter(|c| p.cameras[*c].look_inputs[0] > 0.0)
             .collect();
         assert_eq!(on_input, vec![1]);
-        assert_eq!(p.cameras[1].look[..p.monitors.len()], [0.0]);
-        assert_eq!(p.cameras[0].look[input], 0.0);
+        assert_eq!(p.cameras[1].look, [0.0]);
+        assert_eq!(p.cameras[0].look_inputs, [0.0]);
     }
 
     #[test]
@@ -1021,6 +1043,7 @@ mod tests {
                     character: Character::CLEAN,
                     key: Key::OFF,
                     look: vec![1.0; MAX_MONITORS],
+                    look_inputs: Vec::new(),
                 })
                 .collect(),
             monitors: (0..MAX_MONITORS).map(|_| Monitor::default()).collect(),

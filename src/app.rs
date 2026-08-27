@@ -285,7 +285,7 @@ impl Live {
         // Before the cameras read the bank, not after.
         for (i, source) in sources.iter_mut().enumerate() {
             if let Some(frame) = source.frame() {
-                self.feedback.write_input(&gpu.queue, i, &frame);
+                self.feedback.write_input(&gpu.queue, i, frame);
             }
         }
 

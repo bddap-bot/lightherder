@@ -237,12 +237,21 @@ pub struct Camera {
     /// What this path refuses to hand on.
     #[serde(default)]
     pub key: Key,
-    /// The beam splitter in front of the lens: how much of each source this
-    /// camera sees, indexed the way [`Params::sources`] counts them — the
-    /// monitors, then the external inputs. `[1.0]`-style one-hots are a
-    /// camera aimed straight at one source; two non-zero entries are a
-    /// camera looking through beam-splitter glass at a pair.
+    /// The beam splitter in front of the lens: how much of each monitor this
+    /// camera sees. `[1.0]`-style one-hots are a camera aimed straight at one
+    /// monitor; two non-zero entries are a camera looking through
+    /// beam-splitter glass at a pair.
     pub look: Vec<f32>,
+    /// The same splitter, over the external inputs. A second list rather than
+    /// more entries on the first, because the two are counted separately:
+    /// with one list, adding a monitor to a graph would silently renumber
+    /// every camera's inputs, and a file that used to aim at an input would
+    /// validate unchanged while aiming at a monitor.
+    ///
+    /// Defaulted, since most graphs have no inputs at all; a graph that has
+    /// them and leaves this short is refused by `config::validate`.
+    #[serde(default)]
+    pub look_inputs: Vec<f32>,
 }
 
 fn unity_gain() -> [f32; 3] {
@@ -640,9 +649,9 @@ impl<'de> Deserialize<'de> for Knob {
 
 impl Params {
     /// Everything a camera can look at: the monitors, then the inputs. The
-    /// index space of [`Camera::look`] and the layer count of the source
-    /// bank, which is why `Feedback::new` takes the graph rather than a
-    /// count it could be handed the wrong one of.
+    /// layer count of the source bank, and the layer an input sits on is its
+    /// index past the monitors — which is why `Feedback::new` takes the graph
+    /// rather than a count it could be handed the wrong one of.
     pub fn sources(&self) -> usize {
         self.monitors.len() + self.inputs.len()
     }
