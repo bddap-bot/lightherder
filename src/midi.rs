@@ -271,26 +271,45 @@ pub(crate) struct TransportButton {
     pub(crate) name: &'static str,
     pub(crate) row: u8,
     pub(crate) col: u8,
+    /// The name the silkscreen prints above this button's group, for the
+    /// buttons that are in one. Carried on the buttons rather than as a
+    /// second table of columns, so a label spans wherever this table puts
+    /// the buttons it names and the two cannot drift apart.
+    pub(crate) group: Option<&'static str>,
 }
 
-const fn transport(cc: u8, name: &'static str, row: u8, col: u8) -> TransportButton {
-    TransportButton { cc, name, row, col }
+const fn transport(
+    cc: u8,
+    name: &'static str,
+    row: u8,
+    col: u8,
+    group: Option<&'static str>,
+) -> TransportButton {
+    TransportButton {
+        cc,
+        name,
+        row,
+        col,
+        group,
+    }
 }
 
-/// The transport strip as the device has it: track prev/next on top, cycle
-/// beside the three marker buttons, and the tape row underneath.
+/// The transport strip as the device has it: the track pair on top; cycle
+/// alone at the left of the middle row with the marker three set apart over
+/// the last three columns; the tape row of five underneath. TRACK and
+/// MARKER are printed above the groups they name.
 pub(crate) const TRANSPORT: &[TransportButton] = &[
-    transport(58, "track prev", 0, 0),
-    transport(59, "track next", 0, 1),
-    transport(46, "cycle", 1, 0),
-    transport(60, "marker set", 1, 1),
-    transport(61, "marker prev", 1, 2),
-    transport(62, "marker next", 1, 3),
-    transport(43, "rewind", 2, 0),
-    transport(44, "forward", 2, 1),
-    transport(42, "stop", 2, 2),
-    transport(41, "play", 2, 3),
-    transport(45, "record", 2, 4),
+    transport(58, "track prev", 0, 0, Some("TRACK")),
+    transport(59, "track next", 0, 1, Some("TRACK")),
+    transport(46, "cycle", 1, 0, None),
+    transport(60, "marker set", 1, 2, Some("MARKER")),
+    transport(61, "marker prev", 1, 3, Some("MARKER")),
+    transport(62, "marker next", 1, 4, Some("MARKER")),
+    transport(43, "rewind", 2, 0, None),
+    transport(44, "forward", 2, 1, None),
+    transport(42, "stop", 2, 2, None),
+    transport(41, "play", 2, 3, None),
+    transport(45, "record", 2, 4, None),
 ];
 
 /// The control number the first strip's control carries, one per block. The
@@ -984,10 +1003,33 @@ mod tests {
         assert_eq!(at(58), (0, 0));
         assert_eq!(at(59), (0, 1));
         assert_eq!(at(46), (1, 0));
-        assert_eq!(at(62), (1, 3));
+        // Cycle sits alone: the markers start two columns right of it, not
+        // beside it, and the middle row's second column is bare.
+        assert_eq!(at(60), (1, 2));
+        assert_eq!(at(62), (1, 4));
+        assert!(!TRANSPORT.iter().any(|t| (t.row, t.col) == (1, 1)));
         assert_eq!(at(43), (2, 0));
         assert_eq!(at(41), (2, 3));
         assert_eq!(at(45), (2, 4));
+    }
+
+    #[test]
+    fn the_printed_groups_name_the_buttons_the_silkscreen_brackets() {
+        // The group a button is in is what the overlay spans its printed
+        // label over, so a button that joined or left one moves the word.
+        let group = |cc| match spot(cc) {
+            Some(Spot::Transport(t)) => t.group,
+            other => panic!("cc {cc}: {other:?}"),
+        };
+        assert_eq!(group(58), Some("TRACK"));
+        assert_eq!(group(59), Some("TRACK"));
+        assert_eq!(group(60), Some("MARKER"));
+        assert_eq!(group(61), Some("MARKER"));
+        assert_eq!(group(62), Some("MARKER"));
+        // Cycle and the tape row carry no printed group of their own.
+        assert_eq!(group(46), None);
+        assert_eq!(group(41), None);
+        assert_eq!(group(45), None);
     }
 
     #[test]
