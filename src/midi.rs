@@ -481,8 +481,8 @@ fn position_of(knob: Knob, value: f32) -> f32 {
 /// to be standing — twenty knobs' worth of that on a hot-plug, mid-piece,
 /// with the headroom fader slamming a monitor to white. So a fader does not
 /// take its knob over until it has passed through where the knob already is,
-/// and then keeps it until it is let go of: an unplug, a recall, or the focus
-/// moving to a node whose knobs are somewhere else entirely.
+/// and then keeps it until [`Midi::release`] lets go, which names the times
+/// that happens.
 #[derive(Clone, Copy, Debug, Default)]
 struct Pickup {
     caught: bool,
@@ -618,11 +618,11 @@ impl Midi {
         messages
     }
 
-    /// Let go of every fader's grip on its knob, because the knobs moved
-    /// without the faders moving with them — a recall, a reset, or the focus
-    /// stepping to a node whose knobs are somewhere else. Without this the
-    /// next fader brushed throws its knob to wherever the fader is standing,
-    /// which is the recall undone one knob at a time.
+    /// Let go of every fader's grip on its knob. The four times the knobs
+    /// move without the faders moving with them: an unplug, a recall, a
+    /// reset, and the focus landing on a node whose knobs are somewhere
+    /// else. Without this the next fader brushed throws its knob to wherever
+    /// the fader is standing, which is the recall undone one knob at a time.
     pub fn release(&mut self) {
         for pickup in &mut self.pickup {
             *pickup = Pickup::default();

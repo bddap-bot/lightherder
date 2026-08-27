@@ -284,7 +284,7 @@ knob already is.** A fader sends where it is standing, so without that,
 plugging in mid-piece throws every knob to wherever its fader was left — with
 the headroom fader slamming a monitor to white. Sweep the fader and it picks
 its knob up on the way past, and from then on the fader is the knob. It lets
-go on an unplug, on a recall and on a change of focus, which are the three
+go on an unplug, a recall, a reset and a change of focus, which are the four
 ways the panel moves without a fader moving with it.
 
 The buttons are read on the way down, which assumes the surface's buttons are

@@ -370,11 +370,6 @@ impl App {
         }
     }
 
-    /// Point the knobs at another node. The one way `self.focus` moves, for
-    /// the same reason [`App::adopt`] is the one way `params` is replaced: a
-    /// fader that has caught a knob is holding *that* node's knob, and the
-    /// new node's is somewhere else entirely — without letting go, the next
-    /// rotary touched throws it to wherever the fader is standing.
     /// Point the camera knobs at one camera by its place in the graph. A
     /// select row is wider than most graphs, so a press past the end does
     /// nothing: sliding to the last camera instead would make every button
@@ -388,7 +383,19 @@ impl App {
         }
     }
 
+    /// Point the knobs at another node. The one way `self.focus` moves, for
+    /// the same reason [`App::adopt`] is the one way `params` is replaced: a
+    /// fader that has caught a knob is holding *that* node's knob, and the
+    /// new node's is somewhere else entirely — without letting go, the next
+    /// rotary touched throws it to wherever the fader is standing.
+    ///
+    /// A focus that is not moving is not a move: the select row invites a
+    /// press on the node already under the knobs, and a key held down
+    /// repeats, neither of which should cost a performer their grips.
     fn refocus(&mut self, focus: Focus) {
+        if focus == self.focus {
+            return;
+        }
         self.focus = focus;
         self.midi.release();
         log::info!("{}", self.describe());
