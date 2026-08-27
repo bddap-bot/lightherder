@@ -486,9 +486,9 @@ impl Feedback {
         // Everything else the tap flattening assumes — row lengths, weight
         // signs, the tap cap — is the loader's contract, re-asserted here so
         // a hand-built Params that skipped `config::load` fails loudly
-        // instead of sampling the wrong layer. A few thousand float compares
-        // at the widest graph the caps allow, and no allocation on the
-        // success path — which is what makes it affordable every frame.
+        // instead of sampling the wrong layer. One compare per value the
+        // graph holds, and no allocation on the success path, which is what
+        // makes it affordable every frame.
         if let Err(why) = crate::config::validate(params) {
             panic!("unvalidated params reached the GPU: {why}");
         }

@@ -361,15 +361,20 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // could not reach.
     for knob in Knob::ALL.into_iter().filter(|knob| knob.owns_a_field()) {
         let (low, high) = knob.limit().ends();
-        for camera in 0..c {
-            for monitor in 0..m {
+        // Only the index the knob reads, which [`Focus::narrowed`] is the
+        // same fact from the other end: a camera knob is one value per
+        // camera however many monitors there are. Walking the pairs and
+        // dropping the ones a knob does not distinguish would be the same
+        // checks and eight times the loop, once a frame, on a camera count
+        // nothing caps.
+        let (cameras, monitors) = match knob.side() {
+            Side::Camera => (c, 1),
+            Side::Monitor => (1, m),
+            Side::Edge => (c, m),
+        };
+        for camera in 0..cameras {
+            for monitor in 0..monitors {
                 let focus = Focus { camera, monitor };
-                // Once per value rather than once per pair: a camera knob
-                // reads the same field whichever monitor is focused, and
-                // `narrowed` is already the definition of which half counts.
-                if focus != focus.narrowed(knob) {
-                    continue;
-                }
                 let value = params.knob(knob, focus);
                 if !(low..=high).contains(&value) {
                     // Built only on the way out, so the frame-by-frame

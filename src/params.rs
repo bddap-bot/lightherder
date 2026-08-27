@@ -600,7 +600,7 @@ impl Knob {
             // Potent inside a loop, so the rails are close: a tenth of a unit
             // added every pass floods the monitor to white in under a second.
             Knob::Brightness => Limit::Clamp(-0.5, 0.5),
-            // Zero would flatten every level to 1.0, and at or below it
+            // Zero would flatten every level to 1.0, and below it
             // `pow(0, gamma)` is an infinity — the monitor's corners are
             // exactly 0 whenever the seed does not reach them, and one pass
             // later the chroma matrix turns that infinity into a NaN, which
@@ -1581,18 +1581,32 @@ mod tests {
         // The rigid gain has no field to poison, and `validate` skips it for
         // the same reason — `owns_a_field` is where that is said once.
         for knob in Knob::ALL.into_iter().filter(|knob| knob.owns_a_field()) {
+            // Camera 1 and monitor 2, and the whole line compared rather than
+            // hunted for the knob's name: this walk is the only thing left
+            // standing behind that message, and against a node named 1 and a
+            // node named 2 a knob reported against the wrong half of the
+            // focus is caught by the number as well as by the word.
             let focus = Focus {
                 camera: 1,
-                monitor: 1,
+                monitor: 2,
             }
             .narrowed(knob);
+            let name = knob.name();
+            let node = match knob.side() {
+                Side::Camera => format!("camera {}'s {name}", focus.camera),
+                Side::Monitor => format!("monitor {}'s {name}", focus.monitor),
+                Side::Edge => format!(
+                    "camera {}'s {name} to monitor {}",
+                    focus.camera, focus.monitor
+                ),
+            };
             let (low, high) = knob.limit().ends();
             for past in [low - 1.0, high + 1.0] {
                 let mut params = crate::config::insanity();
                 *params.knob_mut(knob, focus) = past;
                 let why = crate::config::validate(&params)
-                    .expect_err(&format!("{} loaded at {past}", knob.name()));
-                assert!(why.contains(knob.name()), "{}: {why}", knob.name());
+                    .expect_err(&format!("{name} loaded at {past}"));
+                assert_eq!(why, format!("{node} is {past}; it runs {low} to {high}"));
             }
         }
     }

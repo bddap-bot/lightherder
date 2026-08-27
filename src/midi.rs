@@ -1239,8 +1239,7 @@ mod tests {
         // The other way a fader is caught. Contrast at 3.0 is three quarters
         // of the way up a range that is not 0..1, so a pickup comparing the
         // raw value against the fader's own 0..1 would not call this standing
-        // on it — and the fader is nowhere near an end, so neither is this
-        // the clamp catching everything.
+        // on it.
         let (mut midi, mut params) = surface();
         params.monitors[0].colour.contrast = 3.0;
         assert!(matches!(
