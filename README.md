@@ -332,11 +332,14 @@ what it takes away is nothing. A button the map binds nothing to stays dark,
 which is now what it means.
 
 The mode goes back to Internal on the way out, so the surface lights its own
-buttons again for whatever is played next. On the way in the panel is blanked
-first, before any lamp: external mode lives in the device's RAM, so a run
-killed without a chance to tidy up leaves both the mode set and its lamp
-burning, and the next run must put out what it finds rather than take a dark
-panel on faith.
+buttons again for whatever is played next. **On the way out of a clean exit**
+— a killed process runs nothing, and external mode lives in the device's RAM,
+so a `SIGTERM` leaves the mode set and the last lamp burning until the surface
+is replugged or the instrument is run again. Which is why, on the way in, the
+panel is blanked before any lamp is lit and the mode is put back even when it
+was already found set: the next run repairs what the last one was killed
+before finishing, rather than taking a dark panel on faith and lighting a
+second lamp beside a stale one.
 
 A surface that will not take the mode still plays exactly as it did before,
 and says so once on the log. So does one whose device node will not open for
