@@ -1,10 +1,11 @@
 //! Window, surface and the run loop.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use web_time::Instant;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
@@ -24,6 +25,31 @@ use crate::present::Present;
 /// display would buy nothing and cost a mode switch on every toggle.
 fn borderless(fullscreen: bool) -> Option<winit::window::Fullscreen> {
     fullscreen.then_some(winit::window::Fullscreen::Borderless(None))
+}
+
+/// One pass every sixtieth of a second. The instrument evolves one pass per
+/// frame, so the frame rate *is* the tempo: a rate that is not sixty plays
+/// the piece at the wrong speed.
+const BEAT: Duration = Duration::from_nanos(1_000_000_000 / 60);
+
+/// The deadline after `due`, for a pass that went out at `now`.
+///
+/// Deadlines are absolute — each is the last one plus a beat, never "now
+/// plus a beat" — so a compositor grid faster than sixty still leaves sixty
+/// passes in a second rather than one per slot. Taking that grid for the
+/// tempo is what played the piece a fifth fast under the TV's nested
+/// gamescope, which hands out about 72 Hz (#11 — measured; the same chain in
+/// Immediate runs 2400 fps, so nothing here is ever short of time).
+///
+/// Deadlines `now` has overtaken are dropped rather than owed: a machine
+/// that could not keep up must not then run the passes it missed back to
+/// back, which is a lurch in the tempo rather than a repair of one.
+fn next_due(due: Instant, now: Instant) -> Instant {
+    let mut due = due + BEAT;
+    while due <= now {
+        due += BEAT;
+    }
+    due
 }
 
 struct Live {
@@ -76,11 +102,14 @@ pub struct App {
     /// Whether the controls overlay is showing. Off at startup: the overlay
     /// is help, and help is what the cycle button and backquote are for.
     overlay_shown: bool,
-    /// Frames since the last rate line, and when that was. The loop is paced
-    /// by the vertical blank, so this reads the refresh rate until a frame
-    /// stops fitting inside one — which is the whole reason to print it.
+    /// Passes since the last rate line, and when that was. A deadline can
+    /// only hold the loop back, never push it, so a line under sixty is the
+    /// whole reason to print one.
     frames: u32,
     metered: Instant,
+    /// When the next pass falls due — see [`next_due`], which is where the
+    /// tempo is kept rather than in the display.
+    due: Instant,
     live: Option<Live>,
     /// Where [`App::give_up`] parks a refusal, since nothing may return out
     /// of `resumed`. Not on the web, which has no `start` left waiting.
@@ -161,7 +190,6 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     log::info!("surface: waiting for {}", map.device);
     let midi = Midi::new(map)?;
     let event_loop = EventLoop::new()?;
-    event_loop.set_control_flow(ControlFlow::Poll);
     // Through the event loop's own display connection rather than a window's:
     // the adapter is chosen before there is a window, and wgpu forbids a
     // surface created against a different one later.
@@ -185,6 +213,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             overlay_shown: false,
             frames: 0,
             metered: Instant::now(),
+            due: Instant::now(),
             live: None,
             #[cfg(not(target_arch = "wasm32"))]
             failed: None,
@@ -234,24 +263,21 @@ impl Live {
                     gpu.adapter.get_info().name,
                 )
             })?;
-        // The vertical blank is this instrument's clock, and not for smoothness:
-        // the loop evolves one pass per frame, so the frame rate is a tempo. A
-        // camera that pulls back 0.6% and turns 0.05 rad per pass draws its
-        // spiral in a second at sixty and in a twenty-fifth of one at fifteen
-        // hundred. `get_default_config` takes whatever mode the adapter lists
-        // first — Mailbox on this hardware, which ran the analog preset at
-        // 1500 fps on a 60 Hz display — so the mode is pinned rather than
-        // taken. Fifo is the one every backend must support.
+        // Fifo, so a frame reaches the glass whole and every backend can
+        // present at all — `get_default_config` takes whatever the adapter
+        // lists first. It is not the clock, though: [`next_due`] is, because
+        // the vertical blank Fifo stands in for is the compositor's to
+        // invent, and the TV's nested gamescope invents a grid of about
+        // 72 Hz (#11).
         config.present_mode = wgpu::PresentMode::Fifo;
-        // Focused under the TV's nested gamescope, a presented buffer comes
-        // back one composite hop late (app → Xwayland → gamescope 4K →
-        // GNOME), and at the default latency of two the acquire blocks past
-        // the vblank: every other frame lands a slot late and the tempo sits
-        // at 40 instead of 60 (#11 — GPU and compositor were both measured
-        // idle-fast; the main thread spent the gap in DRM syncobj waits). A
-        // third frame in flight absorbs the chain's round trip; the extra
-        // 16.7 ms to the screen is invisible in an instrument whose knobs
-        // are the input.
+        // Focused under that same gamescope, a presented buffer comes back
+        // one composite hop late (app → Xwayland → gamescope 4K → GNOME),
+        // and at the default latency of two the acquire blocks for a whole
+        // slot: every other pass lands a slot late and the tempo sits at 40
+        // instead of 60 (GPU and compositor were both measured idle-fast;
+        // the main thread spent the gap in DRM syncobj waits). A third frame
+        // in flight absorbs the chain's round trip; the extra 16.7 ms to the
+        // screen is invisible in an instrument whose knobs are the input.
         config.desired_maximum_frame_latency = 3;
         let format = config.format;
         surface.configure(&gpu.device, &config);
@@ -293,7 +319,16 @@ impl Live {
         self.surface.configure(&gpu.device, &self.config);
     }
 
-    fn render(&mut self, gpu: &Gpu, params: &Params, sources: &mut [Source], overlay_shown: bool) {
+    /// Whether a pass ran. A surface with no texture to give is the one way
+    /// a redraw evolves nothing, and the caller counts passes rather than
+    /// attempts so that a stale surface reads as the rate it really is.
+    fn render(
+        &mut self,
+        gpu: &Gpu,
+        params: &Params,
+        sources: &mut [Source],
+        overlay_shown: bool,
+    ) -> bool {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -304,11 +339,11 @@ impl Live {
             // whole recovery.
             Cst::Outdated | Cst::Lost => {
                 self.surface.configure(&gpu.device, &self.config);
-                return;
+                return false;
             }
             other => {
                 log::warn!("dropped a frame: {other:?}");
-                return;
+                return false;
             }
         };
         let target = frame
@@ -332,6 +367,7 @@ impl Live {
             overlay_shown.then_some(&self.overlay),
         );
         gpu.queue.present(frame);
+        true
     }
 }
 
@@ -463,14 +499,16 @@ impl App {
         )
     }
 
-    /// One line a second on how the frame is going. The instrument is
-    /// deployed fullscreen on a display, so the log is the only place a
-    /// number can be read at all — and a rate that has left sixty is the
-    /// first thing to know when a graph is too much for the machine.
-    fn meter(&mut self) {
-        self.frames += 1;
+    /// One line a second on how the tempo is going, counting the passes that
+    /// ran rather than the redraws attempted. The instrument is deployed
+    /// fullscreen on a display, so the log is the only place a number can be
+    /// read at all — and a rate that has fallen under sixty is the first
+    /// thing to know, whether a graph is too much for the machine or a
+    /// display path is holding the piece back.
+    fn meter(&mut self, ran: bool) {
+        self.frames += u32::from(ran);
         let elapsed = self.metered.elapsed();
-        if elapsed < std::time::Duration::from_secs(1) {
+        if elapsed < Duration::from_secs(1) {
             return;
         }
         let fps = self.frames as f64 / elapsed.as_secs_f64();
@@ -563,6 +601,27 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    /// The tempo's own wake-up: past the first frame this is where every
+    /// redraw is asked for, so what decides when a pass happens is the
+    /// deadline — not the end of the last pass, and not the swapchain.
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if let StartCause::ResumeTimeReached { .. } = cause {
+            if let Some(live) = self.live.as_ref() {
+                live.window.request_redraw();
+            }
+        }
+    }
+
+    /// Waking early — a key, a fader, a resize — leaves the deadline where
+    /// it was; with no window there is no pass to be on time for, and a
+    /// deadline already gone by would spin the loop rather than wait in it.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(match self.live {
+            Some(_) => ControlFlow::WaitUntil(self.due),
+            None => ControlFlow::Wait,
+        });
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.live.is_some() {
             return;
@@ -624,19 +683,31 @@ impl ApplicationHandler for App {
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
+                // A redraw the windowing system asked for on its own — an
+                // X11 expose, a `WM_PAINT` — arrives whenever it likes, and
+                // a pass *is* the tempo, so drawing one early plays the piece
+                // fast. The frame it wanted goes out with the next
+                // deadline's, at most a beat away.
+                if Instant::now() < self.due {
+                    return;
+                }
                 // The automation is read here and nowhere else: the knobs the
                 // GPU is handed are the stored ones offset by whatever is
                 // driving them at this instant, and `self.params` — what the
                 // keys turn and what a preset slot saves — is untouched.
                 let now = self.started.elapsed().as_secs_f64();
-                live.render(
+                let ran = live.render(
                     &self.gpu,
                     &self.params.modulated(now),
                     &mut self.sources,
                     self.overlay_shown,
                 );
-                live.window.request_redraw();
-                self.meter();
+                // Dated from after the pass, not before it: a pass that
+                // overran has already spent the deadlines it went past, and
+                // dating the next one from before would run one of them at
+                // once.
+                self.due = next_due(self.due, Instant::now());
+                self.meter(ran);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
@@ -705,9 +776,55 @@ mod tests {
             overlay_shown: false,
             frames: 0,
             metered: Instant::now(),
+            due: Instant::now(),
             live: None,
             failed: None,
         })
+    }
+
+    #[test]
+    fn an_on_time_pass_owes_one_beat() {
+        let start = Instant::now();
+        assert_eq!(next_due(start, start), start + BEAT);
+        assert_eq!(next_due(start, start + BEAT / 2), start + BEAT);
+        // Landing exactly on the deadline is on time, not late: the beat
+        // after it is a whole beat away, not due at once.
+        assert_eq!(next_due(start, start + BEAT), start + BEAT * 2);
+    }
+
+    #[test]
+    fn a_stall_drops_the_passes_it_missed() {
+        let start = Instant::now();
+        // Three deadlines went by inside one pass. What follows is the next
+        // pass, not the three missed ones run back to back.
+        let stalled = start + BEAT * 3 + BEAT / 2;
+        assert_eq!(next_due(start, stalled), start + BEAT * 4);
+    }
+
+    #[test]
+    fn a_faster_grid_still_gets_sixty_passes_a_second() {
+        // The bug this pacing exists for (#11): a compositor grid faster
+        // than sixty — the TV's nested gamescope hands out about 72 Hz —
+        // must still leave sixty passes in a second, not one per slot.
+        let start = Instant::now();
+        let slot = Duration::from_nanos(1_000_000_000 / 72);
+        let second = Duration::from_secs(1);
+        let mut due = start;
+        let mut now = start;
+        let mut passes = 0u32;
+        loop {
+            // A pass waits for its deadline, then for the grid slot the
+            // swapchain will hand it — the two waits this loop lives with.
+            let waited = due.max(now);
+            let slots = (waited - start).as_nanos().div_ceil(slot.as_nanos()) as u32;
+            now = start + slot * slots;
+            if now - start >= second {
+                break;
+            }
+            passes += 1;
+            due = next_due(due, now);
+        }
+        assert_eq!(passes, 60);
     }
 
     #[test]
