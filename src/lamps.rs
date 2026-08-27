@@ -12,12 +12,10 @@
 //! performer's own assignments survive it.
 //!
 //! That switch is one switch for the whole panel, which is why this drives
-//! *every* button rather than the eight it came for. External mode takes the
-//! Mute and Record rows' lights along with the Solo row's, and the Record row
-//! overwrites a preset slot unguarded — so a button the map binds is lit
-//! while it is held, exactly as internal mode lit it, and the focused
-//! camera's is lit whether or not a finger is on it. What the instrument adds
-//! is one lamp; what it takes away is nothing.
+//! *every* button rather than the one it came for: external mode takes every
+//! button's light at once. So a button the map binds is lit here while it is
+//! held — exactly what internal mode did for it — and a button the map binds
+//! nothing to stays dark, which is now what it means.
 //!
 //! And the mode goes back to Internal on the way out, because a surface left
 //! in a mode only this program drives is a surface whose buttons have gone
@@ -26,7 +24,9 @@
 //! All of it runs on a thread of its own. The handshake waits on replies that
 //! may never come and a MIDI write blocks when the wire is full, and neither
 //! may happen inside a frame; the frame loop's whole part is to say which
-//! lamps it wants, down a channel.
+//! lamps it wants, down a channel. The one exception is the unplug, which
+//! joins the thread it is ending from inside the frame loop — bounded,
+//! because a wire that has gone fails a write rather than waiting on one.
 
 use std::fs::File;
 use std::io::Write;
@@ -40,7 +40,14 @@ use web_time::Instant;
 /// for a device that replies in milliseconds over USB, and it only ever costs
 /// a thread nobody is waiting on: the instrument plays through the whole of
 /// this, lit or not.
+#[cfg(not(test))]
 const PATIENCE: Duration = Duration::from_secs(1);
+
+/// Short enough that the tests can let it run out rather than reason about
+/// it: a surface that simply never answers is one of the two ways the
+/// handshake ends.
+#[cfg(test)]
+const PATIENCE: Duration = Duration::from_millis(50);
 
 /// Korg's system-exclusive manufacturer id, and the two bytes that name a
 /// nanoKONTROL2 inside a universal device-inquiry reply.
@@ -52,13 +59,6 @@ const NANO_KONTROL2: [u8; 2] = [0x13, 0x01];
 /// the only place that channel comes from. Every other message here is
 /// addressed to it, and so are the lamps.
 const INQUIRY: [u8; 6] = [0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7];
-
-/// The fixed head of every scene message, in both directions. Never sent as
-/// it stands: byte 2 carries the surface's channel, and the `0x40` here is
-/// channel 1's, which is why [`head`] is the only way to one.
-const SCENE: [u8; 13] = [
-    0xF0, KORG, 0x40, 0x00, 0x01, 0x13, 0x00, 0x7F, 0x7F, 0x02, 0x03, 0x05, 0x40,
-];
 
 /// A scene, decoded: 339 bytes, which ride the wire as 388.
 const SCENE_BYTES: usize = 339;
@@ -79,10 +79,16 @@ const CONTROL: u8 = 0xB0;
 const LIT: u8 = 127;
 const DARK: u8 = 0;
 
-/// Which lamps should be lit, one bit per control number. A `u128` because
-/// that is exactly the 128 numbers a control change can name, so a mask
-/// cannot address a lamp that could not exist.
+/// A set of lamps, one bit per control number. A `u128` because that is
+/// exactly the 128 numbers a control change can name, so a mask cannot
+/// address a lamp that could not exist.
 pub(crate) type Lamplight = u128;
+
+/// The one lamp of control number `cc`. Safe for every control a map can
+/// name: [`crate::midi::Map::validate`] refuses one past 127.
+pub(crate) fn lamp(cc: u8) -> Lamplight {
+    1 << cc
+}
 
 /// What the thread is told: the frame loop says which lamps it wants, the
 /// reader thread hands over the surface's system-exclusive frames, and
@@ -101,8 +107,7 @@ enum Lost {
     /// The instrument is going. The `Quit` that says so is taken off the
     /// channel where it is noticed and never put back, so a caller that
     /// carried on would park in `recv` waiting for one that has been and
-    /// gone — which is why this is a variant rather than a flag somebody has
-    /// to remember to test.
+    /// gone.
     Quit,
 }
 
@@ -134,7 +139,7 @@ impl Lamps {
     /// cannot reach a control that is not one.
     pub(crate) fn spawn(file: File, buttons: Lamplight) -> Result<Lamps, String> {
         let (tx, rx) = channel();
-        let surface = Surface {
+        let panel = Panel {
             file,
             rx,
             buttons,
@@ -143,7 +148,7 @@ impl Lamps {
         };
         let thread = std::thread::Builder::new()
             .name("midi-lamps".into())
-            .spawn(move || surface.run())
+            .spawn(move || panel.run())
             .map_err(|e| e.to_string())?;
         Ok(Lamps {
             tx,
@@ -181,20 +186,22 @@ impl Drop for Lamps {
 
 /// The thread's own state: the device, what it is being told, and what it has
 /// put on the panel.
-struct Surface {
+struct Panel {
     file: File,
     rx: Receiver<Msg>,
     buttons: Lamplight,
     /// The lamps the frame loop last asked for, which it may have asked for
     /// while the handshake was still running.
     want: Lamplight,
-    /// The lamps on the surface now, so the ones that are lit can be put out.
-    /// Nothing until the panel has been blanked once, after which it is
-    /// something observed rather than assumed.
+    /// What the panel was last *asked* for, which is the only account of it
+    /// there is — a surface cannot be asked what is lit. Set before the write
+    /// rather than after, because a `write_all` that failed part way through
+    /// may have lit some of them, and the pessimistic account is the one that
+    /// gets them turned off.
     lit: Lamplight,
 }
 
-impl Surface {
+impl Panel {
     /// The whole life of one surface's lights.
     fn run(mut self) {
         let channel = match self.identify() {
@@ -208,57 +215,62 @@ impl Surface {
                 return log::warn!("surface: {why}; its buttons light themselves, as before")
             }
         };
-        // A surface that will not take the mode is still played and still
-        // written to: the lamps do nothing in internal mode, which is the
-        // behaviour the instrument had before it lit anything.
-        let restore = match self.external(channel) {
-            Ok(restore) => {
-                log::info!(
-                    "surface: its lights are the instrument's — the focused camera's Solo \
-                     button, and every other button while it is held"
-                );
-                Some(restore)
-            }
-            Err(Lost::Quit) => return,
-            Err(Lost::Surface(why)) => {
-                log::warn!(
-                    "surface: {why}; its LED Mode is still Internal, so its buttons light \
-                     themselves and only their own presses. The instrument plays as before."
-                );
-                None
-            }
-        };
-        // Blank the panel once, so `lit` stops being an assumption. Whatever
-        // drove these lamps last — another program, or this one killed
-        // without putting them out — left them somewhere unknown, and a
-        // difference taken against a guess leaves a lamp burning that nothing
-        // will ever turn off.
-        let want = std::mem::take(&mut self.want);
-        self.lit = self.buttons;
-        if self.light(channel).is_err() {
-            return;
+        // Nothing above has written to the surface's scene, so nothing above
+        // needs undoing. Everything below might, and `restore` is filled the
+        // instant a flip reaches the wire rather than once it is confirmed —
+        // so however this ends, the way out runs, and the way out is the only
+        // thing that puts the panel back.
+        let mut restore = None;
+        if let Err(Lost::Surface(why)) = self.play(channel, &mut restore) {
+            log::warn!("surface: {why}");
         }
-        self.want = want;
+        // Dark, and then lighting itself again. The surface outlives the
+        // instrument: a lamp left burning claims a focus that is gone, and a
+        // panel left in external mode has no lights at all for whatever is
+        // played next. Both are attempted whatever the other did.
+        let _ = self.light(channel, 0);
+        if let Some(scene) = restore {
+            let _ = self.write(&dump(channel, &scene));
+        }
+    }
+
+    /// Take the lights, blank the panel, and keep it agreeing with the frame
+    /// loop until the instrument goes. Every way out of here leaves [`run`]
+    /// to put the surface back.
+    fn play(&mut self, channel: u8, restore: &mut Option<[u8; SCENE_BYTES]>) -> Result<(), Lost> {
+        match self.external(channel, restore) {
+            Ok(()) => log::info!(
+                "surface: its lights are the instrument's — the focused camera's Solo \
+                 button, and every other button while it is held"
+            ),
+            Err(Lost::Quit) => return Ok(()),
+            // A surface that will not take the mode is still played and still
+            // written to: the lamps do nothing in internal mode, which is the
+            // behaviour the instrument had before it lit anything.
+            Err(Lost::Surface(why)) => log::warn!(
+                "surface: {why}; its LED Mode is still Internal, so its buttons light \
+                 themselves and only their own presses. The instrument plays as before."
+            ),
+        }
+        // Blank the panel, so `lit` stops being a guess. Whatever drove these
+        // lamps last — another program, or this one killed without putting
+        // them out — left them somewhere unknown.
+        //
+        // To nothing, not to what is wanted: `lit` says everything is on, so
+        // a lamp that is wanted is a lamp already believed lit, and folding
+        // this into the first ordinary pass would leave it unwritten until
+        // the focus first moved.
+        self.lit = self.buttons;
+        self.light(channel, 0)?;
         loop {
-            if self.light(channel).is_err() {
-                return;
-            }
+            self.light(channel, self.want)?;
             match self.rx.recv() {
                 Ok(Msg::Show(want)) => self.want = want,
                 // The surface only talks about itself when asked, and nothing
                 // is asked after the handshake.
                 Ok(Msg::Sysex(_)) => {}
-                Ok(Msg::Quit) | Err(_) => break,
+                Ok(Msg::Quit) | Err(_) => return Ok(()),
             }
-        }
-        // Dark, and then lighting itself again. The surface outlives the
-        // instrument: a lamp left burning claims a focus that is gone, and a
-        // panel left in external mode has no lights at all for whatever is
-        // played next.
-        self.want = 0;
-        let _ = self.light(channel);
-        if let Some(scene) = restore {
-            let _ = self.write(&dump(channel, &scene));
         }
     }
 
@@ -271,11 +283,15 @@ impl Surface {
         self.reply(channel_of, "no answer to a device inquiry")
     }
 
-    /// Put the surface's lights under the host, and hand back the scene that
-    /// gives them back to it. Read-modify-write rather than a scene of this
-    /// program's own, because the rest of that scene is the performer's:
-    /// every control number, every curve.
-    fn external(&mut self, channel: u8) -> Result<[u8; SCENE_BYTES], Lost> {
+    /// Put the surface's lights under the host, filling `restore` with the
+    /// scene that gives them back to it. Read-modify-write rather than a
+    /// scene of this program's own, because the rest of that scene is the
+    /// performer's: every control number, every curve.
+    fn external(
+        &mut self,
+        channel: u8,
+        restore: &mut Option<[u8; SCENE_BYTES]>,
+    ) -> Result<(), Lost> {
         self.write(&request(channel))?;
         let mut scene = self.reply(
             |frame| scene_in(channel, frame),
@@ -297,25 +313,40 @@ impl Surface {
         // doing, or this program's own, killed before it could put the mode
         // back. The blanking pass is what clears the lamps such a killing
         // left burning.
-        if scene[LED_MODE] != EXTERNAL {
+        let taking = scene[LED_MODE] != EXTERNAL;
+        if taking {
             scene[LED_MODE] = EXTERNAL;
             self.write(&dump(channel, &scene))?;
-            // Deliberately not followed by a write request: that is the
-            // message that commits a scene to the surface's flash, and an
-            // instrument that rewrites the hardware every time it starts is
-            // one nobody can plug into anything else afterwards.
-            if !self.reply(|frame| ack(channel, frame), "no answer to the scene")? {
-                return Err(Lost::Surface("the surface refused the scene".into()));
-            }
         }
+        // Recorded here, before the acknowledgement. The surface applies a
+        // scene as it arrives, so by this line it has the mode whatever it
+        // says next — and an undo left unrecorded because the answer timed
+        // out, or because the instrument exited inside the second it was
+        // waited for, is a panel dark for everything else on the machine
+        // until somebody pulls the cable.
+        //
         // Internal, not whatever was found: found-external is exactly the
         // state a killed run leaves behind, so putting *that* back would keep
-        // a surface dark for everything else on the machine until someone
-        // pulled the cable. A performer who set external mode themselves set
-        // it in the surface's flash, which a replug restores and this never
-        // touches.
+        // the panel dark just the same. A performer who chose external mode
+        // chose it in the surface's flash, which a replug restores and this
+        // never touches.
         scene[LED_MODE] = INTERNAL;
-        Ok(scene)
+        *restore = Some(scene);
+        if !taking {
+            return Ok(());
+        }
+        // Deliberately not followed by a write request: that is the message
+        // that commits a scene to the surface's flash, and an instrument that
+        // rewrites the hardware every time it starts is one nobody can plug
+        // into anything else afterwards.
+        if !self.reply(|frame| ack(channel, frame), "no answer to the scene")? {
+            // A refusal is the one answer that says the surface did *not*
+            // take the scene — so there is nothing to undo, and a timeout is
+            // not this: that one keeps the undo.
+            *restore = None;
+            return Err(Lost::Surface("the surface refused the scene".into()));
+        }
+        Ok(())
     }
 
     /// Wait for a system-exclusive frame that `answer` recognises, taking
@@ -341,23 +372,21 @@ impl Surface {
         }
     }
 
-    /// Make the panel agree with `want`, if it does not already.
-    fn light(&mut self, channel: u8) -> Result<(), Lost> {
-        let change = (self.want ^ self.lit) & self.buttons;
+    /// Make the panel show exactly `want` and nothing else.
+    fn light(&mut self, channel: u8, want: Lamplight) -> Result<(), Lost> {
+        let want = want & self.buttons;
+        let change = want ^ self.lit;
         if change == 0 {
             return Ok(());
         }
         let mut bytes = Vec::with_capacity(3 * change.count_ones() as usize);
         let message = |cc, value| [CONTROL | channel, cc, value];
-        // Out before on: a lamp moving from one button to the next must not
-        // spend even one message with both alight, which is a panel claiming
-        // the knobs are in two places.
-        bytes.extend(controls(change & !self.want).flat_map(|cc| message(cc, DARK)));
-        bytes.extend(controls(change & self.want).flat_map(|cc| message(cc, LIT)));
-        // Before the write, not after: a `write_all` that failed part way
-        // through may have lit some of these, and the only safe account of a
-        // panel this can no longer reach is the one it asked for.
-        self.lit = self.want & self.buttons;
+        // Out before on, and both in one `write_all`: a lamp moving from one
+        // button to the next must not spend even one message with both
+        // alight, which is a panel claiming the knobs are in two places.
+        bytes.extend(controls(change & !want).flat_map(|cc| message(cc, DARK)));
+        bytes.extend(controls(change & want).flat_map(|cc| message(cc, LIT)));
+        self.lit = want;
         self.write(&bytes)
     }
 
@@ -389,12 +418,25 @@ fn channel_of(frame: &[u8]) -> Option<u8> {
         .then(|| frame[2] & 0x0F)
 }
 
-/// The head of a scene message addressed to the surface on `channel`. Byte
-/// 2's low nibble is where a Korg message carries it, in both directions.
+/// The head of a scene message addressed to the surface on `channel`, in
+/// either direction. Byte 2's low nibble is where a Korg message carries the
+/// channel; the tail `40` is the function, "here is a scene".
 fn head(channel: u8) -> [u8; 13] {
-    let mut head = SCENE;
-    head[2] = 0x40 | channel;
-    head
+    [
+        0xF0,
+        KORG,
+        0x40 | channel,
+        0x00,
+        0x01,
+        0x13,
+        0x00,
+        0x7F,
+        0x7F,
+        0x02,
+        0x03,
+        0x05,
+        0x40,
+    ]
 }
 
 /// "Send me the scene you are playing", to the surface on `channel`.
@@ -495,13 +537,9 @@ mod tests {
     use std::os::fd::OwnedFd;
     use std::os::unix::net::UnixStream;
 
-    /// The Solo row of a factory nanoKONTROL2 — the eight control numbers
-    /// these tests let the instrument light.
-    const ROW: Lamplight = 0xFF << 32;
-
-    fn lamp(cc: u8) -> Lamplight {
-        1 << cc
-    }
+    /// The eight control numbers these tests let the instrument light. Which
+    /// buttons those are is the map's business; nothing here knows.
+    const BUTTONS: Lamplight = 0xFF << 32;
 
     #[test]
     fn seven_bit_packing_is_korg_s_own() {
@@ -567,6 +605,14 @@ mod tests {
 
     fn dumped(channel: u8, led: u8) -> Vec<u8> {
         dump(channel, &scene_of(channel, led))
+    }
+
+    /// The surface naming itself, on `channel`.
+    fn inquiry_reply(channel: u8) -> Vec<u8> {
+        let mut reply = vec![0xF0, 0x7E, channel, 0x06, 0x02, KORG];
+        reply.extend(NANO_KONTROL2);
+        reply.extend([0x00, 0x00, 0, 0, 0, 0, 0xF7]);
+        reply
     }
 
     fn answered(channel: u8, func: u8) -> Vec<u8> {
@@ -636,7 +682,7 @@ mod tests {
             ours.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             Device {
                 wire: ours,
-                lamps: Some(Lamps::spawn(File::from(OwnedFd::from(theirs)), ROW).unwrap()),
+                lamps: Some(Lamps::spawn(File::from(OwnedFd::from(theirs)), BUTTONS).unwrap()),
             }
         }
 
@@ -649,13 +695,15 @@ mod tests {
             got
         }
 
-        /// Everything the instrument wrote before letting go — which it can
-        /// only be asked for after [`Device::unplug`], since that is what
-        /// closes the far end and ends the read.
-        fn rest(&mut self) -> Vec<u8> {
+        /// Let go, and assert that `tail` is the whole of what follows. Every
+        /// test ends here rather than on a `read`, so a write the instrument
+        /// had no business making cannot hide past the end of the last
+        /// assertion — a flash commit, a second scene, a stray lamp.
+        fn done(mut self, tail: &[u8]) {
+            self.lamps = None;
             let mut rest = Vec::new();
             self.wire.read_to_end(&mut rest).unwrap();
-            rest
+            assert_eq!(rest, tail, "wrote more than it should have");
         }
 
         fn say(&self, frame: Vec<u8>) {
@@ -666,10 +714,6 @@ mod tests {
             self.plugged().show(want);
         }
 
-        fn unplug(&mut self) {
-            self.lamps = None;
-        }
-
         fn plugged(&self) -> &Lamps {
             self.lamps.as_ref().expect("still plugged in")
         }
@@ -678,10 +722,7 @@ mod tests {
         /// mode — taking the flipped scene back when there was one to flip.
         fn handshake(&mut self, channel: u8, led: u8) {
             assert_eq!(self.read(INQUIRY.len()), INQUIRY);
-            let mut reply = vec![0xF0, 0x7E, channel, 0x06, 0x02, KORG];
-            reply.extend(NANO_KONTROL2);
-            reply.extend([0x00, 0x00, 0, 0, 0, 0, 0xF7]);
-            self.say(reply);
+            self.say(inquiry_reply(channel));
             assert_eq!(self.read(11), request(channel));
             self.say(dumped(channel, led));
             if led != EXTERNAL {
@@ -700,7 +741,7 @@ mod tests {
         /// The blanking pass every connect opens with: every button the map
         /// binds, put out, before any lamp is lit.
         fn blanked(&mut self, channel: u8) {
-            let want: Vec<u8> = controls(ROW)
+            let want: Vec<u8> = controls(BUTTONS)
                 .flat_map(|cc| [CONTROL | channel, cc, DARK])
                 .collect();
             assert_eq!(self.read(want.len()), want, "the panel was not blanked");
@@ -729,12 +770,7 @@ mod tests {
         device.blanked(0);
         device.show(lamp(32));
         assert_eq!(device.read(3), [CONTROL, 32, LIT]);
-        device.unplug();
-        assert_eq!(
-            device.rest(),
-            [vec![CONTROL, 32, DARK], dump(0, &scene_of(0, INTERNAL))].concat(),
-            "the lamp stayed lit, or the surface was left in a mode only this program drives"
-        );
+        device.done(&[vec![CONTROL, 32, DARK], dump(0, &scene_of(0, INTERNAL))].concat());
     }
 
     #[test]
@@ -749,11 +785,7 @@ mod tests {
         // But the mode still goes back to Internal on the way out. Found
         // external is exactly what a killed run leaves behind, and leaving it
         // there keeps the surface dark for everything else on the machine.
-        device.unplug();
-        assert_eq!(
-            device.rest(),
-            [vec![CONTROL, 32, DARK], dump(0, &scene_of(0, INTERNAL))].concat()
-        );
+        device.done(&[vec![CONTROL, 32, DARK], dump(0, &scene_of(0, INTERNAL))].concat());
     }
 
     #[test]
@@ -807,12 +839,34 @@ mod tests {
     fn a_lamp_no_button_of_the_map_answers_to_is_never_written() {
         // The mask the surface was opened with is the whole of what it may
         // write, so nothing can put a control change on a fader's number.
+        // One `show`, not two: two could be coalesced before the thread woke,
+        // and this would pass without ever having masked anything.
         let mut device = Device::new();
         device.handshake(0, EXTERNAL);
         device.blanked(0);
-        device.show(lamp(7) | lamp(90));
-        device.show(lamp(33));
+        device.show(lamp(7) | lamp(90) | lamp(33));
         assert_eq!(device.read(3), [CONTROL, 33, LIT]);
+        device.done(&[vec![CONTROL, 33, DARK], dump(0, &scene_of(0, INTERNAL))].concat());
+    }
+
+    #[test]
+    fn a_surface_that_stops_answering_is_left_in_the_mode_it_was_found_in() {
+        // The acknowledgement never comes. The surface has the scene by then
+        // — it applies one as it arrives — so the undo has to be recorded
+        // before the answer, not after it, or the panel stays dark for
+        // everything else on the machine until somebody pulls the cable.
+        let mut device = Device::new();
+        assert_eq!(device.read(INQUIRY.len()), INQUIRY);
+        device.say(inquiry_reply(0));
+        assert_eq!(device.read(11), request(0));
+        device.say(dumped(0, INTERNAL));
+        assert_eq!(device.read(402), dump(0, &scene_of(0, EXTERNAL)));
+        // Nothing said back. The handshake gives up, the lamps are written
+        // anyway, and the mode still goes home.
+        device.blanked(0);
+        device.show(lamp(32));
+        assert_eq!(device.read(3), [CONTROL, 32, LIT]);
+        device.done(&[vec![CONTROL, 32, DARK], dump(0, &scene_of(0, INTERNAL))].concat());
     }
 
     #[test]
@@ -834,10 +888,7 @@ mod tests {
         // that back would move a performer's assignments along with it.
         let mut device = Device::new();
         assert_eq!(device.read(INQUIRY.len()), INQUIRY);
-        let mut reply = vec![0xF0, 0x7E, 0x00, 0x06, 0x02, KORG];
-        reply.extend(NANO_KONTROL2);
-        reply.extend([0x00, 0x00, 0, 0, 0, 0, 0xF7]);
-        device.say(reply);
+        device.say(inquiry_reply(0));
         assert_eq!(device.read(11), request(0));
         // Answered on channel 1, but the scene says channel 4.
         device.say(dump(0, &scene_of(3, INTERNAL)));
@@ -846,8 +897,7 @@ mod tests {
         device.blanked(0);
         device.show(lamp(32));
         assert_eq!(device.read(3), [CONTROL, 32, LIT]);
-        device.unplug();
-        assert_eq!(device.rest(), [CONTROL, 32, DARK]);
+        device.done(&[CONTROL, 32, DARK]);
     }
 
     #[test]
@@ -861,10 +911,9 @@ mod tests {
         reply.extend([0x13, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0xF7]);
         device.say(reply);
         device.show(lamp(32));
-        device.unplug();
-        // Nothing at all after the inquiry — not the scene request, not a
+        // Nothing at all after the inquiry: not the scene request, not a
         // blanking pass, not a lamp.
-        assert!(device.rest().is_empty(), "wrote to a device it cannot know");
+        device.done(&[]);
     }
 
     #[test]
@@ -875,10 +924,7 @@ mod tests {
         // every redraw, from the first one.
         device.show(lamp(32));
         device.show(lamp(37));
-        let mut reply = vec![0xF0, 0x7E, 0x00, 0x06, 0x02, KORG];
-        reply.extend(NANO_KONTROL2);
-        reply.extend([0x00, 0x00, 0, 0, 0, 0, 0xF7]);
-        device.say(reply);
+        device.say(inquiry_reply(0));
         assert_eq!(device.read(11), request(0));
         device.say(dumped(0, EXTERNAL));
         // The panel is blanked even so, and the lamp that survives the
@@ -896,13 +942,13 @@ mod tests {
         assert_eq!(device.read(INQUIRY.len()), INQUIRY);
         device.show(lamp(32));
         let gave_up = Instant::now();
-        device.unplug();
         // Bounded, not merely finite: a wait that never ended would hang the
         // frame loop in `Lamps::drop` rather than fail this.
-        assert!(gave_up.elapsed() < PATIENCE * 5, "{:?}", gave_up.elapsed());
+        device.done(&[]);
         assert!(
-            device.rest().is_empty(),
-            "wrote a lamp to an unknown device"
+            gave_up.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            gave_up.elapsed()
         );
     }
 
@@ -914,10 +960,7 @@ mod tests {
         // so the lamps still go out on the wire and do nothing.
         let mut device = Device::new();
         assert_eq!(device.read(INQUIRY.len()), INQUIRY);
-        let mut reply = vec![0xF0, 0x7E, 0x00, 0x06, 0x02, KORG];
-        reply.extend(NANO_KONTROL2);
-        reply.extend([0x00, 0x00, 0, 0, 0, 0, 0xF7]);
-        device.say(reply);
+        device.say(inquiry_reply(0));
         assert_eq!(device.read(11), request(0));
         device.say(dumped(0, INTERNAL));
         assert_eq!(device.read(402).len(), 402);
@@ -926,7 +969,6 @@ mod tests {
         device.show(lamp(32));
         assert_eq!(device.read(3), [CONTROL, 32, LIT]);
         // And nothing is put back, because nothing was taken.
-        device.unplug();
-        assert_eq!(device.rest(), [CONTROL, 32, DARK]);
+        device.done(&[CONTROL, 32, DARK]);
     }
 }

@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
 use crate::keys::{action_for_label, labels, Action};
-use crate::lamps::{Lamplight, Lamps};
+use crate::lamps::{lamp, Lamplight, Lamps};
 use crate::params::{Focus, Knob, Limit, Params};
 
 /// Where ALSA puts its character devices.
@@ -602,12 +602,6 @@ pub struct Midi {
     complaint: Option<String>,
 }
 
-/// A control number as one bit of a lamp mask. Safe for every control a map
-/// can name: [`Map::validate`] refuses one past 127.
-fn bit(cc: u8) -> Lamplight {
-    1 << cc
-}
-
 struct Port {
     path: PathBuf,
     rx: Receiver<ControlChange>,
@@ -721,16 +715,21 @@ impl Midi {
     /// run deeper than the eight strips the surface has, and a lamp on the
     /// wrong button is worse than no lamp.
     pub fn show(&self, camera: usize) {
-        let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) else {
-            return;
-        };
-        let mut want = self.lamp.get(camera).copied().flatten().map_or(0, bit);
+        if let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) {
+            lamps.show(self.wanted(camera));
+        }
+    }
+
+    /// The panel [`Midi::show`] would ask for, apart from whether there is a
+    /// surface to ask.
+    fn wanted(&self, camera: usize) -> Lamplight {
+        let mut want = self.lamp.get(camera).copied().flatten().map_or(0, lamp);
         for (button, held) in self.map.button.iter().zip(&self.held) {
             if *held {
-                want |= bit(button.cc);
+                want |= lamp(button.cc);
             }
         }
-        lamps.show(want);
+        want
     }
 
     /// Let go of every fader's grip on its knob. Three times the knobs move
@@ -746,10 +745,15 @@ impl Midi {
         }
     }
 
+    /// Let go of the surface. Note what is *not* here: the buttons are not
+    /// released, because `poll` hands back the messages that were already in
+    /// hand and the caller is about to press them — a release here would be
+    /// undone by the same batch, leaving a button held by nothing, its lamp
+    /// lit and its next press swallowed. [`Midi::connect`] does it instead,
+    /// where nothing can arrive between the release and the first message.
     fn drop_port(&mut self) {
         self.port = None;
         self.release();
-        self.held.iter_mut().for_each(|held| *held = false);
         // A fresh cable is a fresh chance for whatever went wrong last time
         // to have been the old one.
         self.complaint = None;
@@ -770,13 +774,17 @@ impl Midi {
         };
         // Every control number a button of the map answers to, which is the
         // whole of what the surface may ever be told to light.
-        let buttons = self.map.button.iter().fold(0, |mask, b| mask | bit(b.cc));
+        let buttons = self.map.button.iter().fold(0, |mask, b| mask | lamp(b.cc));
         let mut last = None;
         for path in find(&self.snd, &cards, &self.map.device) {
             match open(&path, buttons) {
                 Ok(port) => {
                     log::info!("surface: {} on {}", self.map.device, port.path.display());
                     self.complaint = None;
+                    // Whatever was under a finger when the last cable came
+                    // out is not under one now — see [`Midi::drop_port`] for
+                    // why the release waits until here.
+                    self.held.iter_mut().for_each(|held| *held = false);
                     self.port = Some(port);
                     return;
                 }
@@ -1138,6 +1146,28 @@ mod tests {
         // A camera past the end of the select row has no lamp rather than
         // the nearest one: a graph may run deeper than the surface.
         assert_eq!(midi.lamp.get(7).copied().flatten(), None);
+    }
+
+    #[test]
+    fn the_panel_is_the_focused_camera_and_whatever_is_under_a_finger() {
+        // Taking the surface's LED mode takes every button's light, so a held
+        // button has to be lit here or it goes dark for good — and the focus
+        // lamp has to survive alongside it rather than instead of it.
+        let (mut midi, params) = surface();
+        assert_eq!(midi.wanted(2), crate::lamps::lamp(34));
+        // M3 goes down: recall slot 3, whose light nothing else would give
+        // back. Both lamps, not one.
+        assert_eq!(feed(&mut midi, &params, &cc(50, 127)), [Action::Recall(2)]);
+        assert_eq!(
+            midi.wanted(2),
+            crate::lamps::lamp(34) | crate::lamps::lamp(50)
+        );
+        // And out again when the finger comes off, which is a message that
+        // does nothing else at all.
+        assert_eq!(feed(&mut midi, &params, &cc(50, 0)), []);
+        assert_eq!(midi.wanted(2), crate::lamps::lamp(34));
+        // A camera the select row does not reach lights nothing of its own.
+        assert_eq!(midi.wanted(99), 0);
     }
 
     #[test]
