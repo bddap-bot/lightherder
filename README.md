@@ -255,7 +255,8 @@ Out of the box, with no configuration:
 | S 1–8 | focus camera 1–8 |
 | M 1–8 | recall preset slot 1–8 |
 | R 1–8 | store preset slot 1–8 |
-| marker set, prev, next | next monitor, blank the monitors, reset |
+| marker set, prev, next | next camera, next monitor, blank the monitors |
+| ■ stop | reset every knob |
 | ▶ | automation on the last control touched: off / sine / ramp |
 | ◀◀ ▶▶ | its rate, slower and faster |
 | ⏮ ⏭ | its swing, narrower and wider |
@@ -265,10 +266,13 @@ So the left hand works one monitor, the right hand one camera, and the top
 fader is the switcher crosspoint joining the two the hands are on. A strip's
 three buttons are the three things you do to what that strip stands for, in
 order of how much they commit: Solo points the knobs at camera n, Mute plays
-slot n back, Record writes over it. There is no next-camera button, because
-the Solo row reaches every camera the surface has a strip for; the keys keep
-`n` for a graph deeper than that. Nothing is bound to quit: a slipped finger
-during a performance must not be able to stop the instrument. Eight of the
+slot n back, Record writes over it. The markers move the focus the way `n` and
+`m` do, which is how a graph deeper than eight cameras is reached and the only
+way to change which monitor the faders are on. Nothing on the surface is
+guarded: it has no shift, so a single press on the Mute row walks over the
+live panel and one on the Record row walks over a slot. Nothing is bound to
+quit: a slipped finger during a performance must not be able to stop the
+instrument. Eight of the
 twenty-four knobs are not on the surface, which has sixteen controls and no
 more: the three per-channel gain offsets, which colour a rigid gain that is
 itself on a rotary; the bloom radius, which sizes a halo whose amount is; and
@@ -280,8 +284,8 @@ knob already is.** A fader sends where it is standing, so without that,
 plugging in mid-piece throws every knob to wherever its fader was left — with
 the headroom fader slamming a monitor to white. Sweep the fader and it picks
 its knob up on the way past, and from then on the fader is the knob. It lets
-go on an unplug and on a recall, which are the two ways the panel moves
-without a fader moving with it.
+go on an unplug, on a recall and on a change of focus, which are the three
+ways the panel moves without a fader moving with it.
 
 The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.
@@ -497,15 +501,19 @@ below assumes a US layout.
 
 The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (seed, colour and headroom); `n` and `m` walk the two focuses
-through the graph, and the log line names them. Routing and splitter weights
+through the graph and `num1`…`num8` pick a camera outright, and the log line
+names them. Those eight are keypad keys, so on a board with no keypad `n` is
+the only way to the cameras. Routing and splitter weights
 are config; the crosspoint that joins the two focused nodes is not — `/` and
 `\` sweep it, and it is fader 8 on the surface.
 
 `p` acts on the last knob turned rather than on a switch of its own, because
 twenty knobs would otherwise want twenty switches and the knob just swept
 is the one you mean; the log line names which. Shift is read by the slot keys
-and nothing else — recall is one press, store is the press you have to mean,
-since storing over a slot cannot be undone and recalling can.
+and nothing else — recall is one press, store is the press you have to mean.
+Both are irreversible, since a recall walks over a live panel nothing has
+stored; the modifier is there because a hand mid-piece reaches for a slot far
+more often than it writes one.
 
 The colour and character knobs start neutral, so the instrument out of the box
 is the loop described above and nothing else. Turn one against it: `s` held

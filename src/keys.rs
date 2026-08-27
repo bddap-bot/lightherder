@@ -16,12 +16,12 @@ pub enum Action {
     Nudge(Knob, f32),
     /// Move the camera knobs' focus to the next camera in the graph.
     NextCamera,
+    /// Move the monitor knobs' focus to the next monitor.
+    NextMonitor,
     /// Put the camera knobs' focus on one camera outright, by its place in
     /// the graph. A select rather than a step: a hand that means "that one"
     /// should not have to walk past the ones it does not mean.
-    Camera(usize),
-    /// Move the monitor knobs' focus to the next monitor.
-    NextMonitor,
+    FocusCamera(usize),
     /// Switch the automation on the last knob turned through its states: off,
     /// a sine, a ramp, off.
     Motion,
@@ -57,13 +57,17 @@ pub(crate) const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
     (KeyCode::F8, "f8"),
 ];
 
-/// The cameras a key reaches outright. The numeric keypad because it is the
-/// last block of eight the board has left, because it is already numbered
-/// the way the cameras are, and because a slip onto one only moves the
-/// focus — the cheapest kind of slip there is, since no picture changes.
-/// Past the eighth camera `n` still walks, so a graph deeper than the keypad
-/// is not shut out.
-pub(crate) const CAMERA_KEYS: [(KeyCode, &str); 8] = [
+/// How many cameras have a key of their own. Eight because that is the
+/// keypad, and because it is a control surface's channel strips — a graph
+/// may hold more cameras than either, and `n` is what walks to those.
+pub(crate) const KEYED_CAMERAS: usize = 8;
+
+/// The cameras a key reaches outright. The numeric keypad because it is
+/// already numbered the way the cameras are, because it is the last block of
+/// eight the board has left, and because these are physical key codes — so a
+/// board with NumLock off still sends them. A slip onto one moves the focus
+/// and nothing else on the glass.
+pub(crate) const CAMERA_KEYS: [(KeyCode, &str); KEYED_CAMERAS] = [
     (KeyCode::Numpad1, "num1"),
     (KeyCode::Numpad2, "num2"),
     (KeyCode::Numpad3, "num3"),
@@ -275,8 +279,11 @@ const fn axis(
 }
 
 /// `shift` is read by the slot keys and nothing else: recall is one press
-/// and store is the press you have to mean, because storing over a slot
-/// during a performance cannot be undone and recalling can.
+/// and store is the press you have to mean. Both are irreversible — a recall
+/// walks over a live panel nothing has stored — but a hand mid-piece reaches
+/// for a slot far more often than it writes one, and the modifier is the
+/// only thing a keyboard has to tell the two apart. A control surface has no
+/// modifier at all, which is why its rows lean on position instead.
 pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
     if let Some(slot) = SLOT_KEYS.iter().position(|(bound, _)| *bound == key) {
         return Some(if shift {
@@ -286,7 +293,7 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
         });
     }
     if let Some(camera) = CAMERA_KEYS.iter().position(|(bound, _)| *bound == key) {
-        return Some(Action::Camera(camera));
+        return Some(Action::FocusCamera(camera));
     }
     for axis in AXES {
         if axis.down.0 == key {
@@ -357,7 +364,7 @@ pub fn action_for_label(label: &str) -> Option<Action> {
     Some(match binding(label)? {
         Binding::Slot { slot, shift: true } => Action::Store(slot),
         Binding::Slot { slot, shift: false } => Action::Recall(slot),
-        Binding::Camera(camera) => Action::Camera(camera),
+        Binding::Camera(camera) => Action::FocusCamera(camera),
         Binding::Axis { axis, up } => {
             let step = axis.knob.increment();
             Action::Nudge(axis.knob, if up { step } else { -step })
@@ -651,21 +658,20 @@ mod tests {
         // what the instrument prints; a label on one and not the other is a
         // binding a performer cannot discover or one the help lies about.
         let labels: Vec<&str> = labels().collect();
-        let cameras = CAMERA_KEYS.len();
         assert_eq!(
             labels.len(),
-            AXES.len() * 2 + COMMANDS.len() + cameras + SLOTS
+            AXES.len() * 2 + COMMANDS.len() + KEYED_CAMERAS + SLOTS
         );
         let help = help();
-        // The camera keys and the slots each print as one range line, "f1 /
-        // f8", so the six in the middle of either are named by the ends
-        // rather than each in turn.
-        let named: Vec<&str> = labels[..labels.len() - cameras - SLOTS]
+        // The camera keys and the slots each print as one range line, its
+        // ends only, so the six in the middle of either are named by those
+        // ends rather than each in turn.
+        let named: Vec<&str> = labels[..labels.len() - KEYED_CAMERAS - SLOTS]
             .iter()
             .copied()
             .chain([
                 CAMERA_KEYS[0].1,
-                CAMERA_KEYS[cameras - 1].1,
+                CAMERA_KEYS[KEYED_CAMERAS - 1].1,
                 SLOT_KEYS[0].1,
                 SLOT_KEYS[SLOTS - 1].1,
             ])
@@ -696,16 +702,13 @@ mod tests {
     }
 
     #[test]
-    fn a_camera_key_selects_that_camera_and_nothing_steps() {
-        // Numbered from one on the key and from zero in the graph, which is
-        // the one place the two conventions meet.
-        for (camera, (key, label)) in CAMERA_KEYS.iter().enumerate() {
-            assert_eq!(action_for(*key, false), Some(Action::Camera(camera)));
-            assert_eq!(action_for_label(label), Some(Action::Camera(camera)));
+    fn a_camera_key_selects_the_camera_it_is_numbered_for() {
+        // Numbered from one on the key and from zero in the graph.
+        for (camera, (key, _)) in CAMERA_KEYS.iter().enumerate() {
+            assert_eq!(action_for(*key, false), Some(Action::FocusCamera(camera)));
         }
-        assert_eq!(describes("num3").as_deref(), Some("focus camera 3"));
-        assert_eq!(short("num3").as_deref(), Some("cam 3"));
-        // The step is still there for a graph deeper than the keypad.
-        assert_eq!(action_for(KeyCode::KeyN, false), Some(Action::NextCamera));
+        let third = CAMERA_KEYS[2].1;
+        assert_eq!(describes(third).as_deref(), Some("focus camera 3"));
+        assert_eq!(short(third).as_deref(), Some("cam 3"));
     }
 }

@@ -375,6 +375,19 @@ impl App {
     /// fader that has caught a knob is holding *that* node's knob, and the
     /// new node's is somewhere else entirely — without letting go, the next
     /// rotary touched throws it to wherever the fader is standing.
+    /// Point the camera knobs at one camera by its place in the graph. A
+    /// select row is wider than most graphs, so a press past the end does
+    /// nothing: sliding to the last camera instead would make every button
+    /// past the end the same button.
+    fn focus_camera(&mut self, camera: usize) {
+        if camera < self.params.cameras.len() {
+            self.refocus(Focus {
+                camera,
+                ..self.focus
+            });
+        }
+    }
+
     fn refocus(&mut self, focus: Focus) {
         self.focus = focus;
         self.midi.release();
@@ -442,18 +455,7 @@ impl App {
                     ..self.focus
                 });
             }
-            Action::Camera(camera) => {
-                // A select row is wider than most graphs, so most of it
-                // points at nothing. Doing nothing is the honest answer:
-                // clamping to the last camera would make four buttons the
-                // same button on a four-camera rig.
-                if camera < self.params.cameras.len() {
-                    self.refocus(Focus {
-                        camera,
-                        ..self.focus
-                    });
-                }
-            }
+            Action::FocusCamera(camera) => self.focus_camera(camera),
             Action::NextMonitor => {
                 let monitor = (self.focus.monitor + 1) % self.params.monitors.len();
                 self.refocus(Focus {
@@ -674,6 +676,25 @@ mod tests {
         assert_eq!(app.focus, Focus::default());
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_camera_the_graph_does_not_have_is_a_button_that_does_nothing() {
+        // The select row is eight wide and every shipped graph is shallower,
+        // so most of a set is played with some of it pointing past the end.
+        // No slot is written, so nothing makes the directory and there is
+        // nothing to take away afterwards.
+        let Some(mut app) = playing(config::crossed(), scratch("select-past-the-end")) else {
+            return;
+        };
+        assert_eq!(app.params.cameras.len(), 2);
+
+        app.focus_camera(1);
+        assert_eq!(app.focus.camera, 1);
+        // Past the end the focus stays where the hand left it, rather than
+        // sliding to the last camera — which would make six buttons one.
+        app.focus_camera(7);
+        assert_eq!(app.focus.camera, 1);
     }
 
     #[test]
