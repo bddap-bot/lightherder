@@ -543,7 +543,7 @@ fn position_of(knob: Knob, value: f32) -> f32 {
 ///
 /// A fader sends where it is, so the first one touched after the surface is
 /// plugged in would otherwise throw its knob to wherever the fader happens
-/// to be standing — twenty knobs' worth of that on a hot-plug, mid-piece,
+/// to be standing — a whole panel's worth of that on a hot-plug, mid-piece,
 /// with the headroom fader slamming a monitor to white. So a fader does not
 /// take its knob over until it has passed through where the knob already is,
 /// and then keeps it until [`Midi::release`] lets go, which names the times

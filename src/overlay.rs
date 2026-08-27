@@ -38,10 +38,10 @@ const GLYPH: i32 = 8;
 /// One channel strip's width: room for the widest single word a knob's name
 /// carries ("saturation", ten glyphs) with a texel of air either side.
 const STRIP_W: i32 = 84;
-/// A transport button and the pitch between them, drawn to the proportion
-/// the device gives them beside the strips. Not sized to a caption: a map
-/// may bind any key to any button, and the widest captions in the vocabulary
-/// are the knob names, which are what [`STRIP_W`] is for.
+/// A transport button and the pitch between them. Seven glyphs and a texel
+/// each side — a ceiling, not a fit: a map may bind any key to any button,
+/// and the axes' captions carry a knob's whole name ("loop gain, green -"),
+/// which is what the wider [`STRIP_W`] is for. A caption past seven clips.
 const BUTTON_W: i32 = 60;
 const BUTTON_H: i32 = 16;
 const BUTTON_PITCH: i32 = 64;

@@ -740,7 +740,7 @@ impl Params {
         let mon = &self.monitors[focus.monitor];
         format!(
             // A line per side of the graph rather than one for the lot: at
-            // twenty knobs a single line wraps in a terminal, and
+            // two dozen knobs a single line wraps in a terminal, and
             // consecutive presses stop lining up — which was the only thing
             // a single line was buying.
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
@@ -1188,7 +1188,7 @@ mod tests {
 
     #[test]
     fn the_reader_and_the_writer_of_a_knob_are_the_same_field() {
-        // `knob` matches the twenty fields over again, next to the match
+        // `knob` matches the two dozen fields over again, next to the match
         // `knob_mut` makes. Nothing but this stops one of them being pointed
         // at the wrong number: a nudge that the reader does not see, or sees
         // on another knob, is the whole failure.
