@@ -401,6 +401,13 @@ on `LD_LIBRARY_PATH`, which wgpu and winit open at run time, and carries the
 enough for wgpu 30 and winit 0.30 and a working Vulkan/Metal/DX12 driver will
 do, plus ffmpeg if you want those inputs.
 
+The adapter is opened before the window exists — which is what lets a browser
+start the same instrument without blocking, and means nothing has checked that
+the fastest card can reach the display. On a hybrid machine whose screen hangs
+off the integrated GPU it cannot, and the instrument says which card and stops
+rather than leaving a black window open: `WGPU_POWER_PREF=low` takes the
+integrated adapter instead.
+
 ## Deploy
 
 **The frame rate is a tempo, not a smoothness setting.** The loop evolves one

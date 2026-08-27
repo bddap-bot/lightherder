@@ -14,9 +14,11 @@ use wasm_bindgen::prelude::wasm_bindgen;
 /// the canvas is the whole window and there is nothing to lay out here.
 const CANVAS_ID: &str = "lightherder";
 
-/// The canvas winit is handed. Panics if the page has none: the page and this
-/// module ship together, so a missing canvas is a broken build rather than
-/// anything a visitor can do.
+/// The canvas winit is handed. The page and this module ship together, so a
+/// missing one is a broken build rather than anything a visitor can do — but
+/// it is a refusal rather than a panic all the same, because this is looked
+/// up from inside the run loop, where [`complain`] is the only thing a
+/// visitor would see.
 ///
 /// Nothing here sizes it. How many pixels the canvas holds is winit's answer
 /// and then wgpu's — winit measures the element with a `ResizeObserver` and
@@ -24,14 +26,14 @@ const CANVAS_ID: &str = "lightherder";
 /// config on every `configure`. So the first frame is one pixel across and
 /// the second is the viewport; anything set here is overwritten before it can
 /// be read.
-pub(crate) fn canvas() -> web_sys::HtmlCanvasElement {
+pub(crate) fn canvas() -> Result<web_sys::HtmlCanvasElement, String> {
     use wasm_bindgen::JsCast;
     web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.get_element_by_id(CANVAS_ID))
-        .expect("the page has no #lightherder canvas")
+        .ok_or_else(|| format!("the page has no #{CANVAS_ID} canvas"))?
         .dyn_into()
-        .expect("#lightherder is not a canvas")
+        .map_err(|_| format!("#{CANVAS_ID} is not a canvas"))
 }
 
 /// `?preset=…` if the page was asked for one, which `config::load` then
@@ -57,8 +59,9 @@ fn fill(id: &str, text: &str) {
 
 /// Say why nothing is going to happen, on the page rather than only in the
 /// console — a visitor whose browser has no WebGPU sees a black rectangle
-/// otherwise, and has no way to tell that from a bug.
-fn complain(why: &str) {
+/// otherwise, and has no way to tell that from a bug. Reached from inside the
+/// run loop as well, where the alternative is the console and nothing else.
+pub(crate) fn complain(why: &str) {
     log::error!("{why}");
     fill("why", why);
 }

@@ -82,22 +82,28 @@ pub struct App {
     frames: u32,
     metered: Instant,
     live: Option<Live>,
+    /// Where [`App::give_up`] parks a refusal, since nothing may return out
+    /// of `resumed`. Not on the web, which has no `start` left waiting.
+    #[cfg(not(target_arch = "wasm32"))]
+    failed: Option<String>,
 }
 
 /// The window the instrument opens in. On the web it is the page's own
 /// canvas — the one the stylesheet has already stretched over the viewport,
-/// so "fullscreen" there is the page rather than anything winit does.
+/// so "fullscreen" there is the page rather than anything winit does. That
+/// canvas has to be found, which is the whole of why this is fallible; a
+/// terminal's window is described without asking anything of anyone.
 #[cfg(target_arch = "wasm32")]
-fn attributes(_fullscreen: bool) -> winit::window::WindowAttributes {
+fn attributes(_fullscreen: bool) -> Result<winit::window::WindowAttributes, String> {
     use winit::platform::web::WindowAttributesExtWebSys;
-    Window::default_attributes().with_canvas(Some(crate::web::canvas()))
+    Ok(Window::default_attributes().with_canvas(Some(crate::web::canvas()?)))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn attributes(fullscreen: bool) -> winit::window::WindowAttributes {
-    Window::default_attributes()
+fn attributes(fullscreen: bool) -> Result<winit::window::WindowAttributes, String> {
+    Ok(Window::default_attributes()
         .with_title("lightherder")
-        .with_fullscreen(borderless(fullscreen))
+        .with_fullscreen(borderless(fullscreen)))
 }
 
 /// Hand the run loop over. Native gives it the thread, which it keeps until
@@ -111,7 +117,14 @@ fn start(event_loop: EventLoop<()>, app: App) -> Result<(), Box<dyn std::error::
 
 #[cfg(not(target_arch = "wasm32"))]
 fn start(event_loop: EventLoop<()>, mut app: App) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(event_loop.run_app(&mut app)?)
+    let ran = event_loop.run_app(&mut app);
+    // A window that never opened is a failed run, not a short one — and its
+    // reason comes first: a loop already asked to exit can fail on the way
+    // out with something that says less than why it was asked.
+    match app.failed {
+        Some(why) => Err(why.into()),
+        None => Ok(ran?),
+    }
 }
 
 /// `params` is the loaded graph, already validated by `config::load`; `cli`
@@ -173,11 +186,18 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             frames: 0,
             metered: Instant::now(),
             live: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            failed: None,
         },
     )
 }
 
 impl Live {
+    /// Fallible rather than panicking, because a panic is the wrong shape in
+    /// both places this runs: a backtrace where the performer was owed the
+    /// one line every other refusal gets, and on the web a console message
+    /// no visitor will read, behind a window that has already opened. What
+    /// comes back instead goes to [`App::give_up`].
     fn new(
         event_loop: &ActiveEventLoop,
         gpu: &Gpu,
@@ -185,22 +205,35 @@ impl Live {
         map: &Map,
         resolution: (u32, u32),
         fullscreen: bool,
-    ) -> Live {
+    ) -> Result<Live, String> {
         let window = Arc::new(
             event_loop
-                .create_window(attributes(fullscreen))
-                .expect("create window"),
+                .create_window(attributes(fullscreen)?)
+                .map_err(|e| format!("no window to draw in: {e}"))?,
         );
         window.set_cursor_visible(!fullscreen);
 
+        // On the web this is `canvas.getContext("webgpu")`, which a browser
+        // that answered `navigator.gpu` and handed over an adapter can still
+        // refuse — the realistic way the instrument fails in a tab.
         let surface = gpu
             .instance
             .create_surface(window.clone())
-            .expect("create surface");
+            .map_err(|e| format!("nothing can be drawn on this window: {e}"))?;
         let size = window.inner_size();
+        // `None` means the adapter cannot present here — which is a thing
+        // that can happen at all because of how it was chosen, and [`Gpu::open`]
+        // says why. A hybrid machine whose display hangs off the integrated
+        // GPU is the one that meets it.
         let mut config = surface
             .get_default_config(&gpu.adapter, size.width.max(1), size.height.max(1))
-            .expect("adapter cannot draw to this surface");
+            .ok_or_else(|| {
+                format!(
+                    "{} cannot draw to this display — set WGPU_POWER_PREF=low \
+                     to open the integrated adapter instead",
+                    gpu.adapter.get_info().name,
+                )
+            })?;
         // The vertical blank is this instrument's clock, and not for smoothness:
         // the loop evolves one pass per frame, so the frame rate is a tempo. A
         // camera that pulls back 0.6% and turns 0.05 rad per pass draws its
@@ -240,14 +273,14 @@ impl Live {
         let present = Present::new(&gpu.device, &feedback, format);
         let overlay = Overlay::new(&gpu.device, &gpu.queue, format, map);
 
-        Live {
+        Ok(Live {
             window,
             surface,
             config,
             feedback,
             present,
             overlay,
-        }
+        })
     }
 
     fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
@@ -303,6 +336,22 @@ impl Live {
 }
 
 impl App {
+    /// Refuse, from inside the run loop, and stop it — there is nothing to
+    /// draw. Where the reason goes is the one thing the two hosts do not
+    /// share: the terminal's `start` is still on the stack waiting to return
+    /// it, and the browser's returned the moment it was handed the loop, so
+    /// there the page is written directly — the same place every refusal
+    /// before the loop is said, see [`crate::web::complain`].
+    fn give_up(&mut self, event_loop: &ActiveEventLoop, why: String) {
+        #[cfg(target_arch = "wasm32")]
+        crate::web::complain(&why);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.failed = Some(why);
+        }
+        event_loop.exit();
+    }
+
     /// Take `params` as the live graph, rebuilding whatever no longer serves
     /// it: the inputs are reopened when they changed, and the bank and its
     /// presenter are rebuilt when the layer counts moved — which is also when
@@ -518,14 +567,17 @@ impl ApplicationHandler for App {
         if self.live.is_some() {
             return;
         }
-        let live = Live::new(
+        let live = match Live::new(
             event_loop,
             &self.gpu,
             &self.params,
             self.midi.map(),
             self.resolution,
             self.fullscreen,
-        );
+        ) {
+            Ok(live) => live,
+            Err(why) => return self.give_up(event_loop, why),
+        };
         log::info!(
             "{} monitors of {}x{}, {} cameras, {} inputs",
             self.params.monitors.len(),
@@ -654,6 +706,7 @@ mod tests {
             frames: 0,
             metered: Instant::now(),
             live: None,
+            failed: None,
         })
     }
 

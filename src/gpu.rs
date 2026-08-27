@@ -23,9 +23,11 @@ impl Gpu {
     ///
     /// No `compatible_surface`: the adapter is chosen before the window
     /// exists, which is what lets the browser — where nothing may block —
-    /// open the GPU and then hand a ready run loop to the page. A machine
-    /// whose high-performance adapter cannot reach the display it opens on
-    /// would notice at `get_default_config`, and says so there.
+    /// open the GPU and then hand a ready run loop to the page. Nothing has
+    /// ruled out an adapter that cannot reach the display, then: a machine
+    /// where the fastest card is the wrong one notices at
+    /// `get_default_config`, and the refusal there names `WGPU_POWER_PREF`
+    /// — which is why it is read here.
     pub async fn open(
         display: Option<winit::event_loop::OwnedDisplayHandle>,
         label: &str,
@@ -35,9 +37,25 @@ impl Gpu {
             display: display.map(|handle| Box::new(handle) as _),
             ..wgpu::InstanceDescriptor::new_without_display_handle_from_env()
         });
+        // Asked twice on purpose. `var_os` answers only whether someone set
+        // it — which `from_env`, whose `None` is both "unset" and "unknown
+        // spelling", cannot be asked — and a value it does not recognise is
+        // refused rather than ignored: whoever sets this was sent here by a
+        // message naming it, and a typo that quietly reselected the fastest
+        // card would answer them with that same message again. The spellings
+        // themselves are still read in exactly one place.
+        let power_preference = match std::env::var_os("WGPU_POWER_PREF") {
+            None => wgpu::PowerPreference::HighPerformance,
+            Some(asked) => wgpu::PowerPreference::from_env().ok_or_else(|| {
+                format!(
+                    "WGPU_POWER_PREF={:?} is not low, high or none",
+                    asked.to_string_lossy(),
+                )
+            })?,
+        };
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference,
                 ..Default::default()
             })
             .await
