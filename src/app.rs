@@ -322,7 +322,15 @@ impl App {
     /// in. Two callers, one of which used to forget.
     fn adopt(&mut self, params: Params) -> Result<(), String> {
         crate::feedback::bank_fits(&params, self.resolution)?;
-        let sources = (params.inputs != self.params.inputs)
+        // The layer counts are baked into the bank's textures, so a graph
+        // that moved either one gets a new bank below.
+        let rebank = params.monitors.len() != self.params.monitors.len()
+            || params.inputs.len() != self.params.inputs.len();
+        // Reopened when the inputs changed — and when the bank is being
+        // replaced, whether they changed or not: a new bank is blank, and a
+        // still pattern hands its frame over exactly once, so a source kept
+        // across the swap would leave its layer black for the rest of the run.
+        let sources = (rebank || params.inputs != self.params.inputs)
             .then(|| {
                 params
                     .inputs
@@ -334,13 +342,10 @@ impl App {
         if let Some(sources) = sources {
             self.sources = sources;
         }
-        // The layer counts are baked into the bank's textures, so a graph
-        // that changed either gets a new bank — blanked, as any bank is at
-        // creation, which is what a rig with different monitors means anyway.
+        // Blanked, as any bank is at creation, which is what a rig with
+        // different monitors means anyway.
         if let Some(live) = self.live.as_mut() {
-            if params.monitors.len() != self.params.monitors.len()
-                || params.inputs.len() != self.params.inputs.len()
-            {
+            if rebank {
                 let (width, height) = self.resolution;
                 live.feedback = Feedback::new(&self.gpu.device, width, height, &params);
                 live.present = Present::new(&self.gpu.device, &live.feedback, live.config.format);
@@ -660,6 +665,14 @@ mod tests {
         let stored = config::external();
         crate::slots::store(&dir, 0, &stored).unwrap();
         crate::slots::store(&dir, 1, &config::single()).unwrap();
+        // The same graph with a second monitor, for the sideways recall below.
+        let mut wider = stored.clone();
+        wider.monitors.push(wider.monitors[0].clone());
+        wider.routing = vec![vec![1.0, 1.0]; 2];
+        for camera in &mut wider.cameras {
+            camera.look.push(0.0);
+        }
+        crate::slots::store(&dir, 2, &wider).unwrap();
         let Some(mut app) = playing(config::single(), dir.clone()) else {
             return;
         };
@@ -668,6 +681,20 @@ mod tests {
         app.recall(0);
         assert_eq!(app.params, stored);
         assert_eq!(app.sources.len(), stored.inputs.len());
+
+        // Sideways, to the same rig with a second monitor: the inputs did not
+        // change but the bank is rebuilt, and a new bank is blank. A still
+        // pattern hands its frame over exactly once, so a source carried
+        // across that swap would leave its layer black for the rest of the
+        // run — the reopen has to follow the bank, not just the inputs.
+        assert!(app.sources[0].frame().is_some(), "nothing to upload");
+        assert!(app.sources[0].frame().is_none(), "uploaded twice");
+        app.recall(2);
+        assert_eq!(app.params.inputs, stored.inputs, "the same bars");
+        assert!(
+            app.sources[0].frame().is_some(),
+            "the rebuilt bank never got the bars"
+        );
 
         // And back down: the focus walked onto the second camera, which the
         // recalled graph does not have, so the recall has to land it inside.

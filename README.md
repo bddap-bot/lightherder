@@ -120,7 +120,7 @@ inputs = [
   { file = "clip.mp4" },                               # looped, at its own rate
   { capture = { format = "v4l2", device = "/dev/video0" } },
 ]
-cameras = [{ look = [1.0], look_inputs = [0.0, 0.0, 0.0] }]
+cameras = [{ look = [1.0], look_inputs = [0.0, 0.5, 0.0] }]   # this one also sees the clip
 ```
 
 A file and a capture device are one implementation — an `ffmpeg` reading
@@ -389,8 +389,8 @@ monitors = [{ seed_brightness = 0.1 }]
 routing = [[0.98]]
 ```
 
-`look` is the camera's beam splitter — a weight per source, the monitors
-first and then any `inputs`. `routing[m][c]` is how much of camera `c` monitor
+`look` is the camera's beam splitter — a weight per monitor, and `look_inputs`
+the same over any `inputs`. `routing[m][c]` is how much of camera `c` monitor
 `m` shows, and anything omitted — framing, gain, colour — is neutral.
 
 The `shell.nix` pins nixpkgs, puts the Vulkan loader and windowing libraries

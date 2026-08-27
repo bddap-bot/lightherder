@@ -1857,9 +1857,8 @@ fn quartered_frame(size: (u32, u32), quarters: [[u8; 3]; 4]) -> Vec<u8> {
 fn one_camera_on_one_input() -> Params {
     Params {
         cameras: vec![Camera {
-            look: vec![0.0],
             look_inputs: vec![1.0],
-            ..plain_camera(Vec::new())
+            ..plain_camera(vec![0.0])
         }],
         monitors: vec![silent_monitor()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
@@ -1921,7 +1920,6 @@ fn each_input_lands_on_its_own_layer() {
     // layer monitors + i has four distinct answers to get wrong instead of
     // the one a single monitor and a single input collapse it to.
     let camera = |on: usize| Camera {
-        look: vec![0.0; 2],
         look_inputs: one_hot(2, on),
         ..plain_camera(vec![0.0; 2])
     };

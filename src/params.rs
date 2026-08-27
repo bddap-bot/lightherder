@@ -242,11 +242,11 @@ pub struct Camera {
     /// monitor; two non-zero entries are a camera looking through
     /// beam-splitter glass at a pair.
     pub look: Vec<f32>,
-    /// The same splitter, over the external inputs. A second list rather than
-    /// more entries on the first, because the two are counted separately:
-    /// with one list, adding a monitor to a graph would silently renumber
-    /// every camera's inputs, and a file that used to aim at an input would
-    /// validate unchanged while aiming at a monitor.
+    /// The same splitter, over the external inputs. Counted against the
+    /// inputs and not concatenated onto `look`, so the two index spaces stay
+    /// independent: adding a monitor to a graph cannot renumber what a camera
+    /// is aimed at, because a list that no longer matches its own kind is a
+    /// refusal rather than a shift.
     ///
     /// Defaulted, since most graphs have no inputs at all; a graph that has
     /// them and leaves this short is refused by `config::validate`.

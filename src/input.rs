@@ -1,7 +1,9 @@
 //! What the graph looks at besides its own monitors.
 //!
 //! A monitor and an external input are the same kind of thing to a camera: a
-//! layer of the source bank, addressed by [`crate::params::Camera::look`].
+//! layer of the source bank, addressed by a camera's splitter — the
+//! monitors by [`crate::params::Camera::look`], the inputs by
+//! [`crate::params::Camera::look_inputs`].
 //! That is the whole of this stage's model — an input is a source the
 //! cameras can be aimed at, so everything the switcher and the splitters
 //! already do to monitors works on it unchanged, and nothing new appears in
@@ -19,7 +21,7 @@
 
 use std::fmt;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::time::Duration;
@@ -80,10 +82,12 @@ pub struct Source {
 enum Frames {
     /// Drawn once and handed over once.
     Still {
+        /// Kept for the run rather than freed once uploaded, since a borrow
+        /// of them is what was handed over — one frame of RGBA8 per still
+        /// input, which is a quarter of what its one bank layer costs.
         pixels: Vec<u8>,
-        /// Whether they have been. A still layer already on the GPU needs no
-        /// second upload, and the pixels stay here either way because a
-        /// borrow of them is what was handed over.
+        /// Whether the pixels have been handed over. A still layer already on
+        /// the GPU needs no second upload.
         uploaded: bool,
     },
     Pipe(Pipe),
@@ -128,8 +132,18 @@ impl Source {
     }
 }
 
-/// Both ends of the loop the two frame buffers travel round: full frames
-/// coming up from the reader, spent ones going back down to it.
+/// The circuit two frame buffers travel round: full ones coming up from the
+/// reader, spent ones going back down to it. No third buffer is ever
+/// allocated — one is being read into while the other is on the layer — which
+/// at 1920x1080 is eight megabytes a frame per input neither allocated nor
+/// freed.
+///
+/// Both bounded at one frame, and that bound is the throttle: ffmpeg blocks
+/// on its own pipe once the reader is waiting to hand a frame over, so a
+/// source with no pacing of its own — `lavfi` generates as fast as the
+/// machine allows — runs at the rate frames are collected instead of flat
+/// out. A device paces itself well under that rate, so it never blocks and
+/// nothing queues ahead of what is on screen.
 struct Channels {
     full: Receiver<Vec<u8>>,
     spent: SyncSender<Vec<u8>>,
@@ -138,30 +152,18 @@ struct Channels {
 /// An ffmpeg writing raw frames down a pipe, and the thread draining it.
 struct Pipe {
     child: Child,
-    /// One frame in flight. That bound is the throttle: ffmpeg blocks on its
-    /// own pipe once the reader is waiting to hand a frame over, so a source
-    /// with no pacing of its own — `lavfi` generates as fast as the machine
-    /// allows — runs at the rate frames are collected instead of flat out.
-    /// A device paces itself well under that rate, so it never blocks and
-    /// nothing queues ahead of what is on screen.
-    ///
-    /// Two buffers go round this pair of channels and no more are ever
-    /// allocated: one is being read into while the other is on the layer, and
-    /// [`Pipe::take`] hands the one it is replacing back up the second
-    /// channel for the reader to fill again. At 1920x1080 that is eight
-    /// megabytes a frame per input not allocated and freed.
-    ///
-    /// One field, not two, because releasing the reader means dropping both
-    /// ends it waits on — a reader parked on either channel wakes when this
-    /// goes to `None`, which is the only time it is `None`, in
-    /// [`Pipe::drop`].
+    /// Both ends in one field, because releasing the reader means dropping
+    /// both of them: it may be parked on either, and only dropping the pair
+    /// wakes it whichever it is. `None` only in [`Pipe::drop`].
     channels: Option<Channels>,
-    /// The first frame, which [`Pipe::spawn`] took off the channel to prove
-    /// the source works before a window ever opens.
-    first: Option<Vec<u8>>,
-    /// The frame the layer is showing, kept because that is what
-    /// [`Source::frame`] lends out.
-    showing: Option<Vec<u8>>,
+    /// The frame on the layer, and one of the two buffers going round
+    /// [`Channels`] — kept rather than handed over, since a borrow of it is
+    /// what [`Source::frame`] lends out.
+    showing: Vec<u8>,
+    /// Whether `showing` has yet to be handed over. A frame the layer already
+    /// holds is not worth an upload, so this is what makes a second
+    /// [`Pipe::take`] between arrivals answer `None`.
+    pending: bool,
     reader: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -179,8 +181,8 @@ impl Pipe {
         let mut stdout = child.stdout.take().expect("stdout is piped");
 
         let bytes = frame_bytes(size);
-        let (send, frames) = sync_channel(1);
-        let (spent, empties) = sync_channel(1);
+        let (full_out, full) = sync_channel(1);
+        let (spent, spent_in) = sync_channel(1);
         // The second of the two buffers, put where the reader will find it
         // once it has handed the first one over. Without it the reader would
         // wait for a buffer the layer cannot return until a second frame has
@@ -200,57 +202,58 @@ impl Pipe {
                     log::warn!("{what} ended; its layer holds its last frame");
                     return;
                 }
-                if send.send(frame).is_err() {
+                if full_out.send(frame).is_err() {
                     return;
                 }
-                // Blocks until the layer gives one back, which is the same
-                // throttle `frames` is: the reader owns no buffer to read
-                // into until then.
-                match empties.recv() {
+                // Blocks until the layer gives one back: the reader owns no
+                // buffer to read into until then, which is the same throttle
+                // the full channel's bound is.
+                match spent_in.recv() {
                     Ok(next) => frame = next,
                     Err(_) => return,
                 }
             }
         });
 
+        // Built before the first frame is waited for, so every way out of
+        // here runs Pipe's Drop and reaps the child. An empty `showing` with
+        // nothing pending is the honest "no frame yet" state, and it lasts
+        // only until the next two lines — a Pipe leaves here with a real one
+        // or does not leave at all.
         let mut pipe = Pipe {
             child,
-            channels: Some(Channels {
-                full: frames,
-                spent,
-            }),
-            first: None,
-            showing: None,
+            channels: Some(Channels { full, spent }),
+            showing: Vec::new(),
+            pending: false,
             reader: Some(reader),
         };
-        // Built first, so every way out of here runs Pipe's Drop and reaps
-        // the child. A dead ffmpeg drops its end of the channel, so this
-        // returns as soon as it exits rather than waiting out the timeout.
-        let channels = pipe.channels.as_ref().expect("just built");
-        pipe.first = Some(
-            channels
-                .full
-                .recv_timeout(FIRST_FRAME_TIMEOUT)
-                .map_err(|e| format!("{input}: no frame ({e}); ffmpeg's own error is above"))?,
-        );
+        // A dead ffmpeg drops its end of the channel, so this returns as soon
+        // as it exits rather than waiting out the timeout.
+        pipe.showing = pipe
+            .channels
+            .as_ref()
+            .expect("just built")
+            .full
+            .recv_timeout(FIRST_FRAME_TIMEOUT)
+            .map_err(|e| format!("{input}: no frame ({e}); ffmpeg's own error is above"))?;
+        pipe.pending = true;
         Ok(pipe)
     }
 
     fn take(&mut self) -> Option<&[u8]> {
         let channels = self.channels.as_ref()?;
         // Nothing yet and never again are the same answer here: either way
-        // the layer keeps what it has.
-        let next = match self.first.take() {
-            Some(first) => first,
-            None => channels.full.try_recv().ok()?,
-        };
-        if let Some(done) = self.showing.replace(next) {
+        // the layer keeps what it has, and only a frame it has not been shown
+        // yet is worth an upload.
+        if let Ok(next) = channels.full.try_recv() {
+            let done = std::mem::replace(&mut self.showing, next);
             // The reader is waiting for this one rather than allocating a
             // replacement. It fails only once the reader is gone, and a
             // buffer nothing will ever read into is nothing to keep.
             let _ = channels.spent.try_send(done);
+            self.pending = true;
         }
-        self.showing.as_deref()
+        std::mem::take(&mut self.pending).then_some(self.showing.as_slice())
     }
 }
 
@@ -270,16 +273,6 @@ impl Drop for Pipe {
     }
 }
 
-/// The ffmpeg command line around `source`, which is the input-side options
-/// naming what to open — everything up to and including `-i` and its
-/// argument, built by the [`Source::open`] arm that knows which kind it is.
-/// Taking those rather than an [`Input`] is what leaves no case here for a
-/// pattern, which has no ffmpeg to give a command line to.
-///
-/// Every piece not in `source` is chosen here rather than taken from the
-/// config: a config supplies a path, a format name and a device name, and
-/// each of those lands as the argument of an option, which ffmpeg reads
-/// positionally — so nothing a file can say becomes a flag.
 /// The input-side options for a file: at its own frame rate and forever,
 /// through the file protocol and no other.
 ///
@@ -289,7 +282,7 @@ impl Drop for Pipe {
 /// ffmpeg opens a URL as readily as a path: without it, `file =
 /// "http://..."` fetches from the network for as long as the instrument runs.
 /// All three are the input's options, so all three come before `-i`.
-fn file_args(path: &std::path::Path) -> Vec<String> {
+fn file_args(path: &Path) -> Vec<String> {
     let mut args: Vec<String> = [
         "-protocol_whitelist",
         "file",
@@ -311,6 +304,16 @@ fn capture_args(format: &str, device: &str) -> Vec<String> {
     ["-f", format, "-i", device].map(String::from).into()
 }
 
+/// The ffmpeg command line around `source`, which is the input-side options
+/// naming what to open — everything up to and including `-i` and its
+/// argument, built by the [`Source::open`] arm that knows which kind it is.
+/// Taking those rather than an [`Input`] is what leaves no case here for a
+/// pattern, which has no ffmpeg to give a command line to.
+///
+/// Every piece not in `source` is chosen here rather than taken from the
+/// config: a config supplies a path, a format name and a device name, and
+/// each of those lands as the argument of an option, which ffmpeg reads
+/// positionally — so nothing a file can say becomes a flag.
 fn argv(source: Vec<String>, size: (u32, u32)) -> Vec<String> {
     let (width, height) = size;
     let mut argv: Vec<String> = ["-nostdin", "-loglevel", "error"]

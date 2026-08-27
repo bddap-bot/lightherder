@@ -45,7 +45,7 @@ pub const MAX_BANK_BYTES: u64 = 2 << 30;
 /// One texel of [`MONITOR_FORMAT`], in bytes. Asked of the format rather than
 /// written down beside it, since a second copy of it is a second thing to
 /// change.
-fn monitor_texel() -> u32 {
+fn monitor_texel_bytes() -> u32 {
     MONITOR_FORMAT
         .block_copy_size(None)
         .expect("a colour format copies a whole texel at a time")
@@ -53,7 +53,7 @@ fn monitor_texel() -> u32 {
 
 /// What the two banks cost `params` at monitors of `size`.
 pub fn bank_bytes(params: &Params, size: (u32, u32)) -> u64 {
-    2 * params.sources() as u64 * size.0 as u64 * size.1 as u64 * monitor_texel() as u64
+    2 * params.sources() as u64 * size.0 as u64 * size.1 as u64 * monitor_texel_bytes() as u64
 }
 
 /// Whether that fits in [`MAX_BANK_BYTES`], with the figure in the refusal:
@@ -77,8 +77,8 @@ pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
 /// The edges of monitor `m`'s pass: (camera, source layer, routing weight
 /// times splitter weight). This is where a camera's two splitter lists become
 /// the one index space the bank is laid out in — the monitors, then the
-/// inputs offset past them — and the only place either list is turned into a
-/// layer number. The one definition of which edges become taps —
+/// inputs offset past them, the same layout [`Feedback::write_input`] writes
+/// an input's frame to. The one definition of which edges become taps —
 /// `config::validate` counts these against [`MAX_TAPS`] and [`Feedback::step`]
 /// writes them, so the two cannot drift apart on the zero-weight rule. Note
 /// for the increment that makes routing or look weights live-mutable:
@@ -209,14 +209,11 @@ pub struct Feedback {
     /// holds exactly, since that is what carries it to the shader.
     frame: u32,
     uniforms: wgpu::Buffer,
-    /// One frame's worth of the bank's format, reused by every
-    /// [`Feedback::write_input`]. Allocated with the textures because it is
-    /// sized like them: an external input hands over a frame every frame it
-    /// has one, and at 1920x1080 allocating this one instead of keeping it is
-    /// sixteen megabytes a frame per input.
-    ///
-    /// Empty when the graph has no inputs, since nothing then ever writes to
-    /// a layer.
+    /// One frame in the bank's format, reused by every
+    /// [`Feedback::write_input`]. An external input hands over a frame every
+    /// frame it has one, so at 1920x1080 allocating this rather than keeping
+    /// it would be sixteen megabytes a frame per input. Grown on first use
+    /// and never again — a graph with no inputs never grows it at all.
     scratch: Vec<u16>,
     layout: wgpu::BindGroupLayout,
     shader: wgpu::ShaderModule,
@@ -341,17 +338,6 @@ impl Feedback {
             ],
         });
 
-        // One half per 8-bit channel, so a frame's count of bytes is its
-        // count of these — and none at all where no input will ever write.
-        let scratch = vec![
-            0u16;
-            if inputs > 0 {
-                crate::input::frame_bytes((width, height))
-            } else {
-                0
-            }
-        ];
-
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("cameras reading bank {i}")),
@@ -398,7 +384,7 @@ impl Feedback {
             front: 0,
             frame: 0,
             uniforms,
-            scratch,
+            scratch: Vec::new(),
             layout,
             shader,
             pipeline,
@@ -435,7 +421,7 @@ impl Feedback {
         assert!(i < self.inputs, "input {i} of {}", self.inputs);
         assert_eq!(
             rgba8.len(),
-            self.scratch.len(),
+            crate::input::frame_bytes(self.size()),
             "input {i} handed over a short frame"
         );
         to_half(rgba8, &mut self.scratch);
@@ -455,7 +441,7 @@ impl Feedback {
                 bytemuck::cast_slice(halves),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.width * monitor_texel()),
+                    bytes_per_row: Some(self.width * monitor_texel_bytes()),
                     rows_per_image: Some(self.height),
                 },
                 wgpu::Extent3d {
@@ -704,18 +690,19 @@ fn half_bits(x: f32) -> u16 {
     ((exponent as u16) << 10 | (mantissa >> 13) as u16) + ((mantissa >> 12) & 1) as u16
 }
 
-/// A tightly packed RGBA8 frame in the bank's format, written into `halves`
-/// rather than returned, so an input that hands over a frame every frame
-/// allocates nothing at all.
-fn to_half(rgba8: &[u8], halves: &mut [u16]) {
+/// A tightly packed RGBA8 frame in the bank's format, refilling `halves`
+/// rather than returning a new one: the capacity survives, so an input that
+/// hands over a frame every frame allocates on its first only. Refilled and
+/// not written in place, because a `halves` too short for `rgba8` would
+/// otherwise leave the tail of the last frame on the layer.
+fn to_half(rgba8: &[u8], halves: &mut Vec<u16>) {
     // No transfer curve on the way in. The bank holds whatever a monitor is
     // displaying, in the same convention as the rest of the instrument: the
     // phosphor gamma is a knob on the front panel, applied on the way out of
     // a pass, not an encoding this stage is entitled to undo.
     let table = half_table();
-    for (half, v) in halves.iter_mut().zip(rgba8) {
-        *half = table[*v as usize];
-    }
+    halves.clear();
+    halves.extend(rgba8.iter().map(|v| table[*v as usize]));
 }
 
 #[cfg(test)]

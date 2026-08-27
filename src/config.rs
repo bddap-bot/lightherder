@@ -312,18 +312,19 @@ pub fn read(path: &std::path::Path) -> Result<Params, String> {
 /// written into a loop that feeds itself never leaves, because `clamp` passes
 /// it through and Reset restores the same poisoned initial.
 pub fn validate(params: &Params) -> Result<(), String> {
-    let (m, c) = (params.monitors.len(), params.cameras.len());
+    let (m, c, n) = (
+        params.monitors.len(),
+        params.cameras.len(),
+        params.inputs.len(),
+    );
     if !(1..=MAX_MONITORS).contains(&m) {
         return Err(format!("{m} monitors; needs between 1 and {MAX_MONITORS}"));
     }
     if c == 0 {
         return Err("no cameras; nothing would ever reach a monitor".into());
     }
-    if params.inputs.len() > MAX_INPUTS {
-        return Err(format!(
-            "{} inputs; at most {MAX_INPUTS}",
-            params.inputs.len()
-        ));
+    if n > MAX_INPUTS {
+        return Err(format!("{n} inputs; at most {MAX_INPUTS}"));
     }
     // The routing matrix's shape, before anything reads a crosspoint out of
     // it: `Params::knob` indexes `routing[monitor][camera]` directly, so a
@@ -349,12 +350,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
     for (i, camera) in params.cameras.iter().enumerate() {
         for (weights, what, noun, wanted) in [
             (&camera.look, "look", "monitor", m),
-            (
-                &camera.look_inputs,
-                "look_inputs",
-                "input",
-                params.inputs.len(),
-            ),
+            (&camera.look_inputs, "look_inputs", "input", n),
         ] {
             if weights.len() != wanted {
                 return Err(format!(
@@ -674,8 +670,8 @@ mod tests {
         }
     }
 
-    /// A graph carrying one of every kind of input, with looks long enough
-    /// for them: `external` plus a grid, a file and a device.
+    /// A graph carrying one of every kind of input, every camera's
+    /// `look_inputs` widened to match: `external` plus a file and a device.
     fn one_of_every_input() -> Params {
         let mut params = external();
         params.inputs = vec![
