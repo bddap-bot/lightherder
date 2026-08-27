@@ -291,10 +291,15 @@ pub fn read(path: &std::path::Path) -> Result<Params, String> {
 ///
 /// Every value a knob turns is checked against that knob's own [`Knob::limit`]
 /// and nowhere else. A file outside one is *refused* rather than loaded and
-/// silently snapped by the first key press, which is the only reading of the
-/// rails that leaves the instrument able to return to what it loaded: a
-/// `headroom = 1e6` that validates is a state no knob and no fader can reach
-/// twice.
+/// silently snapped by the first key press: a `headroom = 1e6` that validates
+/// is a state the instrument shows, cannot return to, and hands a fader a
+/// travel it is standing off the end of.
+///
+/// A phase is refused outside its turn for a weaker reason, since `rotation =
+/// 6.5` is an angle the instrument can perfectly well hold — it is one turn
+/// and a third, and a file that says so is far likelier to be counting in
+/// degrees than to mean it. Refusing says which; wrapping it silently would
+/// not, and would put the value somewhere the file did not name.
 ///
 /// A range check is also the finiteness check, since neither a NaN nor an
 /// infinity is inside any range — and finiteness is not optional here: a NaN
@@ -354,19 +359,18 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // checking: a rail spelled a second time here is a rail the two could
     // differ on, which is how a config used to load a bloom the bloom knob
     // could not reach.
-    for camera in 0..c {
-        for monitor in 0..m {
-            let focus = Focus { camera, monitor };
-            for knob in Knob::ALL {
+    for knob in Knob::ALL.into_iter().filter(|knob| knob.owns_a_field()) {
+        let (low, high) = knob.limit().ends();
+        for camera in 0..c {
+            for monitor in 0..m {
+                let focus = Focus { camera, monitor };
                 // Once per value rather than once per pair: a camera knob
                 // reads the same field whichever monitor is focused, and
                 // `narrowed` is already the definition of which half counts.
-                // The rigid gain owns no field at all — see `owns_a_field`.
-                if !knob.owns_a_field() || focus != focus.narrowed(knob) {
+                if focus != focus.narrowed(knob) {
                     continue;
                 }
                 let value = params.knob(knob, focus);
-                let (low, high) = knob.limit().ends();
                 if !(low..=high).contains(&value) {
                     // Built only on the way out, so the frame-by-frame
                     // re-assertion above stays allocation-free.

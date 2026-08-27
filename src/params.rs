@@ -489,12 +489,11 @@ impl Knob {
     }
 
     /// Whether the knob is a value of the graph or a grip on other knobs.
-    /// The rigid gain is the only one of the latter — it reads as the mean
-    /// of the three channel knobs and turns all three — so it owns no field
-    /// of its own, which is what [`Params::knob_mut`]'s `unreachable!` says
-    /// too. Anything walking the graph's *values* wants the ones that own a
-    /// field: the mean cannot leave a range its three terms are inside, and
-    /// a walk that included it would blame the rigid knob for a channel's
+    /// The rigid gain is the only one of the latter: it reads as the mean of
+    /// the three channel knobs and turns all three, so it is a reading rather
+    /// than a field — which is what [`Params::knob_mut`]'s `unreachable!`
+    /// says too. Anything walking the graph's *values* wants the fields, and
+    /// would otherwise name a knob no config can write when a channel is at
     /// fault.
     pub const fn owns_a_field(self) -> bool {
         !matches!(self, Knob::Gain)
@@ -601,8 +600,13 @@ impl Knob {
             // Potent inside a loop, so the rails are close: a tenth of a unit
             // added every pass floods the monitor to white in under a second.
             Knob::Brightness => Limit::Clamp(-0.5, 0.5),
-            // Zero would flatten every level to 1.0, and a phosphor curve
-            // worth playing lives nowhere near either rail.
+            // Zero would flatten every level to 1.0, and at or below it
+            // `pow(0, gamma)` is an infinity — the monitor's corners are
+            // exactly 0 whenever the seed does not reach them, and one pass
+            // later the chroma matrix turns that infinity into a NaN, which
+            // never leaves a loop that feeds itself. The floor sits well
+            // above either, because a phosphor curve worth playing lives
+            // nowhere near the rails.
             Knob::Gamma => Limit::Clamp(0.25, 4.0),
             // Zero would divide by it. The bottom of the range squeezes the
             // whole picture into the darkest eighth, which is a sound worth

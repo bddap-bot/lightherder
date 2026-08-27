@@ -439,9 +439,10 @@ fn value_at(knob: Knob, position: f32) -> f32 {
 }
 
 /// The inverse: where a fader would have to stand for the knob to read
-/// `value`. Only [`Pickup`] needs it, and only to compare against — so it is
-/// deliberately not clamped, and the caller decides what a value outside the
-/// travel means.
+/// `value`. Always inside the travel, because a knob is only ever set by
+/// `Params::nudge` or loaded through `config::validate` and both hold it
+/// inside the very same [`Limit`] — the two ends of a fader are the two ends
+/// of the knob, with nothing past either.
 fn position_of(knob: Knob, value: f32) -> f32 {
     let (low, high) = knob.limit().ends();
     (value - low) / (high - low)
@@ -480,16 +481,9 @@ impl Pickup {
             // A phase's two fader ends are the same angle, so a knob sitting
             // on the seam is reachable from either — and `wrap_pi` puts it
             // there exactly, at +PI, which is position 1.0 while the fader
-            // that produced it is standing at 0.0. One turn either side also
-            // brings a hue a config left outside the fader's turn back within
-            // reach, rather than leaving that fader dead for the session.
+            // that produced it is standing at 0.0.
             Limit::Wrap => reaches(at - 1.0) || reaches(at) || reaches(at + 1.0),
-            // A config can hold a value past a rail the knob itself enforces
-            // — `validate` checks finiteness, not every rail — and a fader
-            // that could never reach it would be dead until the keyboard
-            // clamped it back. The end of the travel stands in for everything
-            // beyond it, so sweeping to the end picks it up and pulls it in.
-            Limit::Clamp(..) => reaches(at.clamp(0.0, 1.0)),
+            Limit::Clamp(..) => reaches(at),
         };
         self.caught
     }
@@ -1256,23 +1250,6 @@ mod tests {
         // A fader elsewhere on the same knob still has to sweep to it.
         let (mut midi, _) = surface();
         assert_eq!(feed(&mut midi, &params, &cc(4, 10)), []);
-    }
-
-    #[test]
-    fn a_knob_a_config_left_outside_its_rails_is_still_reachable() {
-        // `validate` checks that a value is finite, not that it is inside
-        // every knob's rails, so a hand-written config or an edited slot can
-        // hold contrast at 10 in a range of 0 to 4. Compared literally, no
-        // fader position is ever within a step of it and the fader is dead
-        // for the session — so the end of the travel stands in for anything
-        // past it, and sweeping there picks the knob up and pulls it in.
-        let (mut midi, mut params) = surface();
-        params.monitors[0].colour.contrast = 10.0;
-        assert_eq!(feed(&mut midi, &params, &cc(4, 64)), []);
-        assert!(matches!(
-            feed(&mut midi, &params, &cc(4, 127))[..],
-            [Action::Set(Knob::Contrast, v)] if (v - 4.0).abs() < 1e-6
-        ));
     }
 
     #[test]
