@@ -1397,29 +1397,29 @@ mod tests {
         // that moves fine mode moves its lamp with it.
         let mut midi = Midi::new(Map::nano_kontrol2()).unwrap();
         let focus = at(0, 0);
-        let dark = midi.wanted(focus, Seed::Dark, false);
+        let base = midi.wanted(focus, Seed::Dark, false);
         assert_eq!(
-            midi.wanted(focus, Seed::Dark, true) & !dark,
+            midi.wanted(focus, Seed::Dark, true) & !base,
             crate::lamps::lamp(46),
             "the overlay is cycle"
         );
         assert!(midi.toggle_fine());
         assert_eq!(
-            midi.wanted(focus, Seed::Dark, false) & !dark,
+            midi.wanted(focus, Seed::Dark, false) & !base,
             crate::lamps::lamp(58),
             "fine mode is track-prev on the factory map"
         );
         assert!(!midi.toggle_fine());
-        assert_eq!(midi.wanted(focus, Seed::Dark, false), dark);
+        assert_eq!(midi.wanted(focus, Seed::Dark, false), base);
 
         // A map that binds the mode's key nowhere lights nothing extra,
         // rather than the button that number used to be.
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| b.cc != 58);
         let mut midi = Midi::new(map).unwrap();
-        let dark = midi.wanted(focus, Seed::Dark, false);
+        let base = midi.wanted(focus, Seed::Dark, false);
         assert!(midi.toggle_fine());
-        assert_eq!(midi.wanted(focus, Seed::Dark, false), dark);
+        assert_eq!(midi.wanted(focus, Seed::Dark, false), base);
     }
 
     #[test]
@@ -1430,9 +1430,9 @@ mod tests {
         // it only by changing the picture answers it too late.
         let midi = Midi::new(Map::nano_kontrol2()).unwrap();
         let focus = at(0, 0);
-        let dark = midi.wanted(focus, Seed::Dark, false);
+        let base = midi.wanted(focus, Seed::Dark, false);
         assert_eq!(
-            midi.wanted(focus, Seed::BLOB, false) & !dark,
+            midi.wanted(focus, Seed::BLOB, false) & !base,
             crate::lamps::lamp(41),
             "the seed is play on the factory map"
         );
@@ -1440,7 +1440,7 @@ mod tests {
         // load refuses it precisely so the two rigs have one spelling each —
         // but the type can hold one, and a lamp reading the *variant* rather
         // than the light would light PLAY over a monitor drawing nothing.
-        assert_eq!(midi.wanted(focus, Seed::WhiteBlob(0.0), false), dark);
+        assert_eq!(midi.wanted(focus, Seed::WhiteBlob(0.0), false), base);
         // Any blob, not just the one the toggle brings back: a config may
         // name its own level and the button is still what it is on.
         assert_eq!(
@@ -1451,8 +1451,8 @@ mod tests {
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| b.cc != 41);
         let midi = Midi::new(map).unwrap();
-        let dark = midi.wanted(focus, Seed::Dark, false);
-        assert_eq!(midi.wanted(focus, Seed::BLOB, false), dark);
+        let base = midi.wanted(focus, Seed::Dark, false);
+        assert_eq!(midi.wanted(focus, Seed::BLOB, false), base);
     }
 
     #[test]

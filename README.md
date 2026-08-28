@@ -159,11 +159,14 @@ instrument runs — but a `capture` is a format and a device string handed
 straight to ffmpeg, and `{ format = "lavfi", device = "movie=/private.mp4" }`
 puts a local file on screen. Read a graph before you play it.
 
-Injection level is just the crosspoint the input is patched on, and near
-unity a little goes a long way. The `external` preset sends a seventieth of
-the bars — 0.014 — onto a monitor whose loop runs at 0.985 and whose glass is
-dark: the trickle goes round seventy times before it fades, so every photon on
-that monitor came in from outside.
+Injection level is the crosspoint the input is sent on — a fader like every
+other crosspoint, `9` and `0` on the focused monitor, with `p` stepping which
+input it acts on. Near unity a little goes a long way: the `external` preset
+sends a seventieth of the bars — 0.014 — onto a monitor whose loop runs at
+0.985 and whose glass is dark, so the trickle goes round seventy times before
+it fades and every photon on that monitor came in from outside. Turn it up
+mid-performance and the room floods in; turn it to zero and the loop keeps
+running on what it has.
 
 ### The keyer
 
@@ -592,10 +595,12 @@ below assumes a US layout.
 | `q` `w` | gamma |
 | `e` `t` | headroom, i.e. where the amplifier's rails are |
 | `/` `\` | the crosspoint: how much of the focused camera the focused monitor shows |
+| `9` `0` | the send: how much of the focused input the focused monitor shows |
 | `n` | focus the next camera |
 | `num1`…`num8` | focus camera 1–8 outright |
 | `m` | focus the next monitor |
 | shift `num1`…`num8` | focus monitor 1–8 outright |
+| `p` | focus the next input |
 | `f1`…`f8` | recall preset slot |
 | shift `f1`…`f8` | store preset slot |
 | space | blank every monitor |
@@ -611,9 +616,15 @@ The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (colour and headroom); `n` and `m` walk the two focuses
 through the graph and `num1`…`num8` pick a node of either side outright, and
 the log line names them. Those eight are keypad keys, so on a board with no
-keypad `n` and `m` are the only way to the nodes. Routing and splitter
-weights are config; the crosspoint that joins the two focused nodes is not —
-`/` and `\` sweep it, and it is fader 8 on the surface.
+keypad `n` and `m` are the only way to the nodes. A third focus, `p`, names
+the input the send acts on — a step and no outright key, since a switcher has
+four spare inputs at most, and it is a focus of its own rather than a widening
+of the camera's so that riding a send costs you none of the lens.
+
+Splitter weights are config; the two crosspoints are not — `/` and `\` sweep
+the camera one, which is fader 8 on the surface, and `9` and `0` sweep the
+send, which is on the keys alone because a graph without inputs has no send
+for a fixed fader to be holding.
 
 Shift is read by two tables and no others. On a slot key it is the difference
 between recall and store — recall is one press, store is the press you have
