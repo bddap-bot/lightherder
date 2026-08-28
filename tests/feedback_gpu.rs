@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use lightherder::affine::Framing;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
-use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params};
+use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params, Seed};
 use lightherder::present::Present;
 
 /// The bootstrap stage's one-camera-one-monitor params, kept as this suite's
@@ -24,7 +24,7 @@ struct Single {
     framing: Framing,
     loop_gain: [f32; 3],
     character: Character,
-    seed_brightness: f32,
+    seed: Seed,
     colour: Colour,
     headroom: f32,
 }
@@ -38,7 +38,7 @@ impl Default for Single {
             framing: p.cameras[0].framing,
             loop_gain: p.cameras[0].gain,
             character: p.cameras[0].character,
-            seed_brightness: p.monitors[0].seed_brightness,
+            seed: p.monitors[0].seed,
             colour: p.monitors[0].colour,
             headroom: p.monitors[0].headroom,
         }
@@ -57,7 +57,7 @@ fn graph(s: &Single) -> Params {
         }],
         monitors: vec![Monitor {
             colour: s.colour,
-            seed_brightness: s.seed_brightness,
+            seed: s.seed,
             headroom: s.headroom,
         }],
         inputs: Vec::new(),
@@ -383,7 +383,7 @@ fn square() -> Option<Harness> {
 
 fn seeded() -> Single {
     Single {
-        seed_brightness: 1.0,
+        seed: Seed::WhiteBlob(1.0),
         ..Default::default()
     }
 }
@@ -412,12 +412,12 @@ const TINT: [f32; 3] = [1.0, 0.4, 0.1];
 fn tinted(h: &mut Harness) -> [f32; 3] {
     let still = frozen(seeded());
     h.step(&Single {
-        seed_brightness: 0.5,
+        seed: Seed::WhiteBlob(0.5),
         loop_gain: [0.0; 3],
         ..still
     });
     h.step(&Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: TINT,
         ..still
     });
@@ -428,7 +428,7 @@ fn tinted(h: &mut Harness) -> [f32; 3] {
 /// thing between the previous frame and this one is the colour stage.
 fn recolour(h: &mut Harness, colour: Colour) -> [f32; 3] {
     h.step(&Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [1.0; 3],
         colour,
         ..frozen(seeded())
@@ -671,7 +671,7 @@ fn the_knobs_colour_the_seed_too() {
     // only thing on it, and the curve has to reach it there.
     let Some(mut h) = square() else { return };
     let dark_loop = Single {
-        seed_brightness: 0.5,
+        seed: Seed::WhiteBlob(0.5),
         loop_gain: [0.0; 3],
         ..frozen(seeded())
     };
@@ -792,7 +792,7 @@ fn the_image_survives_the_seed_being_switched_off() {
     let mut previous = h.read().at(seed[0], seed[1]);
 
     let params = Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [0.9; 3],
         ..frozen(seeded())
     };
@@ -814,7 +814,7 @@ fn zero_gain_ends_the_loop_in_one_pass() {
     assert!(h.read().at(seed[0], seed[1]) > 200.0);
 
     let params = Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [0.0; 3],
         ..frozen(seeded())
     };
@@ -837,7 +837,7 @@ fn panning_moves_the_image_the_way_the_knobs_say() {
         h.step(&seeded());
 
         let params = Single {
-            seed_brightness: 0.0,
+            seed: Seed::Camera,
             loop_gain: [1.0; 3],
             colour: Colour::NEUTRAL,
             framing: Framing {
@@ -869,7 +869,7 @@ fn pan_is_applied_in_the_frame_the_camera_moves_in() {
     h.step(&seeded());
 
     let params = Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [1.0; 3],
         colour: Colour::NEUTRAL,
         framing: Framing {
@@ -960,7 +960,7 @@ fn the_gain_is_applied_once_per_pass() {
 
     let gain = 0.8;
     let params = Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [gain; 3],
         ..frozen(seeded())
     };
@@ -989,7 +989,7 @@ fn what_the_camera_sees_past_the_monitor_is_black() {
     // sampler clamped to".
     let still = frozen(seeded());
     let pan = |dx: f32| Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [1.0; 3],
         colour: Colour::NEUTRAL,
         framing: Framing {
@@ -1106,7 +1106,7 @@ fn plain_camera(look: Vec<f32>) -> Camera {
 fn silent_monitor() -> Monitor {
     Monitor {
         colour: Colour::NEUTRAL,
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         headroom: Monitor::KNEE_AT_WHITE,
     }
 }
@@ -1121,7 +1121,7 @@ fn the_routing_matrix_sends_each_camera_across() {
         cameras: vec![plain_camera(one_hot(2, 0)), plain_camera(one_hot(2, 1))],
         monitors: vec![
             Monitor {
-                seed_brightness: 1.0,
+                seed: Seed::WhiteBlob(1.0),
                 ..silent_monitor()
             },
             silent_monitor(),
@@ -1147,7 +1147,7 @@ fn the_routing_matrix_sends_each_camera_across() {
         at(&img, 1)
     );
 
-    p.monitors[0].seed_brightness = 0.0;
+    p.monitors[0].seed = Seed::Camera;
     h.step_graph(&p);
     let img = h.read();
     assert!(
@@ -1193,7 +1193,7 @@ fn mix_weights_scale_each_camera_s_contribution() {
             },
         ],
         monitors: vec![Monitor {
-            seed_brightness: 1.0,
+            seed: Seed::WhiteBlob(1.0),
             ..silent_monitor()
         }],
         inputs: Vec::new(),
@@ -1204,7 +1204,7 @@ fn mix_weights_scale_each_camera_s_contribution() {
     let base = h.read().at(seed[0], seed[1]);
     assert!(base > 200.0, "the seed never lit: {base}");
 
-    p.monitors[0].seed_brightness = 0.0;
+    p.monitors[0].seed = Seed::Camera;
     p.routing[0] = vec![0.5, 0.25];
     h.step_graph(&p);
     let img = h.read();
@@ -1230,7 +1230,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
         monitors: vec![
             silent_monitor(),
             Monitor {
-                seed_brightness: 1.0,
+                seed: Seed::WhiteBlob(1.0),
                 ..silent_monitor()
             },
         ],
@@ -1246,7 +1246,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
     let bright = h.read().at(u, v);
     assert!(bright > 200.0, "the seed never lit: {bright}");
 
-    p.monitors[1].seed_brightness = 0.0;
+    p.monitors[1].seed = Seed::Camera;
     h.step_graph(&p);
     let img = h.read();
     let (u, v) = tile(2, 0, seed[0], seed[1]);
@@ -1266,7 +1266,11 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
         cameras: (0..4).map(|c| plain_camera(one_hot(4, c))).collect(),
         monitors: (0..4)
             .map(|m| Monitor {
-                seed_brightness: if m == 0 { 1.0 } else { 0.0 },
+                seed: if m == 0 {
+                    Seed::WhiteBlob(1.0)
+                } else {
+                    Seed::Camera
+                },
                 ..silent_monitor()
             })
             .collect(),
@@ -1277,7 +1281,7 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
         return;
     };
     h.step_graph(&p);
-    p.monitors[0].seed_brightness = 0.0;
+    p.monitors[0].seed = Seed::Camera;
     h.step_graph(&p);
 
     let seed = h.feedback.seed_uv();
@@ -1347,7 +1351,7 @@ fn the_single_shim_is_the_single_preset() {
 /// mirror of [`recolour`], for the other half of the front panel.
 fn recharacter(h: &mut Harness, character: Character, headroom: f32) -> Image {
     h.step(&Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [1.0; 3],
         character,
         headroom,
@@ -1359,7 +1363,7 @@ fn recharacter(h: &mut Harness, character: Character, headroom: f32) -> Image {
 /// A lit spot and nothing moving: the frame every character test starts from.
 fn still_spot(h: &mut Harness) -> Image {
     h.step(&Single {
-        seed_brightness: 1.0,
+        seed: Seed::WhiteBlob(1.0),
         loop_gain: [0.0; 3],
         ..frozen(seeded())
     });
@@ -1482,7 +1486,7 @@ fn the_grain_moves_every_frame_and_only_when_it_is_asked_for() {
     // different every frame, or it is a fixed pattern the loop will bake in.
     let Some(mut h) = square() else { return };
     let dark = Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [0.0; 3],
         ..frozen(seeded())
     };
@@ -1523,7 +1527,7 @@ fn the_amplifier_bends_onto_its_headroom_instead_of_clipping() {
     let seed = h.feedback.seed_uv();
     let drive = |h: &mut Harness, headroom: f32| {
         h.step(&Single {
-            seed_brightness: 1.0,
+            seed: Seed::WhiteBlob(1.0),
             loop_gain: [0.0; 3],
             headroom,
             ..frozen(seeded())
@@ -1582,11 +1586,11 @@ fn each_camera_carries_its_own_character() {
         cameras: vec![plain_camera(one_hot(2, 0)), plain_camera(one_hot(2, 1))],
         monitors: vec![
             Monitor {
-                seed_brightness: 1.0,
+                seed: Seed::WhiteBlob(1.0),
                 ..silent_monitor()
             },
             Monitor {
-                seed_brightness: 1.0,
+                seed: Seed::WhiteBlob(1.0),
                 ..silent_monitor()
             },
         ],
@@ -1609,7 +1613,7 @@ fn each_camera_carries_its_own_character() {
     assert!(left > 200.0, "nothing lit: {left}");
 
     for monitor in &mut p.monitors {
-        monitor.seed_brightness = 0.0;
+        monitor.seed = Seed::Camera;
     }
     p.cameras[1].character = Character {
         bloom: 0.9,
@@ -1671,7 +1675,7 @@ fn the_grain_is_monochrome_and_signed() {
     // and inside a loop that lifts every pass until the monitor floods.
     let Some(mut h) = square() else { return };
     h.step(&Single {
-        seed_brightness: 0.0,
+        seed: Seed::Camera,
         loop_gain: [0.0; 3],
         character: Character {
             noise: 0.2,

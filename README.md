@@ -111,7 +111,7 @@ switcher routes it, a beam splitter blends it with a monitor, the camera's
 zoom and turn frame it, the lens blooms it. Nothing in the shader knows which
 kind of source it sampled. What an input is *not* is part of the loop: no
 camera draws to one, so it takes no routing column, and it is light entering
-the graph rather than light going round it — the same role the seed spot has.
+the graph rather than light going round it — the same role a white blob has.
 
 ```toml
 inputs = [
@@ -147,7 +147,7 @@ puts a local file on screen. Read a graph before you play it.
 
 Injection level is just the camera's gain, and near unity a little goes a
 long way. The `external` preset hands over a seventieth of what its camera
-sees — 0.014 — into a loop at 0.985 with the seed switched off: the trickle
+sees — 0.014 — into a loop at 0.985 whose monitor has no blob: the trickle
 goes round seventy times before it fades, so every photon on that monitor came
 in from outside.
 
@@ -170,10 +170,16 @@ camera is a gate on the feedback itself, which is its own instrument to play.
 The `webcam` preset is `external` with the bars swapped for
 `/dev/video0` and the luma key on: plug a camera in, recall, play.
 
-A soft spot seeds the loop, since a loop with gain below 1.0 and nothing
-feeding it decays to black. The spot sits off-centre on purpose: a radially
-symmetric spot in the middle is a fixed point of rotation, so a centred seed
-would leave the rotation knob with nothing visible to do. Half-float keeps
+A monitor's **seed** is what lights its loop from outside: either a soft
+white blob on the glass, or nothing of its own — the cameras the switcher
+routes onto it. One or the other, not a level with an off value, because the
+two are different rigs and a camera seed's level is already played by that
+camera's gain. `;` swaps them, PLAY does on the surface, and the button is
+lit while the focused monitor has its blob. A blob is what starts a loop with
+gain below 1.0, which decays to black with nothing feeding it. The spot sits
+off-centre on purpose: a radially symmetric spot in the middle is a fixed
+point of rotation, so a centred one would leave the rotation knob with
+nothing visible to do. Half-float keeps
 headroom above 1.0 so dozens of passes do not quantise into bands. Samples
 that fall outside the monitor read as black rather than a smeared edge,
 because a real camera aimed past the monitor sees an unlit room.
@@ -214,7 +220,8 @@ Out of the box, with no configuration:
 
 | control | is |
 |---|---|
-| faders 1–8 | the focused **monitor**: seed, hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
+| fader 1 | nothing: the seed's fader, freed when the seed became a union |
+| faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
 | S 1–4 | focus camera 1–4 |
 | S 5–8 | focus monitor 1–4 |
@@ -223,6 +230,7 @@ Out of the box, with no configuration:
 | marker set, prev, next | next camera, next monitor, blank the monitors |
 | ◀◀ rewind | put the last knob turned back to its identity |
 | ■ stop | reset every knob |
+| ▶ play | the focused monitor's seed: white blob or camera; lit while it is the blob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | |◀ track prev | fine mode, on or off |
 | ▶▶ forward, ▶ play, ● record, ▶| track next | nothing |
@@ -268,7 +276,7 @@ A latching button plays on every second press.
 Stop puts the whole panel back to the graph as it was loaded. **Rewind puts
 back the one knob you were just turning**, to its *identity* — the value at
 which its stage does nothing to the light: zoom 1, no turn, no pan, unity
-gain, a clean path, the keys off, a neutral front panel, no seed. The
+gain, a clean path, the keys off, a neutral front panel. The
 crosspoint is the one knob with no such value — it is a weight in a sum
 rather than a stage the light passes through, and its row *is* the monitor's
 loop gain — so its identity is the connection not made. Unity there would put
@@ -446,12 +454,14 @@ prints exactly what is wrong. The smallest useful one:
 
 ```toml
 cameras = [{ look = [1.0], framing = { zoom = 0.994, rotation = 0.05 } }]
-monitors = [{ seed_brightness = 0.1 }]
+monitors = [{ seed = { white_blob = 0.1 } }]
 routing = [[0.98]]
 ```
 
 `look` is the camera's beam splitter — a weight per monitor, and `look_inputs`
-the same over any `inputs`. `routing[m][c]` is how much of camera `c` monitor
+the same over any `inputs`. `seed` is `{ white_blob = <brightness> }` or
+`"camera"`, and defaults to `"camera"` — a monitor lit only by what the
+switcher hands it. `routing[m][c]` is how much of camera `c` monitor
 `m` shows, and anything omitted — framing, gain, colour — is neutral.
 
 The `shell.nix` pins nixpkgs, puts the Vulkan loader and windowing libraries
@@ -555,7 +565,6 @@ below assumes a US layout.
 | `f9` `f10` | key softness, both keys' soft edge |
 | `home` `end` | key hue: the colour the chroma key cuts |
 | `pgdn` `pgup` | key tolerance; at the top, the chroma key is off |
-| `;` `'` | seed |
 | `a` `s` | hue, per pass |
 | `d` `f` | saturation |
 | `z` `x` | brightness, i.e. black level |
@@ -571,6 +580,7 @@ below assumes a US layout.
 | shift `f1`…`f8` | store preset slot |
 | space | blank every monitor |
 | `r` | reset every knob |
+| `;` | the focused monitor's seed: a white blob or the camera |
 | backspace | reset the last knob turned, to its identity |
 | tab | fine mode for the surface's knobs, on or off |
 | `f11` | cover the display, or stop covering it |
@@ -578,7 +588,7 @@ below assumes a US layout.
 | esc | quit |
 
 The knobs act on the focused camera (framing, gain and character) and the
-focused monitor (seed, colour and headroom); `n` and `m` walk the two focuses
+focused monitor (colour and headroom); `n` and `m` walk the two focuses
 through the graph and `num1`…`num8` pick a node of either side outright, and
 the log line names them. Those eight are keypad keys, so on a board with no
 keypad `n` and `m` are the only way to the nodes. Routing and splitter

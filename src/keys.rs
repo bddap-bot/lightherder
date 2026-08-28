@@ -41,6 +41,12 @@ pub enum Action {
     Store(usize),
     /// Play a preset slot back.
     Recall(usize),
+    /// Swap the focused monitor's seed for the other kind: a white blob on
+    /// the glass, or the cameras the switcher routes onto it. A button and
+    /// not a knob, because the two are not two settings of one thing — and
+    /// a camera seed's level is already played by that camera's gain, which
+    /// is the fader this bought back.
+    Seed,
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
     /// Cover the display, or stop covering it.
@@ -146,7 +152,6 @@ const AXES: &[Axis] = &[
         KeyCode::PageUp,
         "pgup",
     ),
-    axis(Knob::Seed, KeyCode::Semicolon, ";", KeyCode::Quote, "'"),
     // The colour stage gets the left hand, kept together so a performer can
     // sweep the front panel without looking.
     axis(Knob::Hue, KeyCode::KeyA, "a", KeyCode::KeyS, "s"),
@@ -204,6 +209,16 @@ const COMMANDS: &[Command] = &[
         Action::Reset,
         "reset every knob",
         "reset",
+    ),
+    // On the lower of the two keys the seed fader's level used to turn, so a
+    // hand that knew where the seed was still finds it. Its partner, "'", is
+    // free.
+    cmd(
+        KeyCode::Semicolon,
+        ";",
+        Action::Seed,
+        "the focused monitor's seed: a white blob or the camera",
+        "seed",
     ),
     // Backspace, because what it does to a knob is what it does to a
     // character: takes back the last one.
@@ -502,6 +517,12 @@ mod tests {
         assert_eq!(action_for(KeyCode::Space, false), Some(Action::Clear));
         assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape, false), Some(Action::Quit));
+        assert_eq!(action_for(KeyCode::Semicolon, false), Some(Action::Seed));
+        // The seed's other key went with its fader, and free means free: a
+        // key still resolving to the knob that was deleted would be a
+        // vocabulary the instrument no longer has.
+        assert_eq!(action_for(KeyCode::Quote, false), None);
+        assert_eq!(action_for_label("'"), None);
         // A key no table claims.
         assert_eq!(action_for(KeyCode::F12, false), None);
     }

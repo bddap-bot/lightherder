@@ -612,7 +612,7 @@ impl Feedback {
                     monitor.colour.brightness,
                     monitor.colour.contrast,
                     monitor.colour.gamma,
-                    monitor.seed_brightness,
+                    monitor.seed.brightness(),
                 ],
                 info: [count as f32, m as f32, 0.0, 0.0],
                 analog: [grain, monitor.headroom, self.frame as f32, 0.0],

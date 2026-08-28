@@ -17,7 +17,7 @@ use crate::input::Source;
 use crate::keys::{action_for, Action};
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
-use crate::params::{Focus, Knob, Params};
+use crate::params::{Focus, Knob, Params, Seed};
 use crate::present::Present;
 
 /// Borderless rather than exclusive: the instrument renders at its own
@@ -501,6 +501,12 @@ impl App {
         }
     }
 
+    /// What lights the monitor the faders are on — the one fact about the
+    /// graph the panel's lamps read, since the focus alone cannot say it.
+    fn seed(&self) -> Seed {
+        self.params.monitors[self.focus.monitor].seed
+    }
+
     /// Point the knobs at another node. The one way `self.focus` moves, for
     /// the same reason [`App::adopt`] is the one way `params` is replaced: a
     /// fader that has caught a knob is holding *that* node's knob, and the
@@ -621,6 +627,14 @@ impl App {
                 let on = self.midi.toggle_fine();
                 log::info!("fine {}", if on { "on" } else { "off" });
             }
+            // The focused monitor's, because the seed is the monitor's: the
+            // faders' half of the focus is the half that names it, exactly
+            // as the front panel beside it does.
+            Action::Seed => {
+                let seed = &mut self.params.monitors[self.focus.monitor].seed;
+                *seed = seed.toggled();
+                log::info!("{}", self.params.describe(self.focus));
+            }
             Action::Clear => {
                 if let Some(live) = self.live.as_mut() {
                     live.feedback.clear(&self.gpu.device, &self.gpu.queue);
@@ -735,7 +749,7 @@ impl ApplicationHandler for App {
                 }
                 // And the panel is written every redraw — see [`Midi::show`]
                 // for why every redraw and not each place the focus moves.
-                self.midi.show(self.focus, self.overlay_shown);
+                self.midi.show(self.focus, self.seed(), self.overlay_shown);
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
@@ -941,6 +955,35 @@ mod tests {
         assert_eq!(app.focus, Focus::default());
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_seed_button_swaps_one_monitor_s_rig_and_leaves_the_rest() {
+        // Two monitors, both lamp-lit, so "it toggled" and "it toggled the
+        // one under the faders" are different observations.
+        let Some(mut app) = playing(config::crossed(), scratch("seed-toggle")) else {
+            return;
+        };
+        app.focus_monitor(1);
+        assert_eq!(app.params.monitors[1].seed, Seed::LAMP);
+
+        play(&mut app, Action::Seed);
+        assert_eq!(app.params.monitors[1].seed, Seed::Camera);
+        assert_eq!(app.params.monitors[0].seed, Seed::LAMP, "both went");
+        // What the panel reads, which is the focused monitor's and follows
+        // the focus rather than the press.
+        assert_eq!(app.seed(), Seed::Camera);
+        app.focus_monitor(0);
+        assert_eq!(app.seed(), Seed::LAMP);
+
+        // And back, on the key a hand actually presses.
+        app.focus_monitor(1);
+        let Some(action) = crate::keys::action_for(winit::keyboard::KeyCode::Semicolon, false)
+        else {
+            panic!("; should do something")
+        };
+        play(&mut app, action);
+        assert_eq!(app.params.monitors[1].seed, Seed::LAMP);
     }
 
     #[test]
