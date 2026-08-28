@@ -288,9 +288,9 @@ const COMMANDS: &[Command] = &[
         "cover the display, or stop",
         "fullscreen",
     ),
-    // Enter, and not the f12 beside f11 that it wants to be: the browser
-    // build is a real target and every browser swallows f12 for its
-    // debugger, which would leave the page's own legend naming a dead key.
+    // Enter, and not the f12 beside f11 that it wants to be: this table is
+    // printed as the web build's own legend, and every browser swallows f12
+    // for its debugger.
     cmd(
         KeyCode::Enter,
         "enter",

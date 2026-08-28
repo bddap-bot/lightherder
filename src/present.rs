@@ -37,10 +37,10 @@ impl Present {
     /// sampling transform and the seed spot both go to trouble to maintain.
     ///
     /// `solo` is one monitor on the whole target rather than the bank tiled
-    /// across it, which is that same tiling with one tile in it — the range
-    /// below is the whole of the difference. The overlay, when shown, rides
-    /// the same pass after the monitors: it is a caption over the picture,
-    /// not a second way of drawing one.
+    /// across it, which is [`tiles`] and nothing else: the same grid with
+    /// one tile in it. The overlay, when shown, rides the same pass after
+    /// the monitors: it is a caption over the picture, not a second way of
+    /// drawing one.
     ///
     /// The target is the texture rather than a view and a size, because a
     /// size that is not that texture's puts every viewport somewhere else
@@ -54,7 +54,7 @@ impl Present {
         solo: Option<usize>,
         overlay: Option<&crate::overlay::Overlay>,
     ) {
-        let tiles = solo.map_or(0..monitors.monitors(), |m| m..m + 1);
+        let tiles = tiles(monitors.monitors(), solo);
         let (cols, rows) = grid(tiles.len());
         let target_size = (target.width(), target.height());
         let cell = (target_size.0 / cols, target_size.1 / rows);
@@ -109,6 +109,13 @@ impl Present {
     }
 }
 
+/// The monitors the display draws, in the order they are tiled: the soloed
+/// one alone, or the whole bank.
+fn tiles(monitors: usize, solo: Option<usize>) -> std::ops::Range<usize> {
+    debug_assert!(solo.is_none_or(|m| m < monitors), "solo of {monitors}");
+    solo.map_or(0..monitors, |m| m..m + 1)
+}
+
 /// The centred `(x, y, width, height)` of aspect `aspect` inside `target`, or
 /// `None` when the target is too small to hold a viewport at all.
 fn fit(target: (u32, u32), aspect: f32) -> Option<(f32, f32, f32, f32)> {
@@ -123,7 +130,7 @@ fn fit(target: (u32, u32), aspect: f32) -> Option<(f32, f32, f32, f32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit, grid};
+    use super::{fit, grid, tiles};
 
     #[test]
     fn a_matching_target_is_filled_edge_to_edge() {
@@ -153,6 +160,18 @@ mod tests {
     fn a_collapsed_target_draws_nothing() {
         assert_eq!(fit((0, 0), 16.0 / 9.0), None);
         assert_eq!(fit((1, 1000), 16.0 / 9.0), None);
+    }
+
+    #[test]
+    fn a_solo_is_the_whole_tiling_with_one_tile() {
+        // The one test of the solo that needs no adapter: the two that watch
+        // the pixels both skip where there is no GPU, and a machine that
+        // cannot open one still has to fail a solo that shows the wrong
+        // monitor.
+        assert_eq!(tiles(4, Some(2)).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(grid(tiles(4, Some(2)).len()), (1, 1));
+        assert_eq!(tiles(4, None).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        assert_eq!(grid(tiles(4, None).len()), (2, 2));
     }
 
     #[test]
