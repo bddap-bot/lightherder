@@ -39,7 +39,7 @@ pub fn single() -> Params {
             look_inputs: Vec::new(),
         }],
         monitors: vec![Monitor {
-            seed: Seed::LAMP,
+            seed: Seed::BLOB,
             ..Default::default()
         }],
         inputs: Vec::new(),
@@ -97,11 +97,11 @@ pub fn crossed() -> Params {
         ],
         monitors: vec![
             Monitor {
-                seed: Seed::LAMP,
+                seed: Seed::BLOB,
                 ..Default::default()
             },
             Monitor {
-                seed: Seed::LAMP,
+                seed: Seed::BLOB,
                 ..Default::default()
             },
         ],
@@ -142,7 +142,7 @@ pub fn insanity() -> Params {
         cameras,
         monitors: (0..N)
             .map(|_| Monitor {
-                seed: Seed::LAMP,
+                seed: Seed::BLOB,
                 ..Default::default()
             })
             .collect(),
@@ -328,14 +328,17 @@ pub fn validate(params: &Params) -> Result<(), String> {
             }
         }
     }
-    // The lamp's brightness is no knob either — the seed became a union and
-    // the fader it had went with the level's last live control — so this is
-    // the only place a white blob's level is decided.
+    // A blob's brightness is not a knob either — nothing on the panel turns
+    // one — so this is the only place its level is decided. Zero is refused
+    // rather than loaded: a blob putting no light on the glass is what
+    // `camera` says, and two spellings of one rig is the ambiguity the union
+    // exists to delete — one the surface's lamp would then get wrong.
     for (i, monitor) in params.monitors.iter().enumerate() {
         if let Seed::WhiteBlob(brightness) = monitor.seed {
-            if !(0.0..=Seed::BRIGHTEST).contains(&brightness) {
+            if !(brightness > 0.0 && brightness <= Seed::BRIGHTEST) {
                 return Err(format!(
-                    "monitor {i}'s white blob is {brightness}; it runs 0 to {}",
+                    "monitor {i}'s white blob is {brightness}; it runs above 0 \
+                     to {}, and a blob of no light is \"camera\"",
                     Seed::BRIGHTEST
                 ));
             }
@@ -674,7 +677,7 @@ mod tests {
     fn the_external_preset_is_lit_by_its_input_and_nothing_else() {
         let p = external();
         assert_eq!(p.inputs.len(), 1);
-        assert_eq!(p.monitors[0].seed, Seed::Camera, "a lamp is still lit");
+        assert_eq!(p.monitors[0].seed, Seed::Camera, "a blob is still lit");
         // One camera in the loop, one on the input, and no camera doing both:
         // the injection level is that camera's gain, which is only true while
         // it sees nothing else.
@@ -704,7 +707,7 @@ mod tests {
         assert!(key.threshold > 0.0 && key.softness > 0.0);
         assert_eq!(key.tolerance, Key::TOLERANT);
         assert_eq!(p.cameras[0].key, Key::OFF);
-        // No lamp: every photon on the monitor walked in the lens.
+        // No blob: every photon on the monitor walked in the lens.
         assert_eq!(p.monitors[0].seed, Seed::Camera);
         // And no other preset keys anything, so the stage is additive.
         for (name, params) in presets() {
@@ -714,22 +717,35 @@ mod tests {
     }
 
     #[test]
-    fn a_white_blob_brighter_than_the_monitor_is_refused() {
-        // No knob turns this any more, so the load is the only place it is
-        // checked at all — and a lamp above display white is a level the
-        // amplifier's rail bends on the way in, which is nobody's choice.
-        let mut params = single();
-        params.monitors[0].seed = Seed::WhiteBlob(2.0);
+    fn a_white_blob_is_refused_outside_the_light_it_can_be() {
+        // No knob turns this, so the load is the only place it is checked at
+        // all. On the *second* monitor, because a walk that stops at the
+        // first is a check every one-monitor preset passes for free.
+        let mut params = crossed();
+        assert_eq!(params.monitors.len(), 2);
+        let blob = |params: &mut Params, brightness| {
+            params.monitors[1].seed = Seed::WhiteBlob(brightness);
+        };
+        blob(&mut params, 2.0);
         let why = validate(&params).unwrap_err();
-        assert!(why.contains("white blob") && why.contains('2'), "{why}");
+        assert!(
+            why.contains("monitor 1") && why.contains("white blob"),
+            "{why}"
+        );
         // A range check is the finiteness check, here as everywhere else: a
         // NaN written into a loop that feeds itself never leaves.
-        params.monitors[0].seed = Seed::WhiteBlob(f32::NAN);
+        blob(&mut params, f32::NAN);
         assert!(validate(&params).is_err());
-        params.monitors[0].seed = Seed::WhiteBlob(Seed::BRIGHTEST);
+        // The other end, and the whole point of the union: a blob of no
+        // light is the camera rig, and a file gets one spelling of it —
+        // the magic zero a level could not do without.
+        blob(&mut params, 0.0);
+        let why = validate(&params).unwrap_err();
+        assert!(why.contains("camera"), "{why}");
+        // And both rigs, said properly, load.
+        blob(&mut params, Seed::BRIGHTEST);
         validate(&params).unwrap();
-        // And the other rig has no level to be wrong about.
-        params.monitors[0].seed = Seed::Camera;
+        params.monitors[1].seed = Seed::Camera;
         validate(&params).unwrap();
     }
 

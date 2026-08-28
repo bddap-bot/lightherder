@@ -965,16 +965,16 @@ mod tests {
             return;
         };
         app.focus_monitor(1);
-        assert_eq!(app.params.monitors[1].seed, Seed::LAMP);
+        assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
 
         play(&mut app, Action::Seed);
         assert_eq!(app.params.monitors[1].seed, Seed::Camera);
-        assert_eq!(app.params.monitors[0].seed, Seed::LAMP, "both went");
+        assert_eq!(app.params.monitors[0].seed, Seed::BLOB, "both went");
         // What the panel reads, which is the focused monitor's and follows
         // the focus rather than the press.
         assert_eq!(app.seed(), Seed::Camera);
         app.focus_monitor(0);
-        assert_eq!(app.seed(), Seed::LAMP);
+        assert_eq!(app.seed(), Seed::BLOB);
 
         // And back, on the key a hand actually presses.
         app.focus_monitor(1);
@@ -983,7 +983,7 @@ mod tests {
             panic!("; should do something")
         };
         play(&mut app, action);
-        assert_eq!(app.params.monitors[1].seed, Seed::LAMP);
+        assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
     }
 
     #[test]

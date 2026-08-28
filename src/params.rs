@@ -224,10 +224,11 @@ pub struct Camera {
     /// what it looks at.
     #[serde(default = "Framing::identity")]
     pub framing: Framing,
-    /// Per-channel gain applied to everything this camera sees. With the
-    /// no lamp on the monitor, an effective per-monitor gain below 1.0 dies
-    /// out and above 1.0 blooms; with one lit the loop settles instead,
-    /// brighter the closer to 1.0. The channels differ to colour the trails.
+    /// Per-channel gain applied to everything this camera sees. On a monitor
+    /// seeded by its cameras, an effective per-monitor gain below 1.0 dies
+    /// out and above 1.0 blooms; with a blob on the glass the loop settles
+    /// instead, brighter the closer to 1.0. The channels differ to colour
+    /// the trails.
     #[serde(default = "unity_gain")]
     pub gain: [f32; 3],
     /// What this path does to the light besides scale it.
@@ -292,19 +293,22 @@ fn identity_graph() -> Params {
 /// What lights one monitor from outside the loop it is already in.
 ///
 /// A sum type and not a level with an off value, because the two are
-/// different rigs rather than two settings of one: a lamp on the glass is
+/// different rigs rather than two settings of one: a blob on the glass is
 /// light *entering* the graph, and a monitor without one is lit by whatever
-/// the switcher routes onto it. As a float those two states were told apart
-/// by a magic zero that nothing named, and the second one's level was
-/// already being played somewhere else — on the gain of the camera doing the
-/// lighting — which is why this costs the surface a button and not a fader.
+/// the switcher routes onto it. A level can only tell those apart by a magic
+/// zero nothing names — which is why `config::validate` refuses a blob of no
+/// light rather than letting it be the camera rig spelled a second way. And
+/// the second rig's level is already played elsewhere, on the gain of the
+/// camera doing the lighting, which is why this costs the surface a button
+/// and not a fader.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum Seed {
-    /// A soft white spot on the glass at this brightness — the classic way
-    /// to start a loop, since one with gain below 1.0 and nothing entering
-    /// it decays to black. Where the spot sits and how wide it is belong to
-    /// [`crate::feedback`], which is the only place that draws it.
+    /// A soft white spot on the glass at this brightness, which is above
+    /// zero: the classic way to start a loop, since one with gain below 1.0
+    /// and nothing entering it decays to black. Where the blob sits and how
+    /// wide it is belong to [`crate::feedback`], the only place that draws
+    /// it.
     WhiteBlob(f32),
     /// No light of its own: this monitor's loop is fed by the cameras the
     /// switcher routes onto it, and their gain is its level. What every
@@ -313,13 +317,13 @@ pub enum Seed {
 }
 
 impl Seed {
-    /// A lamp at the brightness every preset that has one runs at — the one
+    /// A blob at the brightness every preset that has one runs at — the one
     /// copy of that number, and what the toggle brings back. So a config
     /// that named its own level does not get it back by pressing the button
     /// twice: a toggle is not an undo, a recall is.
-    pub const LAMP: Seed = Seed::WhiteBlob(0.10);
+    pub const BLOB: Seed = Seed::WhiteBlob(0.10);
 
-    /// The brightest a lamp may be: display white. A spot brighter than the
+    /// The brightest a blob may be: display white. A spot brighter than the
     /// monitor can show is one the amplifier's rail bends on the way in,
     /// which is a level nobody chose.
     pub const BRIGHTEST: f32 = 1.0;
@@ -328,7 +332,7 @@ impl Seed {
     pub const fn toggled(self) -> Seed {
         match self {
             Seed::WhiteBlob(_) => Seed::Camera,
-            Seed::Camera => Seed::LAMP,
+            Seed::Camera => Seed::BLOB,
         }
     }
 
@@ -340,6 +344,13 @@ impl Seed {
             Seed::WhiteBlob(brightness) => brightness,
             Seed::Camera => 0.0,
         }
+    }
+
+    /// Whether this monitor puts light of its own on the glass — the one bit
+    /// the surface's lamp reads. Off the level rather than off the variant,
+    /// so a lamp cannot claim a blob the shader is not drawing.
+    pub fn lit(self) -> bool {
+        self.brightness() > 0.0
     }
 }
 
@@ -889,8 +900,8 @@ impl Params {
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
              bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  \
              key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
-             mon {}/{}: seed {}  hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             gamma {:.3}  headroom {:.3}\n\
+             mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
+             gamma {:.3}  headroom {:.3}  seed {}\n\
              route {:.3}: how much of cam {} mon {} shows",
             focus.camera + 1,
             self.cameras.len(),
@@ -911,13 +922,13 @@ impl Params {
             cam.key.tolerance,
             focus.monitor + 1,
             self.monitors.len(),
-            mon.seed,
             mon.colour.hue,
             mon.colour.saturation,
             mon.colour.brightness,
             mon.colour.contrast,
             mon.colour.gamma,
             mon.headroom,
+            mon.seed,
             self.routing[focus.monitor][focus.camera],
             focus.camera + 1,
             focus.monitor + 1,
@@ -1108,16 +1119,19 @@ mod tests {
 
     #[test]
     fn a_seed_is_one_of_two_rigs_and_the_button_swaps_them() {
-        assert_eq!(Seed::Camera.toggled(), Seed::LAMP);
-        assert_eq!(Seed::LAMP.toggled(), Seed::Camera);
+        assert_eq!(Seed::Camera.toggled(), Seed::BLOB);
+        assert_eq!(Seed::BLOB.toggled(), Seed::Camera);
         // A level a config named is not what comes back. There is nowhere to
         // remember it that is not a third state, and a state the instrument
         // holds without showing is the thing this type exists to stop.
         assert_eq!(Seed::WhiteBlob(0.42).toggled(), Seed::Camera);
-        assert_eq!(Seed::WhiteBlob(0.42).toggled().toggled(), Seed::LAMP);
-        // Only a lamp puts light on the glass, and it is the light it says.
+        assert_eq!(Seed::WhiteBlob(0.42).toggled().toggled(), Seed::BLOB);
+        // Only a blob puts light on the glass, and it is the light it says —
+        // which is what the surface's lamp reads, rather than the variant.
         assert_eq!(Seed::WhiteBlob(0.42).brightness(), 0.42);
         assert_eq!(Seed::Camera.brightness(), 0.0);
+        assert!(Seed::WhiteBlob(0.42).lit() && !Seed::Camera.lit());
+        assert!(!Seed::WhiteBlob(0.0).lit(), "a blob of nothing is not lit");
     }
 
     #[test]
@@ -1125,7 +1139,7 @@ mod tests {
         // A preset slot is a config file, so the two variants have to
         // survive the round trip apart — a union that serialised to one
         // shape would recall the wrong rig.
-        for seed in [Seed::Camera, Seed::LAMP, Seed::WhiteBlob(0.42)] {
+        for seed in [Seed::Camera, Seed::BLOB, Seed::WhiteBlob(0.42)] {
             let mut params = Params::default();
             params.monitors[0].seed = seed;
             let text = toml::to_string(&params).unwrap();
@@ -1135,9 +1149,9 @@ mod tests {
 
     #[test]
     fn the_readout_names_the_seed_s_rig_and_not_a_level() {
-        // The log line is the instrument's whole readout, and "0.000" is
-        // exactly the reading that used to leave a performer wondering
-        // whether the lamp was off or the monitor was on the other rig.
+        // The log line is the instrument's whole readout, and a level alone
+        // leaves a performer working out from "0.000" which of the two rigs
+        // the monitor is on.
         let mut params = p();
         assert!(
             params

@@ -220,7 +220,7 @@ Out of the box, with no configuration:
 
 | control | is |
 |---|---|
-| fader 1 | nothing: the seed's fader, freed when the seed became a union |
+| fader 1 | nothing: a control a `midi.toml` can claim |
 | faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
 | S 1–4 | focus camera 1–4 |
@@ -233,9 +233,9 @@ Out of the box, with no configuration:
 | ▶ play | the focused monitor's seed: white blob or camera; lit while it is the blob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | |◀ track prev | fine mode, on or off |
-| ▶▶ forward, ▶ play, ● record, ▶| track next | nothing |
+| ▶▶ forward, ● record, ▶| track next | nothing |
 
-So the left hand works one monitor, the right hand one camera, and the top
+So the left hand works one monitor, the right hand one camera, and the last
 fader is the switcher crosspoint joining the two the hands are on. The Solo
 row points the knobs at a node, and splits down the middle the way the two
 hands do: the left four name the camera the rotaries turn, the right four the
@@ -284,7 +284,7 @@ a second camera on the monitor at full and take a `crossed` row to 2.0,
 where zero loses that camera visibly and the fader puts it straight back.
 
 Named by having been turned rather than by a control of its own, because
-there are two dozen knobs and no display to point at one with, and the knob a
+there are two dozen of them and no display to point at one with, and the knob a
 hand wants back is the one that hand was just on. Which stops being true the
 moment the panel moves without the hands, so a recall, a whole-panel reset
 and a change of focus all clear the name along with the faders' grips —

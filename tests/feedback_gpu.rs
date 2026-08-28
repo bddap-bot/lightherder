@@ -182,7 +182,7 @@ impl Harness {
     /// The three channels where the seed lands, which is the one place the
     /// colour tests look.
     fn spot(&self) -> [f32; 3] {
-        let seed = self.feedback.seed_uv();
+        let seed = self.feedback.blob_uv();
         self.read().rgb_at(seed[0], seed[1])
     }
 
@@ -769,7 +769,7 @@ fn the_colour_stage_is_inside_the_loop() {
 #[test]
 fn the_seed_lights_the_spot_it_says_it_does() {
     let Some(mut h) = square() else { return };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     h.step(&seeded());
     let img = h.read();
     assert!(
@@ -787,7 +787,7 @@ fn the_seed_lights_the_spot_it_says_it_does() {
 #[test]
 fn the_image_survives_the_seed_being_switched_off() {
     let Some(mut h) = square() else { return };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     h.step(&seeded());
     let mut previous = h.read().at(seed[0], seed[1]);
 
@@ -809,7 +809,7 @@ fn the_image_survives_the_seed_being_switched_off() {
 #[test]
 fn zero_gain_ends_the_loop_in_one_pass() {
     let Some(mut h) = square() else { return };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     h.step(&seeded());
     assert!(h.read().at(seed[0], seed[1]) > 200.0);
 
@@ -833,7 +833,7 @@ fn panning_moves_the_image_the_way_the_knobs_say() {
         ([0.0, -0.15], [0.0, 0.15], "down"),
     ] {
         let Some(mut h) = square() else { return };
-        let seed = h.feedback.seed_uv();
+        let seed = h.feedback.blob_uv();
         h.step(&seeded());
 
         let params = Single {
@@ -899,7 +899,7 @@ fn the_seed_is_round_on_a_wide_monitor() {
     let Some(mut h) = harness((SIZE * 4, SIZE * 2), (SIZE * 4, SIZE * 2)) else {
         return;
     };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     h.step(&Single {
         loop_gain: [0.0; 3],
         ..seeded()
@@ -954,7 +954,7 @@ fn blanking_the_monitor_puts_out_everything_on_it() {
 #[test]
 fn the_gain_is_applied_once_per_pass() {
     let Some(mut h) = square() else { return };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     h.step(&seeded());
     let mut previous = h.read().at(seed[0], seed[1]);
 
@@ -1044,7 +1044,7 @@ fn a_window_of_the_wrong_shape_gets_bars_rather_than_a_stretch() {
 
     // The seed sits a quarter of the monitor's height right of its centre,
     // which lands at that fraction of the letterboxed rectangle.
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     let expected = 0.375 + seed[0] / 4.0;
     let found = img.brightest_uv();
     assert!(
@@ -1055,7 +1055,7 @@ fn a_window_of_the_wrong_shape_gets_bars_rather_than_a_stretch() {
 
 #[test]
 fn the_seed_sits_where_the_convention_says_it_does() {
-    // An oracle that does not ask seed_uv where the seed is: the spot lands a
+    // An oracle that does not ask blob_uv where the blob is: the spot lands a
     // quarter of the monitor's HEIGHT right of centre, which on a 2:1 monitor
     // is an eighth of its width.
     let Some(mut h) = harness((SIZE * 4, SIZE * 2), (SIZE * 4, SIZE * 2)) else {
@@ -1132,7 +1132,7 @@ fn the_routing_matrix_sends_each_camera_across() {
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
     };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     let at = |img: &Image, m: usize| {
         let (u, v) = tile(2, m, seed[0], seed[1]);
         img.at(u, v)
@@ -1200,7 +1200,7 @@ fn mix_weights_scale_each_camera_s_contribution() {
         routing: vec![vec![0.0, 0.0]],
     };
     h.step_graph(&p);
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     let base = h.read().at(seed[0], seed[1]);
     assert!(base > 200.0, "the seed never lit: {base}");
 
@@ -1240,7 +1240,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
     };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     h.step_graph(&p);
     let (u, v) = tile(2, 1, seed[0], seed[1]);
     let bright = h.read().at(u, v);
@@ -1284,7 +1284,7 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
     p.monitors[0].seed = Seed::Camera;
     h.step_graph(&p);
 
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     let img = h.read();
     for m in 0..4 {
         let (u, v) = tile(4, m, seed[0], seed[1]);
@@ -1398,7 +1398,7 @@ fn the_lens_spreads_the_light_without_making_any() {
     // Scatter is a redistribution. Anything that adds light instead is a
     // term the loop multiplies, and a few passes later it owns the monitor.
     let Some(mut h) = square() else { return };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     let before = still_spot(&mut h);
     let (peak, width, light) = (
         before.at(seed[0], seed[1]),
@@ -1443,7 +1443,7 @@ fn the_bleed_smears_the_colour_and_leaves_the_luma_where_it_was() {
     // the whole lit spot — the colour crawl out in the dark is the clipping,
     // and is the artefact rather than a failure of the claim.
     let Some(mut h) = square() else { return };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     let before_spot = tinted(&mut h);
     assert!(spread(before_spot) > 50.0, "no colour to smear");
     let before = h.read();
@@ -1524,7 +1524,7 @@ fn the_amplifier_bends_onto_its_headroom_instead_of_clipping() {
     // checked against the wide-open reading it is derived from, so this
     // measures the shape and not a number someone typed twice.
     let Some(mut h) = square() else { return };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     let drive = |h: &mut Harness, headroom: f32| {
         h.step(&Single {
             seed: Seed::WhiteBlob(1.0),
@@ -1642,7 +1642,7 @@ fn the_halo_is_round_on_a_wide_monitor() {
     let Some(mut h) = harness((SIZE * 4, SIZE * 2), (SIZE * 4, SIZE * 2)) else {
         return;
     };
-    let seed = h.feedback.seed_uv();
+    let seed = h.feedback.blob_uv();
     let before = still_spot(&mut h);
     let (was_across, was_down) = (
         before.half_extent(seed, true),

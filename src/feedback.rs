@@ -21,13 +21,15 @@ use crate::params::Params;
 /// bands after a few dozen passes.
 const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// Radius of the seed spot, in screen units where the monitor is 1.0 tall.
-const SEED_RADIUS: f32 = 0.06;
+/// Radius of the white blob, in screen units where the monitor is 1.0 tall.
+/// The blob and not the seed: a camera-seeded monitor has a seed and no
+/// spot, so the geometry belongs to the one variant that draws one.
+const BLOB_RADIUS: f32 = 0.06;
 
-/// Where the seed sits, in the same screen units. Off-centre on purpose: a
+/// Where the blob sits, in the same screen units. Off-centre on purpose: a
 /// radially symmetric spot at the centre is a fixed point of rotation, so a
-/// centred seed would make the rotation knob do nothing visible.
-const SEED_CENTRE: [f32; 2] = [0.25, 0.0];
+/// centred one would make the rotation knob do nothing visible.
+const BLOB_CENTRE: [f32; 2] = [0.25, 0.0];
 
 /// Most taps one monitor can be fed by. Sized for comfort: all-to-all with
 /// eight cameras is eight taps, so this leaves room for every camera to look
@@ -166,12 +168,12 @@ struct Tap {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    /// xy: seed centre in uv. zw: seed radii in uv, already aspect-corrected.
-    seed: [f32; 4],
+    /// xy: blob centre in uv. zw: blob radii in uv, already aspect-corrected.
+    blob: [f32; 4],
     /// Columns, each padded to 16 bytes: that is what a WGSL `mat3x3<f32>`
     /// is, and it is column-major where [`Colour::chroma_matrix`] is not.
     chroma: [[f32; 4]; 3],
-    /// x: brightness. y: contrast. z: gamma. w: seed brightness.
+    /// x: brightness. y: contrast. z: gamma. w: the white blob's brightness.
     levels: [f32; 4],
     /// x: tap count. y: this monitor's own layer, for the present pass.
     info: [f32; 4],
@@ -390,11 +392,11 @@ impl Feedback {
         }
     }
 
-    /// Where the seed spot lands, in uv — the same spot on every monitor.
-    /// The loop is driven from here, so anything measuring the instrument
-    /// needs to know it.
-    pub fn seed_uv(&self) -> [f32; 2] {
-        crate::affine::screen_to_uv(self.aspect()).apply(SEED_CENTRE)
+    /// Where the white blob lands, in uv — the same spot on every monitor
+    /// that has one. A blob-seeded loop is driven from here, so anything
+    /// measuring the instrument needs to know it.
+    pub fn blob_uv(&self) -> [f32; 2] {
+        crate::affine::screen_to_uv(self.aspect()).apply(BLOB_CENTRE)
     }
 
     pub(crate) fn aspect(&self) -> f32 {
@@ -526,7 +528,7 @@ impl Feedback {
             panic!("unvalidated params reached the GPU: {why}");
         }
         let aspect = self.aspect();
-        let seed = self.seed_uv();
+        let blob = self.blob_uv();
 
         // Framings move every frame; the affine per camera is the same for
         // all of its taps, so it is worked out once.
@@ -602,9 +604,9 @@ impl Feedback {
 
             let chroma = monitor.colour.chroma_matrix();
             let uniforms = Uniforms {
-                // The seed is round on screen, so its uv radius is narrower
+                // The blob is round on screen, so its uv radius is narrower
                 // on the axis the monitor is wider on.
-                seed: [seed[0], seed[1], SEED_RADIUS / aspect, SEED_RADIUS],
+                blob: [blob[0], blob[1], BLOB_RADIUS / aspect, BLOB_RADIUS],
                 chroma: std::array::from_fn(|col| {
                     [chroma[0][col], chroma[1][col], chroma[2][col], 0.0]
                 }),

@@ -115,11 +115,9 @@ impl Map {
     /// works one monitor, the right hand one camera, and the last fader is the
     /// switcher crosspoint that joins the two the hands are on.
     ///
-    /// Fader 1 is bound to nothing. It carried the seed's level until the
-    /// seed became a union of two rigs that a level cannot say — the button
-    /// on PLAY says it instead — and this map does not spend the freed
-    /// control rather than spending it badly: an unbound fader is a control
-    /// a `midi.toml` can claim, and one nobody's hand throws by accident.
+    /// Fader 1 is bound to nothing. There is nothing left worth throwing at
+    /// it: an unbound fader is a control a `midi.toml` can claim, and one
+    /// nobody's hand throws by accident.
     ///
     /// Eight knobs are deliberately not here — the surface has fifteen
     /// bound controls and they are taken. The three per-channel gain offsets
@@ -452,9 +450,10 @@ fn nano_buttons() -> Vec<Button> {
         button(46, "`"),
         // The seed, on play: what a monitor's loop starts from, on the
         // button whose silkscreen says start. It lights while the focused
-        // monitor has its white blob, so the panel says which of the two
-        // rigs that monitor is — a toggle with no indicator on a fullscreen
-        // display being the footgun fine mode already made the case about.
+        // monitor has a blob on the glass, so the panel says which of the
+        // two rigs that monitor is — a toggle with no indicator on a
+        // fullscreen display being the footgun fine mode makes the case
+        // about.
         button(41, ";"),
         // Fine mode, up on the track pair with nothing else near it: a latch
         // left on by a slip is worse than one that takes a reach to find,
@@ -831,7 +830,7 @@ impl Midi {
         let mut want = self.lamp_of(Action::FocusCamera(focus.camera))
             | self.lamp_of(Action::FocusMonitor(focus.monitor))
             | when(self.fine, Action::Fine)
-            | when(matches!(seed, Seed::WhiteBlob(_)), Action::Seed)
+            | when(seed.lit(), Action::Seed)
             | when(overlay, Action::Overlay);
         for (button, held) in self.map.button.iter().zip(&self.held) {
             if *held {
@@ -1427,22 +1426,27 @@ mod tests {
         let focus = at(0, 0);
         let dark = midi.wanted(focus, Seed::Camera, false);
         assert_eq!(
-            midi.wanted(focus, Seed::LAMP, false) & !dark,
+            midi.wanted(focus, Seed::BLOB, false) & !dark,
             crate::lamps::lamp(41),
             "the seed is play on the factory map"
         );
-        // Any lamp, not just the one the toggle brings back: a config may
+        // A blob of no light is not a blob. No config can load one — the
+        // load refuses it precisely so the two rigs have one spelling each —
+        // but the type can hold one, and a lamp reading the *variant* rather
+        // than the light would light PLAY over a monitor drawing nothing.
+        assert_eq!(midi.wanted(focus, Seed::WhiteBlob(0.0), false), dark);
+        // Any blob, not just the one the toggle brings back: a config may
         // name its own level and the button is still what it is on.
         assert_eq!(
             midi.wanted(focus, Seed::WhiteBlob(0.42), false),
-            midi.wanted(focus, Seed::LAMP, false)
+            midi.wanted(focus, Seed::BLOB, false)
         );
         // And a map that binds the seed nowhere lights nothing extra.
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| b.cc != 41);
         let midi = Midi::new(map).unwrap();
         let dark = midi.wanted(focus, Seed::Camera, false);
-        assert_eq!(midi.wanted(focus, Seed::LAMP, false), dark);
+        assert_eq!(midi.wanted(focus, Seed::BLOB, false), dark);
     }
 
     #[test]
@@ -1613,9 +1617,8 @@ mod tests {
                 button(58, "tab"),
             ]
         );
-        // The one fader the map leaves alone: the seed's, freed by the seed
-        // becoming a union. A knob quietly wired onto it later is a knob a
-        // hand finds by throwing it.
+        // The one fader the map leaves alone. A knob quietly wired onto it
+        // later is a knob a hand finds by throwing it.
         assert!(!map.fader.iter().any(|f| f.cc == 0));
         // And the three the factory map leaves alone, record above all: a
         // button bound here is a button a blind slip can find.

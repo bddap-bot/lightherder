@@ -26,12 +26,12 @@ struct Tap {
 };
 
 struct Uniforms {
-    // xy: seed centre in uv. zw: seed radii in uv, already aspect-corrected.
-    seed: vec4<f32>,
+    // xy: blob centre in uv. zw: blob radii in uv, already aspect-corrected.
+    blob: vec4<f32>,
     // Decodes RGB to luma and chroma, turns the chroma by hue and scales it
     // by saturation, and encodes back. See params::Colour::chroma_matrix.
     chroma: mat3x3<f32>,
-    // x: brightness. y: contrast. z: phosphor gamma. w: seed brightness.
+    // x: brightness. y: contrast. z: phosphor gamma. w: the blob's brightness.
     levels: vec4<f32>,
     // x: tap count. y: this monitor's own layer, for fs_present.
     info: vec4<f32>,
@@ -190,12 +190,12 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
     // is luma noise, and the chroma knobs do nothing to grey.
     let grain = u.analog.x * grain_at(vec2<u32>(in.pos.xy), u32(u.analog.z));
 
-    let d = length((in.uv - u.seed.xy) / u.seed.zw);
-    let seed = u.levels.a * exp(-d * d);
+    let d = length((in.uv - u.blob.xy) / u.blob.zw);
+    let blob = u.levels.a * exp(-d * d);
 
     // The knobs are on the monitor, not on the cameras, so they colour
-    // everything the monitor displays — the seed spot included.
-    return vec4<f32>(front_panel(fed_back + vec3<f32>(seed + grain)), 1.0);
+    // everything the monitor displays — the white blob included.
+    return vec4<f32>(front_panel(fed_back + vec3<f32>(blob + grain)), 1.0);
 }
 
 @fragment

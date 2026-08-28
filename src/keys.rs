@@ -29,7 +29,7 @@ pub enum Action {
     Reset,
     /// Put the last knob that moved back to its identity, and nothing else.
     /// Named by having been turned rather than by a control of its own: the
-    /// instrument has two dozen knobs and no display to point at one with,
+    /// instrument has two dozen of them and no display to point at one with,
     /// and the knob a hand wants back is the knob that hand was just on.
     ResetLastKnob,
     /// Turn the surface's fine mode on or off. A latch rather than a held
@@ -44,8 +44,7 @@ pub enum Action {
     /// Swap the focused monitor's seed for the other kind: a white blob on
     /// the glass, or the cameras the switcher routes onto it. A button and
     /// not a knob, because the two are not two settings of one thing — and
-    /// a camera seed's level is already played by that camera's gain, which
-    /// is the fader this bought back.
+    /// a camera seed's level is already played by that camera's gain.
     Seed,
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
@@ -210,9 +209,9 @@ const COMMANDS: &[Command] = &[
         "reset every knob",
         "reset",
     ),
-    // On the lower of the two keys the seed fader's level used to turn, so a
-    // hand that knew where the seed was still finds it. Its partner, "'", is
-    // free.
+    // ";" because the seed has always been under this finger, and the seed
+    // is what it still is. One key rather than a pair: there is no level
+    // between the two rigs for a second one to walk through.
     cmd(
         KeyCode::Semicolon,
         ";",
