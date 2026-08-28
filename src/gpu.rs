@@ -7,6 +7,11 @@
 
 /// A GPU, opened. `instance` is kept because surfaces are created from it and
 /// a surface may not outlive it.
+///
+/// `Clone` because every field is a reference-counted handle: a clone is
+/// another name for the same device rather than a second one, which is what
+/// lets a whole test binary share the one it opened.
+#[derive(Clone)]
 pub struct Gpu {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,

@@ -797,14 +797,23 @@ mod tests {
     /// state the bank rebuild has to be right about. `None` when the machine
     /// has no adapter, said on stderr the way tests/feedback_gpu.rs skips.
     fn playing(params: Params, slots: std::path::PathBuf) -> Option<App> {
-        let gpu = match pollster::block_on(Gpu::open(None, "app test")) {
-            Ok(gpu) => gpu,
-            Err(why) => {
-                use std::io::Write;
-                writeln!(std::io::stderr(), "skipping an app test: {why}").unwrap();
-                return None;
-            }
-        };
+        // One device for the whole module, like tests/feedback_gpu.rs keeps
+        // one: a test apiece opened its own, and a headless Vulkan stack
+        // does not survive that many being created and dropped at once —
+        // it takes the binary down with a SIGSEGV once there are enough of
+        // them. None of these tests renders, so there is nothing for them
+        // to share wrongly.
+        static GPU: std::sync::OnceLock<Option<Gpu>> = std::sync::OnceLock::new();
+        let gpu = GPU
+            .get_or_init(|| match pollster::block_on(Gpu::open(None, "app test")) {
+                Ok(gpu) => Some(gpu),
+                Err(why) => {
+                    use std::io::Write;
+                    writeln!(std::io::stderr(), "skipping an app test: {why}").unwrap();
+                    None
+                }
+            })
+            .clone()?;
         let resolution = (64, 64);
         let sources = params
             .inputs
