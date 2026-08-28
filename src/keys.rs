@@ -52,9 +52,9 @@ pub enum Action {
     Seed,
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
-    /// Move the tempo — passes a second, which is the speed the piece plays
-    /// at — one press. Which way and no more: how far a press moves it is
-    /// [`crate::tempo`]'s, along with the range it moves inside.
+    /// Which way a press moves the tempo — passes a second, the speed the
+    /// piece plays at. How far, and the range it moves inside, are
+    /// [`crate::tempo`]'s.
     Tempo(crate::tempo::Step),
     /// Cover the display, or stop covering it.
     Fullscreen,
@@ -260,10 +260,9 @@ const COMMANDS: &[Command] = &[
         "fine",
     ),
     // The tempo, on the two digits the gain channels and the send left
-    // between them. It is the one control that acts on the whole piece
-    // rather than on a node of the graph, and the digits are where the other
-    // levels already are — a hand looking for "faster" finds it by counting
-    // along the row.
+    // between them: the one control that acts on the whole piece rather than
+    // on a node of the graph, and the digits are where the other levels
+    // already are.
     cmd(
         KeyCode::Digit7,
         "7",

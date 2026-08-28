@@ -461,7 +461,7 @@ nix-shell --run "cargo run --release -- --windowed crossed"
 | --- | --- |
 | `--windowed` | a window rather than the whole display |
 | `--resolution 3840x2160` | how big every monitor is (default 1920x1080) |
-| `--rate 30` | passes a second, i.e. the speed the piece plays at (default 60, 1 to 240) |
+| `--rate 30` | passes a second, the speed the piece plays at (default 60, 1 to 240) |
 | `--cheatsheet` | the controls — keys and surface both — and exit |
 | `--bench` | what a frame costs, off screen, and exit |
 
@@ -511,23 +511,25 @@ integrated adapter instead.
 **The pass rate is a tempo, not a smoothness setting.** The loop evolves one
 pass at a time — the camera pulls back 0.6% and turns 0.05 rad per *pass*, and
 the trail decays per pass — so a spiral drawn in a second at sixty is drawn in
-a twenty-fifth of one at fifteen hundred. That makes the rate a control rather
-than a property of the machine, and `7` and `8` move it while the piece plays;
-`--rate` starts it somewhere other than sixty.
+a quarter of one at 240, the top of the range. That makes the rate a control
+rather than a property of the machine: `7` and `8` move it while the piece
+plays, and `--rate` starts it somewhere other than sixty.
 
 **The display keeps its own clock, and it is vsync.** A pass is not a present.
 Passes fall due on the wall clock at the tempo; the picture goes out on every
 vertical blank, showing wherever the piece has got to — several passes at
 once when the tempo is above the grid, the same bank twice when it is below.
-The present is also what paces the loop, since Fifo waits for the blank, so
-there is no timer in the ordinary path at all.
+The present is also what paces the loop — Fifo waits for the blank, and the
+frame that went out asks for the next one — so the tempo's own deadline is
+armed only when frames stop landing, behind a covered window or a surface gone
+stale. The piece goes on playing there without a picture; it is not the
+picture.
 
-The two were one number until #16, which made the swapchain a floor under the
-tempo: a compositor handing out fewer frames than sixty played the piece slow,
-and the only way out looked like Immediate and a torn frame. A torn frame is a
-wrong frame in a piece whose look is the point, so the present mode stays
-pinned to Fifo and the tempo no longer depends on it — a path granting 41
-frames a second runs the sixty passes anyway, one or two to a present.
+A torn frame is a wrong frame in a piece whose look is the point, so the
+present mode is pinned to Fifo rather than taken from the adapter, which
+offers something faster. Keeping the tempo out of the swapchain is what makes
+that affordable: a display path granting 41 frames a second runs the sixty
+passes anyway, one or two to a present.
 
 The log prints both clocks once a second — `sim 60 Hz of 60, present 72 Hz` —
 and deployed there is no terminal in front of the instrument, so that line is
@@ -565,9 +567,9 @@ built.
 
 ### What a frame costs
 
-On a display a pass has a whole beat to fit inside, so a rate line at the
-tempo says only that it fit — not by how much. `--bench` runs
-the same passes with nothing pacing them: 600 frames after a warm-up, the graph
+On a display a pass has a whole beat to fit inside, so a rate line at the tempo
+says only that it fit — not by how much. `--bench` runs the same passes with
+nothing pacing them: 600 frames after a warm-up, the graph
 stepped and presented into a target the size of the display.
 
 | graph | 1920x1080 | 3840x2160 |
@@ -635,7 +637,7 @@ below assumes a US layout.
 | `;` | the focused monitor's seed: a white blob or dark glass |
 | backspace | reset the last knob turned, to its identity |
 | tab | fine mode for the surface's knobs, on or off |
-| `7` `8` | the tempo: passes a second, four presses to halve or double it |
+| `7` `8` | the tempo: slower / faster, four presses to halve or double it |
 | `f11` | cover the display, or stop covering it |
 | `` ` `` | the controls overlay, on or off |
 | esc | quit |

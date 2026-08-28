@@ -91,6 +91,11 @@ pub struct App {
     /// The tempo, which is where the rate of the piece is kept — not in the
     /// display, whose grid is the compositor's to invent.
     tempo: Tempo,
+    /// Whether the last frame went out, and so whether there is a present
+    /// left to pace the loop. One pacer at a time: while frames are landing
+    /// the swapchain's blank is the clock, and only when they stop is the
+    /// tempo's deadline armed to keep the piece going without one.
+    paced: bool,
     live: Option<Live>,
     /// Where [`App::give_up`] parks a refusal, since nothing may return out
     /// of `resumed`. Not on the web, which has no `start` left waiting.
@@ -194,6 +199,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             presents: 0,
             metered: Instant::now(),
             tempo: Tempo::new(cli.rate),
+            paced: false,
             live: None,
             #[cfg(not(target_arch = "wasm32"))]
             failed: None,
@@ -660,7 +666,10 @@ impl App {
             // rate line a second later is the only other place it appears.
             Action::Tempo(step) => {
                 self.tempo.step(step, Instant::now());
-                log::info!("sim {:.0} Hz", self.tempo.rate());
+                // A tenth, because a press at the bottom of the range moves
+                // the rate by less than a whole pass a second and a readout
+                // that did not move would read as a dead key.
+                log::info!("sim {:.1} Hz", self.tempo.rate());
             }
             Action::Fullscreen => {
                 self.fullscreen = !self.fullscreen;
@@ -716,11 +725,9 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    /// The tempo's backstop wake-up. A frame that went out asks for the next
-    /// one itself, so ordinarily the swapchain paces the loop and this never
-    /// fires; it is here for the window that has no blank to wait for —
-    /// minimised, or a surface gone stale — where the piece would otherwise
-    /// stop rather than go on playing behind it.
+    /// The tempo's wake-up, for when no frame is going out to ask for the
+    /// next one: a surface gone stale, or a window covered up. The piece goes
+    /// on playing without a picture — it is not the picture.
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         if let StartCause::ResumeTimeReached { .. } = cause {
             if let Some(live) = self.live.as_ref() {
@@ -729,13 +736,15 @@ impl ApplicationHandler for App {
         }
     }
 
-    /// Waking early — a key, a fader, a resize — leaves the deadline where
-    /// it was; with no window there is no pass to be on time for, and a
-    /// deadline already gone by would spin the loop rather than wait in it.
+    /// The deadline is armed only when the presents that would otherwise pace
+    /// the loop have stopped. Arming it under a live redraw chain would be a
+    /// second clock on top of the swapchain's: on the web, where the chain is
+    /// `requestAnimationFrame` and the deadline is a zero-delay task, that is
+    /// a spin between one frame and the next rather than a wait.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         event_loop.set_control_flow(match self.live {
-            Some(_) => ControlFlow::WaitUntil(self.tempo.next()),
-            None => ControlFlow::Wait,
+            Some(_) if !self.paced => ControlFlow::WaitUntil(self.tempo.due()),
+            _ => ControlFlow::Wait,
         });
     }
 
@@ -779,6 +788,19 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // A covered window is handed frames that wait on nothing, so the
+            // redraw chain would spin as fast as the loop can draw what
+            // nobody is looking at — and on the compositors that block
+            // instead, it would spend a second per frame inside the acquire
+            // and play the piece at the rate those timeouts came back at.
+            // Neither is a picture, so the tempo's deadline takes over until
+            // the window is uncovered and a frame can pace the loop again.
+            WindowEvent::Occluded(covered) => {
+                self.paced = false;
+                if let (false, Some(live)) = (covered, self.live.as_ref()) {
+                    live.window.request_redraw();
+                }
+            }
             WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
             WindowEvent::Resized(size) => {
                 if let Some(live) = self.live.as_mut() {
@@ -792,28 +814,19 @@ impl ApplicationHandler for App {
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
-                // What the tempo owes by now: several when the display hands
-                // out fewer frames than the piece has passes, none at all
-                // when the piece plays slower than the display. A pass *is*
-                // the tempo, so running one early would play the piece fast
-                // — but the frame goes out either way. The glass keeps the
-                // display's clock and not the tempo's, which is what was
-                // asked for (#16): the picture stays at vsync at whatever
-                // speed the piece is played, and an expose, a resize or the
-                // overlay is answered on the next blank rather than made to
-                // wait for a pass to fall due.
+                // Whatever the tempo owes, and then the frame either way: a
+                // pass is the piece's clock and the blank is the display's,
+                // so a beat that has not fallen due yet is no reason to leave
+                // an expose, a resize or the overlay unanswered.
                 let passes = self.tempo.take_due(Instant::now());
                 for _ in 0..passes {
                     live.pass(&self.gpu, &self.params, &mut self.sources);
                 }
                 let shown = live.show(&self.gpu, self.overlay_shown);
-                // The present is the pacer: under Fifo it waits for the
-                // vertical blank, so asking here for the next frame runs the
-                // loop at the display's rate with no timer in it. A present
-                // that never went out paces nothing, and that case falls
-                // through to the deadline in [`App::about_to_wait`] — which
-                // is what keeps the piece playing behind a minimised window,
-                // and what wakes the loop to try the surface again.
+                // Under Fifo the present waits for the blank, so a frame that
+                // went out is the one thing that can ask for the next at the
+                // display's rate. One that did not paces nothing.
+                self.paced = shown;
                 if shown {
                     live.window.request_redraw();
                 }
@@ -899,6 +912,7 @@ mod tests {
             presents: 0,
             metered: Instant::now(),
             tempo: Tempo::new(crate::tempo::DEFAULT_RATE),
+            paced: false,
             live: None,
             failed: None,
         })
