@@ -1669,9 +1669,9 @@ mod tests {
         // The one fader the map leaves alone. A knob quietly wired onto it
         // later is a knob a hand finds by throwing it.
         assert!(!map.fader.iter().any(|f| f.cc == 0));
-        // And the two the factory map leaves alone, record above all: a
+        // And the four the factory map leaves alone, record above all: a
         // button bound here is a button a blind slip can find.
-        for cc in [45, 59] {
+        for cc in [45, 59, 60, 61] {
             assert!(
                 !map.button.iter().any(|b| b.cc == cc),
                 "{} is bound",
@@ -1756,9 +1756,9 @@ mod tests {
         // binding that writes one is saying something the instrument will not
         // do, and saying so is cheaper than a performer finding out.
         let mut map = Map::nano_kontrol2();
-        map.button.push(button(90, "shift n"));
+        map.button.push(button(90, "shift r"));
         let why = map.validate().unwrap_err();
-        assert!(why.contains("shift"), "{why}");
+        assert!(why.contains("does not read shift"), "{why}");
 
         let mut map = Map::nano_kontrol2();
         map.device = String::new();

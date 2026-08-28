@@ -351,8 +351,7 @@ is one `midi.toml` away from being somewhere else.
 **The Solo button of the focused camera is lit, and so is the focused
 monitor's**, so the panel says where each hand's knobs are without anyone
 reading the log line. They follow the focus from wherever it moved — a number
-key, the Solo row, the markers, a preset recall — and go out when the
-instrument does. A node past the fourth of its half has no button to light,
+key, the Solo row, a preset recall — and go out when the instrument does. A node past the fourth of its half has no button to light,
 and lights none: a graph may run deeper than the surface, and a lamp on the
 wrong button is worse than no lamp. A latched mode lights the button holding
 it by the same rule, off that button's *action*, so a `midi.toml` that moves
@@ -645,8 +644,9 @@ below assumes a US layout.
 The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (colour and headroom); `num1`…`num8` pick a node of either
 side outright, and the log line names them. Those eight are keypad keys and
-they are the only way to the nodes, so a board with no keypad plays whatever
-node the config focused. A third focus, `p`, names the input the send acts on — a step and no outright key, since a switcher has
+they are the keyboard's only way to the nodes, so a board with no keypad and
+no surface plays whatever node the config focused. A third focus, `p`, names
+the input the send acts on — a step and no outright key, since a switcher has
 four spare inputs at most, and it is a focus of its own rather than a widening
 of the camera's so that riding a send costs you none of the lens.
 
