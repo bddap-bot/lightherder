@@ -237,7 +237,9 @@ got left the *monitor* — the node under all eight faders — with no outright
 address at all. Mute plays slot n back and Record writes over it, the two
 lower rows in order of how much they commit. The first two markers step the
 focus the way `n` and `m` do, which is how a graph deeper than four of either
-is reached. Nothing on the surface is guarded: it has no shift, so a single
+is reached — and a select past the end of the graph says so on the log rather
+than going quiet, since the button really is dead on that graph. Nothing on
+the surface is guarded: it has no shift, so a single
 press on the Mute row walks over the live panel and one on the Record row
 walks over a slot. Nothing is bound to quit, and four buttons are bound to
 nothing at all — Record above all, because a button a blind slip can find is
@@ -266,11 +268,21 @@ A latching button plays on every second press.
 Stop puts the whole panel back to the graph as it was loaded. **Rewind puts
 back the one knob you were just turning**, to its *identity* — the value at
 which its stage does nothing to the light: zoom 1, no turn, no pan, unity
-gain, a clean path, the keys off, a neutral front panel, no seed. Named by
-having been turned rather than by a control of its own, because there are two
-dozen knobs and no display to point at one with, and the knob a hand wants
-back is the one that hand was just on. Only that knob's fader lets go, so a
-single-knob reset does not charge the rest of the panel a pickup sweep.
+gain, a clean path, the keys off, a neutral front panel, no seed. The
+crosspoint is the one knob with no such value — it is a weight in a sum
+rather than a stage the light passes through, and its row *is* the monitor's
+loop gain — so its identity is the connection not made. Unity there would put
+a second camera on the monitor at full and take a `crossed` row to 2.0,
+where zero loses that camera visibly and the fader puts it straight back.
+
+Named by having been turned rather than by a control of its own, because
+there are two dozen knobs and no display to point at one with, and the knob a
+hand wants back is the one that hand was just on. Which stops being true the
+moment the panel moves without the hands, so a recall, a whole-panel reset
+and a change of focus all clear the name along with the faders' grips —
+otherwise rewind after a recall writes over the preset it just played back.
+Only that knob's fader lets go, so a single-knob reset does not charge the
+rest of the panel a pickup sweep.
 
 **Track-prev latches fine mode, and lights while it is on** — the one thing
 that says a mode is on to somebody watching a fullscreen display rather than
@@ -279,12 +291,26 @@ where it is, geared sixteen to one: the 128 steps a 7-bit control has land
 2032 of them across the knob's travel instead of 127. It is still the same
 nudge a key press makes, so the rails, the wrap and the rigid three-channel
 gain hold exactly as they did — there is nowhere fine mode can put a knob
-that a hand could not. Every fader lets go on the way in and on the way out:
-a fine sweep walks a fader a long way from a knob it moved a little, and one
-that kept its grip would throw that knob on the next coarse touch.
+that a hand could not.
 
-One number, `FINE` in `midi.rs`, is the whole gearing — and every binding
-above is one `midi.toml` away from being somewhere else.
+A fader that is *moved* in fine mode lets go of its knob, and one that is not
+keeps it. The one that moved has walked a long way from a knob it turned a
+sixteenth as far, so a grip it kept would throw that knob on the next coarse
+touch; the one that did not move is still standing where its knob is. So a
+one-knob trim costs one pickup sweep rather than a panel-wide one — the same
+answer the single-knob reset gives. The cost of a relative read on an
+absolute control is the end stops: a fine sweep covers a sixteenth of the
+travel, and past that you leave fine mode, sweep the fader back to somewhere
+with room (it picks its knob up on the way past, as it always does) and go
+back in.
+
+One number, `FINE_GEARING` in `midi.rs`, is the whole gearing. It is one
+number rather than the keys' own per-knob step because a step chosen to be
+*visible* under a repeating key is not the same quantity as "finer than the
+fader" — on the bloom radius, the chroma bleed, the grain and the key
+softness the key step is 0.002 against a fader step of 0.00197, so gearing
+off the keys would have made fine mode a *coarsen* mode. Every binding above
+is one `midi.toml` away from being somewhere else.
 
 ### The lit buttons
 
@@ -634,8 +660,9 @@ moves it, one already standing on it, and one that loses its grip on an
 unplug — and against fine mode, where a fader is read as how far it moved:
 that the message which only says where it is standing turns nothing, that a
 move is that many geared steps and a whole sweep a sixteenth of the travel,
-that it needs no pickup and still cannot throw a knob, and that a grip is let
-go in both directions. The map against a duplicate binding, a key nothing
+that it needs no pickup and still cannot throw a knob, and that the fader
+which moved lets go while the one beside it, which did not, keeps its knob.
+The map against a duplicate binding, a key nothing
 answers to, and a literal file rather than a round trip, because a round trip
 agrees with itself whatever the keys are called. The card search against a `/proc/asound/cards`
 with two other cards that also have raw MIDI devices. And the whole path —
@@ -661,8 +688,9 @@ against a held button, which must light with the focus rather than instead of
 it, against a lamp no button of the map answers to, which must never reach the
 wire, and against the exit, which must put the lamps out and the mode back.
 The two halves of the select row are lit one side at a time, so neither can
-cover for the other, and a latched mode is checked to light the button its
-key is bound to — and to light nothing when the map binds that key nowhere.
+cover for the other; a latched mode is checked to light the button its key is
+bound to, and to light nothing when the map binds that key nowhere; and the
+first of two buttons bound to one node is the one that lights.
 
 ## In a browser
 

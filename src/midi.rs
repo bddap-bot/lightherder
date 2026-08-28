@@ -223,18 +223,11 @@ impl Map {
             seen.push(cc);
         }
         for b in &self.button {
-            // A "shift " that changes nothing. Every key but the slots
-            // ignores it, so a binding that writes one is asking for
-            // something the instrument will not do — and a performer finding
-            // that out mid-set is worse than a line at startup.
-            if let Some(bare) = b.key.strip_prefix("shift ") {
-                if action_for_label(bare) == action_for_label(&b.key) {
-                    return Err(format!(
-                        "cc {}: {:?} is {bare:?} — only the preset slots read shift",
-                        b.cc, b.key
-                    ));
-                }
-            }
+            // A key nothing answers to, first: an unknown label makes *both*
+            // readings of it `None`, so the no-op-shift check below would
+            // otherwise fire on "shift num9" and report a shift that does
+            // nothing rather than a key that does not exist — naming the
+            // wrong fault, and printing no list of the ones that do.
             if action_for_label(&b.key).is_none() {
                 let known: Vec<&str> = labels().collect();
                 return Err(format!(
@@ -243,6 +236,20 @@ impl Map {
                     b.key,
                     known.join(", ")
                 ));
+            }
+            // A "shift " that changes nothing. Only the slot keys and the
+            // node keys read it, so a binding that writes one anywhere else
+            // is asking for something the instrument will not do — and a
+            // performer finding that out mid-set is worse than a line at
+            // startup. Asked of the tables rather than named here, so a key
+            // that starts reading shift needs no second edit.
+            if let Some(bare) = b.key.strip_prefix("shift ") {
+                if action_for_label(bare) == action_for_label(&b.key) {
+                    return Err(format!(
+                        "cc {}: {:?} is {bare:?} — that key does not read shift",
+                        b.cc, b.key
+                    ));
+                }
             }
         }
         Ok(())
@@ -374,33 +381,6 @@ pub(crate) fn nano_kontrol2(device: &str) -> bool {
     device.to_lowercase().contains("nanokontrol")
 }
 
-/// The control number that selects each node, by node — the lamp that says
-/// where one hand's knobs are. `which` picks the side: a button whose action
-/// is a select of that side names the node it selects.
-///
-/// The first button that names a node wins, so a map that binds two to one
-/// node lights the one it lists first. A node no button names has no lamp
-/// rather than the nearest one: a graph may run deeper than the select row,
-/// and a light on the wrong button is worse than no light.
-fn select_lamps(
-    action: &[Action],
-    map: &Map,
-    which: fn(&Action) -> Option<usize>,
-) -> Vec<Option<u8>> {
-    action
-        .iter()
-        .zip(&map.button)
-        .fold(Vec::new(), |mut lamp, (action, button)| {
-            if let Some(node) = which(action) {
-                if lamp.len() <= node {
-                    lamp.resize(node + 1, None);
-                }
-                lamp[node].get_or_insert(button.cc);
-            }
-            lamp
-        })
-}
-
 fn button(cc: u8, key: impl Into<String>) -> Button {
     Button {
         cc,
@@ -408,16 +388,20 @@ fn button(cc: u8, key: impl Into<String>) -> Button {
     }
 }
 
-/// How many nodes of each side of the focus the Solo row selects. Four
-/// because no graph anyone plays has more than four cameras or four
-/// monitors, and eight buttons spent on the camera half left the *monitor*
-/// half — the eight faders' node — with no outright address at all, only the
-/// `m` step and no lamp. Half a row that names nothing beats half a row that
-/// names a camera the graph has not got.
-///
-/// A graph deeper than this is reached the way a graph deeper than the
-/// surface always was: `n` and `m` walk to it.
-const SELECTED_NODES: usize = 4;
+/// How many nodes each half of the Solo row selects. A fact about the
+/// **surface**, not about any graph: the row is eight wide and there are two
+/// hands, so each half is four. The graph is why the split is affordable —
+/// nothing anyone plays has more than four cameras or four monitors, while
+/// eight buttons spent on the camera half left the *monitor* half, the node
+/// under all eight faders, with no outright address at all — but a deeper
+/// graph is reached the way a graph deeper than the surface always was, by
+/// the `n` and `m` steps.
+const NODES_PER_HALF: usize = 4;
+
+/// The row is written out of the key table, so a half wider than the table
+/// would index past its end while building the factory map — at startup, on
+/// every run, rather than here.
+const _: () = assert!(2 * NODES_PER_HALF <= crate::keys::KEYED_NODES);
 
 /// The nanoKONTROL2's buttons, in the three rows and the transport strip it
 /// has them in.
@@ -430,11 +414,11 @@ fn nano_buttons() -> Vec<Button> {
     //
     // Off the key tables rather than beside them, so a label is written once
     // and a rebound key takes its button with it.
-    for node in 0..SELECTED_NODES {
+    for node in 0..NODES_PER_HALF {
         let (_, key) = crate::keys::NODE_KEYS[node];
         out.push(button(S_ROW + node as u8, key));
         out.push(button(
-            S_ROW + (SELECTED_NODES + node) as u8,
+            S_ROW + (NODES_PER_HALF + node) as u8,
             format!("shift {key}"),
         ));
     }
@@ -616,12 +600,13 @@ const STEP: f32 = 1.0 / 127.0;
 /// across the travel instead of 127 — and a sweep still moves the knob far
 /// enough to be a trim rather than a nudge.
 ///
-/// One number for every knob rather than the keys' own per-knob step: a step
+/// One number for every knob rather than the keys own per-knob step. A step
 /// chosen to be *visible* under a repeating key is not the same quantity as
-/// "finer than the fader", and on the knobs that run 0 to 1 the two are
-/// barely different — the route crosspoint's key step is only a sixth finer
-/// than its fader's, which is no fine mode at all.
-const FINE: f32 = 1.0 / 16.0;
+/// "finer than the fader", and on four knobs it is not even the same sign:
+/// the bloom radius, the chroma bleed, the grain and the key softness all run
+/// 0 to 0.25, where a fader step is 0.00197 and the key step is 0.002 — so
+/// gearing off the keys would have made fine mode a *coarsen* mode on them.
+const FINE_GEARING: f32 = 1.0 / 16.0;
 
 impl Pickup {
     /// Whether this move of the fader reaches its knob, which is at `value`.
@@ -648,11 +633,18 @@ impl Pickup {
     ///
     /// `None` for the first message after a release, which is the one that
     /// says where the fader is standing: a move is two positions and there
-    /// is only one. Nothing is caught or let go here, because a control
-    /// sending how far it moved cannot throw its knob anywhere — which is
-    /// the only thing [`Pickup::catches`] exists to stop.
-    fn creep(&mut self, fader: f32) -> Option<f32> {
+    /// is only one.
+    ///
+    /// Nothing can be thrown by a read that only says how far something
+    /// moved, so this waits for nothing — but the grip goes, because it was
+    /// a claim about where the fader *stands* and the fader has just walked
+    /// away from the knob while turning it a sixteenth as far. Dropped here,
+    /// on the one control that moved, rather than across the panel when the
+    /// mode is turned on or off: a fader nobody touched is holding a knob
+    /// that has not moved either.
+    fn moved(&mut self, fader: f32) -> Option<f32> {
         let was = self.was.replace(fader)?;
+        self.caught = false;
         Some(fader - was)
     }
 }
@@ -690,16 +682,6 @@ pub struct Midi {
     /// acted on when it goes down, so a surface whose buttons latch — the
     /// nanoKONTROL2 can be set either way — plays every other press.
     held: Vec<bool>,
-    /// The control number of the button that selects each camera, by camera,
-    /// and the same for each monitor. Those two lamps are what say where the
-    /// two hands' knobs are, so they are read off the map in force rather
-    /// than off the factory layout: a `midi.toml` that moves the select row
-    /// moves the lights with it.
-    ///
-    /// Indexed by **node**, unlike every other list here, which is indexed
-    /// by button.
-    lamp_camera: Vec<Option<u8>>,
-    lamp_monitor: Vec<Option<u8>>,
     next_scan: Instant,
     /// The last thing that went wrong looking for the surface, so a device
     /// that is there and will not open is said once rather than sixty times a
@@ -726,14 +708,6 @@ impl Midi {
             .map(|b| action_for_label(&b.key).expect("validate checked every label"))
             .collect();
         Ok(Midi {
-            lamp_camera: select_lamps(&action, &map, |a| match a {
-                Action::FocusCamera(camera) => Some(*camera),
-                _ => None,
-            }),
-            lamp_monitor: select_lamps(&action, &map, |a| match a {
-                Action::FocusMonitor(monitor) => Some(*monitor),
-                _ => None,
-            }),
             action,
             pickup: vec![Pickup::default(); map.fader.len()],
             fine: false,
@@ -798,8 +772,7 @@ impl Midi {
 
     /// Light the panel for `focus`: the select button of the camera the
     /// rotaries turn and of the monitor the faders turn, every button a
-    /// finger is on, and every button whose key holds one of the latched
-    /// modes in `on`.
+    /// finger is on, and the button holding each latched mode that is on.
     ///
     /// The held ones are not decoration. Taking the surface's LED mode takes
     /// every button's light at once — see [`crate::lamps`] — so a button that
@@ -812,32 +785,43 @@ impl Midi {
     /// change follows to light it. Saying the same panel again costs nothing
     /// on the wire.
     ///
-    /// A node past the end of its half of the select row lights nothing: a
-    /// graph may run deeper than the four strips each half has, and a lamp
-    /// on the wrong button is worse than no lamp.
-    ///
-    /// `on` is the latched modes as the caller keeps them — one slot per
-    /// mode, `None` for a mode that is off — because it is handed over every
-    /// redraw and a list built each time would be a frame's worth of
-    /// allocation for two entries.
-    pub fn show(&self, focus: Focus, on: &[Option<Action>]) {
+    /// `overlay` is the one latched mode the caller owns; fine mode is this
+    /// type's own, and asking for it back to hand it straight in would be
+    /// the answer taking a trip through the question.
+    pub fn show(&self, focus: Focus, overlay: bool) {
         if let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) {
-            lamps.show(self.wanted(focus, on));
+            lamps.show(self.wanted(focus, overlay));
         }
+    }
+
+    /// The lamp of the first button whose press is `action`, and nothing at
+    /// all when no button of the map in force does it.
+    ///
+    /// One question — "which button *is* this action?" — asked of the map in
+    /// force rather than of the factory layout, so a `midi.toml` that moves a
+    /// binding moves its lamp with it. Every property the panel needs falls
+    /// out of that one lookup rather than being arranged: the first button
+    /// wins, a node past the end of the select row lights nothing rather than
+    /// the nearest button, and a mode the map binds nowhere lights nothing
+    /// rather than the wrong thing. All three are the same `None`.
+    fn lamp_of(&self, action: Action) -> Lamplight {
+        self.action
+            .iter()
+            .zip(&self.map.button)
+            .find(|(bound, _)| **bound == action)
+            .map_or(0, |(_, button)| lamp(button.cc))
     }
 
     /// The panel [`Midi::show`] would ask for, apart from whether there is a
     /// surface to ask.
-    ///
-    /// A mode is lit by its *action*, not by a control number kept here: the
-    /// button that holds a mode is whichever one the map binds that mode's
-    /// key to, so a `midi.toml` that moves it moves the lamp with it, and a
-    /// map that binds it nowhere lights nothing rather than the wrong thing.
-    fn wanted(&self, focus: Focus, on: &[Option<Action>]) -> Lamplight {
-        let at = |row: &[Option<u8>], node: usize| row.get(node).copied().flatten().map_or(0, lamp);
-        let mut want = at(&self.lamp_camera, focus.camera) | at(&self.lamp_monitor, focus.monitor);
-        for ((button, action), held) in self.map.button.iter().zip(&self.action).zip(&self.held) {
-            if *held || on.contains(&Some(*action)) {
+    fn wanted(&self, focus: Focus, overlay: bool) -> Lamplight {
+        let when = |on: bool, action| if on { self.lamp_of(action) } else { 0 };
+        let mut want = self.lamp_of(Action::FocusCamera(focus.camera))
+            | self.lamp_of(Action::FocusMonitor(focus.monitor))
+            | when(self.fine, Action::Fine)
+            | when(overlay, Action::Overlay);
+        for (button, held) in self.map.button.iter().zip(&self.held) {
+            if *held {
                 want |= lamp(button.cc);
             }
         }
@@ -857,24 +841,15 @@ impl Midi {
         }
     }
 
-    /// Whether fine mode is on, which is what the panel lights its button
-    /// off.
-    pub fn fine(&self) -> bool {
-        self.fine
-    }
-
     /// Turn fine mode on or off, and say which it now is.
     ///
-    /// Every fader lets go, in both directions. Fine mode reads a fader as
-    /// how far it moved rather than where it is, so on the way in what a
-    /// fader was holding stops meaning anything, and on the way out the
-    /// fader has walked a long way from a knob it was turning a little.
-    /// Without this the first coarse touch after fine mode throws that knob
-    /// to wherever the fader is standing — the very thing pickup exists to
-    /// stop.
+    /// Nothing is let go here. A fader only goes stale by being *moved*
+    /// under a relative read, and that is exactly where [`Pickup::moved`]
+    /// drops its grip — so a fader nobody touched in fine mode keeps the one
+    /// it had, and a one-knob trim does not charge the whole panel a pickup
+    /// sweep. Which is the same answer [`Midi::release_knob`] gives.
     pub fn toggle_fine(&mut self) -> bool {
         self.fine = !self.fine;
-        self.release();
         self.fine
     }
 
@@ -883,9 +858,15 @@ impl Midi {
     /// pickup sweep for it. Everything the full release says applies here to
     /// this one knob: it has moved without its fader moving with it, so a
     /// fader left caught would throw it back on the next touch.
+    ///
+    /// By the *field*, not by the knob, and off the same
+    /// [`Knob::shares_a_field_with`] the reset itself reads: the rigid gain
+    /// and its three channels write the same three floats, so a reset of one
+    /// leaves a fader on the other holding a knob that has just moved — and
+    /// that fader is a rigid one, which throws all three channels at once.
     pub fn release_knob(&mut self, knob: Knob) {
         for (pickup, fader) in self.pickup.iter_mut().zip(&self.map.fader) {
-            if fader.knob == knob {
+            if knob.shares_a_field_with(fader.knob) {
                 *pickup = Pickup::default();
             }
         }
@@ -964,15 +945,15 @@ impl Midi {
             let knob = self.map.fader[i].knob;
             let fader = f32::from(message.value) / 127.0;
             // Fine mode reads the control as how far it *moved* rather than
-            // where it is, geared down by [`FINE`]. A `Nudge` and not a
+            // where it is, geared down by [`FINE_GEARING`]. A `Nudge` and not a
             // `Set`, which is what keeps the promise the coarse path makes:
             // the rails, the wrap and the rigid three-channel gain are the
             // key press's, so there is still nowhere fine mode can put a
             // knob that a hand could not.
             if self.fine {
-                let moved = self.pickup[i].creep(fader)?;
+                let moved = self.pickup[i].moved(fader)?;
                 let (low, high) = knob.limit().ends();
-                return Some(Action::Nudge(knob, moved * (high - low) * FINE));
+                return Some(Action::Nudge(knob, moved * (high - low) * FINE_GEARING));
             }
             return self.pickup[i]
                 .catches(fader, knob, params.knob(knob, focus))
@@ -1314,20 +1295,41 @@ mod tests {
         // splits down the middle: the left four are the cameras the rotaries
         // turn, the right four the monitors the faders turn.
         let midi = Midi::new(Map::nano_kontrol2()).unwrap();
-        assert_eq!(midi.lamp_camera, (32..36).map(Some).collect::<Vec<_>>());
-        assert_eq!(midi.lamp_monitor, (36..40).map(Some).collect::<Vec<_>>());
+        let lit = |camera, monitor| midi.wanted(at(camera, monitor), false);
+        for node in 0..4 {
+            assert_eq!(
+                lit(node, node),
+                crate::lamps::lamp(32 + node as u8) | crate::lamps::lamp(36 + node as u8),
+                "node {node}"
+            );
+        }
 
+        // A map that moves the select row takes the lights with it, and one
+        // that binds only some of the row lights only those.
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| !(32..40).contains(&b.cc));
         map.button.push(button(90, "num2"));
         map.button.push(button(91, "shift num3"));
         let midi = Midi::new(map).unwrap();
-        assert_eq!(midi.lamp_camera, [None, Some(90)]);
-        assert_eq!(midi.lamp_monitor, [None, None, Some(91)]);
-        // A node past the end of the select row has no lamp rather than the
-        // nearest one: a graph may run deeper than the surface.
-        assert_eq!(midi.lamp_camera.get(7).copied().flatten(), None);
-        assert_eq!(midi.lamp_monitor.get(7).copied().flatten(), None);
+        assert_eq!(
+            midi.wanted(at(1, 2), false),
+            crate::lamps::lamp(90) | crate::lamps::lamp(91)
+        );
+        // A node no button of the map names has no lamp rather than the
+        // nearest one: a graph may run deeper than the surface, and the same
+        // `None` answers both.
+        assert_eq!(midi.wanted(at(0, 2), false), crate::lamps::lamp(91));
+        assert_eq!(midi.wanted(at(1, 0), false), crate::lamps::lamp(90));
+        assert_eq!(midi.wanted(at(7, 7), false), 0);
+
+        // The first button that names a node wins, rather than the last.
+        let mut map = Map::nano_kontrol2();
+        map.button.push(button(90, "num1"));
+        let midi = Midi::new(map).unwrap();
+        assert_eq!(
+            midi.wanted(at(0, 0), false),
+            crate::lamps::lamp(32) | crate::lamps::lamp(36)
+        );
     }
 
     #[test]
@@ -1338,29 +1340,21 @@ mod tests {
         let (mut midi, params) = surface();
         // Camera 3 is S3 and monitor 2 is S6: one lamp per hand, both lit.
         let focus = at(2, 1);
-        assert_eq!(
-            midi.wanted(focus, &[]),
-            crate::lamps::lamp(34) | crate::lamps::lamp(37)
-        );
+        let pair = crate::lamps::lamp(34) | crate::lamps::lamp(37);
+        assert_eq!(midi.wanted(focus, false), pair);
         // M3 goes down: recall slot 3, whose light nothing else would give
         // back. All three lamps, not one.
         assert_eq!(feed(&mut midi, &params, &cc(50, 127)), [Action::Recall(2)]);
-        assert_eq!(
-            midi.wanted(focus, &[]),
-            crate::lamps::lamp(34) | crate::lamps::lamp(37) | crate::lamps::lamp(50)
-        );
+        assert_eq!(midi.wanted(focus, false), pair | crate::lamps::lamp(50));
         // And out again when the finger comes off, which is a message that
         // does nothing else at all.
         assert_eq!(feed(&mut midi, &params, &cc(50, 0)), []);
-        assert_eq!(
-            midi.wanted(focus, &[]),
-            crate::lamps::lamp(34) | crate::lamps::lamp(37)
-        );
+        assert_eq!(midi.wanted(focus, false), pair);
         // A node the select row does not reach lights nothing of its own,
         // one side at a time so neither can cover for the other.
-        assert_eq!(midi.wanted(at(99, 1), &[]), crate::lamps::lamp(37));
-        assert_eq!(midi.wanted(at(2, 99), &[]), crate::lamps::lamp(34));
-        assert_eq!(midi.wanted(at(99, 99), &[]), 0);
+        assert_eq!(midi.wanted(at(99, 1), false), crate::lamps::lamp(37));
+        assert_eq!(midi.wanted(at(2, 99), false), crate::lamps::lamp(34));
+        assert_eq!(midi.wanted(at(99, 99), false), 0);
     }
 
     #[test]
@@ -1368,29 +1362,31 @@ mod tests {
         // The one thing that says a mode is on to a performer looking at a
         // fullscreen display. Off the button's *action*, so a `midi.toml`
         // that moves fine mode moves its lamp with it.
-        let midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        let mut midi = Midi::new(Map::nano_kontrol2()).unwrap();
         let focus = at(0, 0);
-        let dark = midi.wanted(focus, &[None, None]);
+        let dark = midi.wanted(focus, false);
         assert_eq!(
-            midi.wanted(focus, &[Some(Action::Fine), None]) & !dark,
-            crate::lamps::lamp(58),
-            "fine mode is track-prev on the factory map"
-        );
-        assert_eq!(
-            midi.wanted(focus, &[None, Some(Action::Overlay)]) & !dark,
+            midi.wanted(focus, true) & !dark,
             crate::lamps::lamp(46),
             "the overlay is cycle"
         );
+        assert!(midi.toggle_fine());
+        assert_eq!(
+            midi.wanted(focus, false) & !dark,
+            crate::lamps::lamp(58),
+            "fine mode is track-prev on the factory map"
+        );
+        assert!(!midi.toggle_fine());
+        assert_eq!(midi.wanted(focus, false), dark);
 
         // A map that binds the mode's key nowhere lights nothing extra,
         // rather than the button that number used to be.
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| b.cc != 58);
-        let midi = Midi::new(map).unwrap();
-        assert_eq!(
-            midi.wanted(focus, &[Some(Action::Fine), None]),
-            midi.wanted(focus, &[None, None])
-        );
+        let mut midi = Midi::new(map).unwrap();
+        let dark = midi.wanted(focus, false);
+        assert!(midi.toggle_fine());
+        assert_eq!(midi.wanted(focus, false), dark);
     }
 
     #[test]
@@ -1831,33 +1827,39 @@ mod tests {
         assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
         assert_eq!(feed(&mut midi, &params, &cc(4, 1)), []);
         assert!(midi.toggle_fine());
-        assert_eq!(feed(&mut midi, &params, &cc(4, 1)), []);
         let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 2)), Knob::Contrast);
         let step = 4.0 / 127.0 / 16.0;
         assert!((delta - step).abs() < 1e-6, "{delta} is not one fine step");
     }
 
     #[test]
-    fn fine_mode_lets_go_of_every_fader_in_both_directions() {
-        // Entering: what a fader was holding stops meaning anything, since
-        // the mode no longer reads where it is standing. Leaving: the fader
-        // has walked away from a knob it turned a little, so a grip kept
-        // through the mode would throw that knob on the next coarse touch —
-        // exactly what pickup exists to stop.
+    fn only_the_faders_moved_in_fine_mode_let_go() {
+        // A fine sweep walks a fader a long way from a knob it turned a
+        // sixteenth as far, so a grip kept through it would throw that knob
+        // on the next coarse touch. But that is true of the fader that
+        // *moved* and of no other: letting go of the panel on the way in and
+        // again on the way out would charge every other fader a pickup sweep
+        // for a one-knob trim — the very cost `release_knob` exists to
+        // refuse.
         let (mut midi, params) = surface();
-        // Catch contrast — a sweep up from the bottom past where it stands —
-        // and confirm the grip.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 40)).len(), 1);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 120)).len(), 1);
+        // Catch contrast and gamma, each by sweeping up from the bottom past
+        // where its knob stands.
+        for control in [4, 5] {
+            assert_eq!(feed(&mut midi, &params, &cc(control, 0)), []);
+            assert_eq!(feed(&mut midi, &params, &cc(control, 40)).len(), 1);
+        }
         assert!(midi.toggle_fine());
+        // Only contrast is touched in fine mode, and it walks to the top.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 127)).len(), 1);
         assert!(!midi.toggle_fine());
-        // Back to coarse with the fader parked at the top and the knob still
-        // at 1.0: a fader that kept its grip would slam contrast to 4.
+        // Contrast has to be swept back to its knob: coarse, the fader is at
+        // the top while the knob is a quarter up, and a grip that survived
+        // would slam contrast to 4.
         assert_eq!(feed(&mut midi, &params, &cc(4, 120)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 100)), []);
-        // Sweeping back down to where the knob is takes it again.
         assert_eq!(feed(&mut midi, &params, &cc(4, 20)).len(), 1);
+        // Gamma never moved and never let go — its fader and its knob still
+        // agree, so there is nothing to re-take.
+        assert_eq!(feed(&mut midi, &params, &cc(5, 120)).len(), 1);
     }
 
     #[test]
@@ -1876,6 +1878,119 @@ mod tests {
         // untouched and still follows its fader anywhere.
         assert_eq!(feed(&mut midi, &params, &cc(4, 120)), []);
         assert_eq!(feed(&mut midi, &params, &cc(5, 120)).len(), 1);
+    }
+
+    #[test]
+    fn fine_mode_gears_the_whole_travel_and_not_just_its_top() {
+        // Contrast runs 0 to 4, so a gearing that used the top of the travel
+        // instead of its width would be right about contrast and wrong about
+        // every knob whose bottom is not zero. Pan x runs -1 to 1: half the
+        // step under `high` alone, and a phase would be halved too.
+        let (mut midi, params) = surface();
+        assert!(midi.toggle_fine());
+        assert_eq!(feed(&mut midi, &params, &cc(18, 64)), []);
+        let delta = one_nudge(&feed(&mut midi, &params, &cc(18, 72)), Knob::TranslateX);
+        let want = 8.0 / 127.0 * 2.0 / 16.0;
+        assert!((delta - want).abs() < 1e-6, "{delta} is not {want}");
+    }
+
+    #[test]
+    fn each_fader_in_fine_mode_reads_its_own_travel() {
+        // Two faders worked in turn. Each nudge is that fader's own move —
+        // a shared or mis-indexed last position would make one the
+        // *difference between two different faders*, which is unbounded.
+        let (mut midi, params) = surface();
+        assert!(midi.toggle_fine());
+        assert_eq!(feed(&mut midi, &params, &cc(4, 10)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(5, 100)), []);
+        let step = |range: f32, steps: f32| steps / 127.0 * range / 16.0;
+        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 14)), Knob::Contrast);
+        assert!((delta - step(4.0, 4.0)).abs() < 1e-6, "contrast {delta}");
+        let delta = one_nudge(&feed(&mut midi, &params, &cc(5, 98)), Knob::Gamma);
+        assert!((delta - step(3.75, -2.0)).abs() < 1e-6, "gamma {delta}");
+        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 15)), Knob::Contrast);
+        assert!(
+            (delta - step(4.0, 1.0)).abs() < 1e-6,
+            "contrast again {delta}"
+        );
+    }
+
+    #[test]
+    fn a_reset_of_one_knob_lets_go_of_every_control_over_the_same_field() {
+        // The rigid gain and its three channels are the same three floats.
+        // A reset of the rigid one with a channel fader still caught — or
+        // the other way round — leaves that fader holding a knob that has
+        // just moved, and the rigid one throws all three channels at once.
+        let mut map = Map::nano_kontrol2();
+        map.fader.push(fader(24, Knob::GainR));
+        let mut midi = Midi::new(map).unwrap();
+        let params = Params::default();
+        // Catch both: rotary 5 is the rigid gain, cc 24 is red. Both knobs
+        // sit near 0.986 in a range of 0 to 1.2, so a sweep from the bottom
+        // takes them.
+        for control in [20, 24] {
+            assert_eq!(feed(&mut midi, &params, &cc(control, 0)), []);
+            assert_eq!(feed(&mut midi, &params, &cc(control, 127)).len(), 1);
+        }
+        midi.release_knob(Knob::GainR);
+        // Neither is holding anything now, so neither can throw the gain.
+        assert_eq!(feed(&mut midi, &params, &cc(20, 60)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(24, 60)), []);
+        // And the other direction, from a fresh grip.
+        for control in [20, 24] {
+            assert_eq!(feed(&mut midi, &params, &cc(control, 0)), []);
+            assert_eq!(feed(&mut midi, &params, &cc(control, 127)).len(), 1);
+        }
+        midi.release_knob(Knob::Gain);
+        assert_eq!(feed(&mut midi, &params, &cc(20, 60)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(24, 60)), []);
+        // A knob that shares no field with either keeps its grip.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 40)).len(), 1);
+        midi.release_knob(Knob::Gain);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 100)).len(), 1);
+    }
+
+    #[test]
+    fn a_released_control_forgets_where_it_was_standing_as_well() {
+        // Pickup catches when the fader's *travel since the last message*
+        // spans the knob. A release that dropped only the grip and kept the
+        // last position would let one jump across the knob re-take it, which
+        // is the reset undone by a fader that never swept anywhere.
+        let (mut midi, params) = surface();
+        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 40)).len(), 1);
+        midi.release_knob(Knob::Contrast);
+        // Contrast stands a quarter up, at 31 of 127. One message from 40
+        // down to 20 spans it — and must still do nothing, because after a
+        // release there is no "was" for it to have spanned from.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 20)), []);
+    }
+
+    #[test]
+    fn an_unknown_key_is_named_as_one_even_with_a_shift_in_front() {
+        // Both readings of an unknown label are `None`, so a shift check
+        // that ran first would find them equal and report a shift that does
+        // nothing — naming the wrong fault, and printing no list of the keys
+        // that do exist. `shift num9` is the typo this block now invites.
+        let refuse = |key: &str| {
+            Midi::new(Map {
+                device: "x".into(),
+                fader: Vec::new(),
+                button: vec![button(90, key)],
+            })
+            .err()
+            .expect("a map the instrument would refuse")
+        };
+        for key in ["shift num9", "shift zzz", "zzz"] {
+            let why = refuse(key);
+            assert!(why.contains("no key called"), "{key}: {why}");
+            assert!(why.contains("num1"), "{key} was not given the list: {why}");
+        }
+        // And a shift that really does change nothing is still caught, with
+        // the message that names *that* fault.
+        let why = refuse("shift r");
+        assert!(why.contains("does not read shift"), "{why}");
     }
 
     #[test]
@@ -2000,7 +2115,10 @@ mod tests {
         assert_eq!(feed(&mut midi, &params, &cc(71, 127)), [Action::Store(7)]);
         // The transport strip: rewind puts one knob back, stop the whole
         // panel, cycle lifts the overlay, track-prev latches fine mode.
-        assert_eq!(feed(&mut midi, &params, &cc(43, 127)), [Action::ResetKnob]);
+        assert_eq!(
+            feed(&mut midi, &params, &cc(43, 127)),
+            [Action::ResetLastKnob]
+        );
         assert_eq!(feed(&mut midi, &params, &cc(42, 127)), [Action::Reset]);
         assert_eq!(feed(&mut midi, &params, &cc(46, 127)), [Action::Overlay]);
         assert_eq!(feed(&mut midi, &params, &cc(58, 127)), [Action::Fine]);

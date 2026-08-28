@@ -1,6 +1,7 @@
-//! The lit half of the control surface: the Solo button of the focused
-//! camera, so the panel says where the knobs are without anyone reading the
-//! log line.
+//! The lit half of the control surface: the Solo buttons of the focused
+//! camera and the focused monitor, and the button holding any latched mode,
+//! so the panel says where each hand's knobs are and what is on without
+//! anyone reading the log line.
 //!
 //! A nanoKONTROL2 leaves the factory with **LED Mode: Internal** — a button
 //! lights itself while it is held and ignores the host entirely — and the
@@ -240,8 +241,9 @@ impl Panel {
     fn play(&mut self, channel: u8, restore: &mut Option<[u8; SCENE_BYTES]>) -> Result<(), Lost> {
         match self.external(channel, restore) {
             Ok(()) => log::info!(
-                "surface: its lights are the instrument's — the focused camera's Solo \
-                 button, and every other button while it is held"
+                "surface: its lights are the instrument's — the Solo buttons of the \
+                 focused camera and monitor, any latched mode, and every other \
+                 button while it is held"
             ),
             Err(Lost::Quit) => return Ok(()),
             // A surface that will not take the mode is still played and still

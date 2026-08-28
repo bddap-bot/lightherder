@@ -274,11 +274,16 @@ fn identity_graph() -> Params {
         }],
         monitors: vec![Monitor::default()],
         inputs: Vec::new(),
-        // A crosspoint's identity is unity, like the loop gain's: the
-        // switcher handing the camera on whole. Zero is the switcher turned
-        // *off*, which is a choice about the graph rather than a stage doing
-        // nothing to the light.
-        routing: vec![vec![1.0]],
+        // Zero, where every other identity here is the value that leaves
+        // the light alone. A crosspoint has no such value: it is not a stage
+        // the light passes through but a weight in a sum, and its row is the
+        // monitor's loop gain. Unity would have been the reading by analogy
+        // with the loop gain — and on `crossed`, whose focused crosspoint
+        // loads at 0, it puts a second camera on that monitor at full and
+        // takes the row to 2.0, straight into the rail. So: the connection
+        // not made. The monitor visibly loses that camera and the fader puts
+        // it back, which is the error that corrects itself.
+        routing: vec![vec![0.0]],
     }
 }
 
@@ -512,6 +517,27 @@ impl Knob {
         !matches!(self, Knob::Gain)
     }
 
+    /// Whether turning one of these knobs moves a value the other reads.
+    ///
+    /// True of a knob and itself, and of the rigid gain and each of its three
+    /// channels, which write the very same three floats — so a fader on one
+    /// of them is holding a knob the other has just moved, and a reset of
+    /// either has to let go of both. Not true of two channels: red and green
+    /// are separate floats and a fader on one still agrees with its knob
+    /// after the other moves.
+    ///
+    /// The one place this crate says which knobs overlap. [`Params::reset`]
+    /// and [`crate::midi::Midi::release_knob`] both ask it, so the two cannot
+    /// disagree about what a reset touched.
+    pub const fn shares_a_field_with(self, other: Knob) -> bool {
+        use Knob::{Gain, GainB, GainG, GainR};
+        self as u8 == other as u8
+            || matches!(
+                (self, other),
+                (Gain, GainR | GainG | GainB) | (GainR | GainG | GainB, Gain)
+            )
+    }
+
     /// Which of the focus's two indices the knob reads.
     pub const fn side(self) -> Side {
         match self {
@@ -590,7 +616,7 @@ impl Knob {
     /// Read out of [`identity_graph`] rather than written here as a second
     /// table of numbers: every value it holds is already a named constant a
     /// config file defaults to, and a table beside them is a copy to keep in
-    /// step. The graph costs two small allocations, once per button press.
+    /// step. The graph costs five small allocations, once per button press.
     pub fn identity(self) -> f32 {
         identity_graph().knob(self, Focus::default())
     }
@@ -682,6 +708,27 @@ impl Params {
     /// hand could not.
     pub fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
         self.nudge(knob, value - self.knob(knob, focus), focus);
+    }
+
+    /// Put `knob` back where its stage does nothing to the light.
+    ///
+    /// Every *field* the knob shares, rather than the knob itself, and that
+    /// is the whole reason this is not `set(knob, knob.identity())`. The
+    /// rigid gain is a reading of three floats and setting it slides all
+    /// three by one step, which [`rigid_gain_step`] clamps to the tightest
+    /// channel's remaining travel — so on a panel with red already on its
+    /// 1.2 rail a reset of the loop gain moves nothing at all, and says it
+    /// did. And a mean of 1.0 with the channel offsets left on is still a
+    /// stage that tints the light, which is not what identity means.
+    ///
+    /// Each field goes through [`Params::set`], so the rails, the wrap and
+    /// the reachability a key press has are unchanged.
+    pub fn reset(&mut self, knob: Knob, focus: Focus) {
+        for field in Knob::ALL {
+            if field.owns_a_field() && knob.shares_a_field_with(field) {
+                self.set(field, field.identity(), focus);
+            }
+        }
     }
 
     /// Where `knob` is standing. The rigid gain reads as the mean of its
@@ -1121,7 +1168,7 @@ mod tests {
         // Unity, like the loop gain — the switcher handing the camera on
         // whole. Zero is the switcher turned off, which blanks the monitor's
         // feed: a choice about the graph, not a stage doing nothing.
-        (Knob::Route, 1.0),
+        (Knob::Route, 0.0),
     ];
 
     #[test]
@@ -1200,6 +1247,60 @@ mod tests {
                 "the offsets moved: {before:?} -> {after:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_reset_of_the_rigid_gain_lands_every_channel_on_unity() {
+        // The rigid gain is a reading of three floats, not a field, and a
+        // rigid *step* is clamped to the tightest channel's remaining
+        // travel — so from a panel with red already on its rail, sliding the
+        // mean to 1.0 moves nothing at all and reports that it did.
+        let focus = Focus::default();
+        let mut params = p();
+        params.cameras[0].gain = [1.2, 0.6, 0.6];
+        params.reset(Knob::Gain, focus);
+        assert_eq!(params.cameras[0].gain, [1.0, 1.0, 1.0]);
+        assert_eq!(params.knob(Knob::Gain, focus), Knob::Gain.identity());
+
+        // And from a panel where a slide *could* have reached the mean, the
+        // offsets still go: a mean of 1.0 with red a tenth above green is a
+        // gain stage that tints the light, which is not doing nothing to it.
+        let mut params = p();
+        params.cameras[0].gain = [0.9, 0.8, 0.7];
+        params.reset(Knob::Gain, focus);
+        assert_eq!(params.cameras[0].gain, [1.0, 1.0, 1.0]);
+
+        // One channel reset leaves the other two where they were, which is
+        // the other half of what "shares a field" has to get right.
+        let mut params = p();
+        params.cameras[0].gain = [0.5, 0.6, 0.7];
+        params.reset(Knob::GainR, focus);
+        assert_eq!(params.cameras[0].gain, [1.0, 0.6, 0.7]);
+    }
+
+    #[test]
+    fn only_the_gain_and_its_channels_share_a_field() {
+        // The one place the crate says which knobs overlap, so both the
+        // reset and the surface's release read the same answer.
+        for knob in Knob::ALL {
+            assert!(knob.shares_a_field_with(knob), "{}", knob.name());
+            for other in Knob::ALL {
+                let gain = |k| matches!(k, Knob::GainR | Knob::GainG | Knob::GainB);
+                let want = knob == other
+                    || (knob == Knob::Gain && gain(other))
+                    || (gain(knob) && other == Knob::Gain);
+                assert_eq!(
+                    knob.shares_a_field_with(other),
+                    want,
+                    "{} and {}",
+                    knob.name(),
+                    other.name()
+                );
+            }
+        }
+        // Two channels are two floats: turning red leaves green's fader
+        // standing exactly where green still is.
+        assert!(!Knob::GainR.shares_a_field_with(Knob::GainG));
     }
 
     #[test]

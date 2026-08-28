@@ -31,7 +31,7 @@ pub enum Action {
     /// Named by having been turned rather than by a control of its own: the
     /// instrument has two dozen knobs and no display to point at one with,
     /// and the knob a hand wants back is the knob that hand was just on.
-    ResetKnob,
+    ResetLastKnob,
     /// Turn the surface's fine mode on or off. A latch rather than a held
     /// modifier: the device's buttons are momentary and every binding here
     /// is a key press, so a mode is a press that stays — and the panel
@@ -210,7 +210,7 @@ const COMMANDS: &[Command] = &[
     cmd(
         KeyCode::Backspace,
         "backspace",
-        Action::ResetKnob,
+        Action::ResetLastKnob,
         "reset the last knob turned",
         "reset 1",
     ),
@@ -563,6 +563,28 @@ mod tests {
     }
 
     #[test]
+    fn the_new_commands_are_on_the_keys_their_labels_name() {
+        // Against literal key codes, because the label and the code are two
+        // different facts and `the_keys_and_the_labels_agree` reads each
+        // command's own code — so it is true whatever code that is, and a
+        // binding moved to another key would still agree with itself.
+        assert_eq!(
+            action_for(KeyCode::Backspace, false),
+            Some(Action::ResetLastKnob)
+        );
+        assert_eq!(action_for(KeyCode::Tab, false), Some(Action::Fine));
+        assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
+        assert_eq!(
+            action_for(KeyCode::Numpad1, false),
+            Some(Action::FocusCamera(0))
+        );
+        assert_eq!(
+            action_for(KeyCode::Numpad1, true),
+            Some(Action::FocusMonitor(0))
+        );
+    }
+
+    #[test]
     fn the_help_names_every_binding() {
         let help = help();
         // The header, the two lines the node keys share, and the two the
@@ -570,6 +592,17 @@ mod tests {
         assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 5);
         assert!(help.contains("recall preset slot") && help.contains("store preset slot"));
         assert!(help.contains("focus camera 1 to 8") && help.contains("focus monitor 1 to 8"));
+        // And that the monitor half needs shift, in the key range rather
+        // than only in the words: two identical ranges meaning two different
+        // things is a card that teaches the wrong gesture.
+        let monitors = help
+            .lines()
+            .find(|line| line.contains("focus monitor"))
+            .expect("no monitor line");
+        assert!(
+            monitors.contains(&format!("shift {}", NODE_KEYS[0].1)),
+            "{monitors}"
+        );
         for axis in AXES {
             assert!(help.contains(axis.down.1), "{} missing", axis.down.1);
             assert!(help.contains(axis.up.1), "{} missing", axis.up.1);
