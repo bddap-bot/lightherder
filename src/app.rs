@@ -577,14 +577,6 @@ impl App {
             Action::FocusMonitor(monitor) => self.focus_monitor(monitor),
             Action::Reset => self.reset(),
             Action::ResetLastKnob => self.reset_knob(),
-            // Toggled first and reported after. `log::info!` does not
-            // evaluate its arguments when the level is off, so a mode change
-            // written inside one is a mode change that happens only while
-            // somebody is watching the log.
-            Action::Fine => {
-                let on = self.midi.toggle_fine();
-                log::info!("fine {}", if on { "on" } else { "off" });
-            }
             // The focused monitor's, because the seed is the monitor's: the
             // faders' index of the focus is the one that names it, exactly
             // as the front panel beside it does.
@@ -1344,35 +1336,26 @@ mod tests {
     }
 
     #[test]
-    fn the_fine_key_is_what_puts_the_surface_in_fine_mode() {
-        // The key, not the method: `Action::Fine` is the whole of what the
-        // tab key and the track-prev button do, and a mode nothing reaches
-        // through the action is a mode the instrument has not got.
+    fn the_track_pair_is_what_moves_the_rate_from_the_surface() {
+        // The button, not the action: a rate the board cannot reach is a
+        // rate the instrument has not got (#39), and only playing the two
+        // control numbers through the map says which one carries which way.
         let Some(mut app) = playing(config::single()) else {
             return;
         };
-        let contrast = |app: &App| app.params.knob(Knob::Contrast, app.focus);
-        let identity = Knob::Contrast.identity();
-        // Fader 5 sits at the bottom while contrast stands a quarter up.
-        // Coarse, it does nothing until it sweeps to the knob.
-        surface(&mut app, 4, 0);
-        surface(&mut app, 4, 1);
-        assert_eq!(contrast(&app), identity);
-
-        play(&mut app, Action::Fine);
-        surface(&mut app, 4, 2);
-        let moved = contrast(&app);
-        assert_ne!(moved, identity, "fine mode never came on");
+        let started = app.tempo.rate();
+        surface(&mut app, 59, 127);
         assert!(
-            (moved - identity).abs() < 0.01,
-            "that was a coarse set, not a fine nudge: {moved}"
+            app.tempo.rate() > started,
+            "track next left {}",
+            app.tempo.rate()
         );
-
-        // And back off again: the same fader, still nowhere near the knob,
-        // goes back to doing nothing.
-        play(&mut app, Action::Fine);
-        surface(&mut app, 4, 3);
-        assert_eq!(contrast(&app), moved);
+        surface(&mut app, 58, 127);
+        assert!(
+            (app.tempo.rate() - started).abs() < 1e-3,
+            "a press each way left {}",
+            app.tempo.rate()
+        );
     }
 
     #[test]
@@ -1454,7 +1437,6 @@ mod tests {
             Action::Clear,
             Action::Overlay,
             Action::Solo,
-            Action::Fine,
             Action::Reset,
             Action::Tempo(Step::Faster),
         ] {

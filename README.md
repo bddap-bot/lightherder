@@ -242,8 +242,10 @@ Out of the box, with no configuration:
 | ▶ play | the focused monitor's seed: white blob or camera; lit while it is the blob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | ▶▶ forward | the focused monitor on the whole display, or the tiled bank |
-| |◀ track prev | fine mode, on or off |
-| M 1–8, R 1–8, ● record, ▶| track next, marker set, marker prev | nothing |
+| |◀ track prev, ▶| track next | the tempo: slower / faster, four presses to halve or double it |
+| ● marker set | write what the display is showing to a file |
+| ● record | record the display for as long as it is held down |
+| M 1–8, R 1–8, marker prev | nothing |
 
 So the left hand works one monitor, the right hand one camera, and the last
 fader is the switcher crosspoint joining the two the hands are on. The Solo
@@ -255,9 +257,9 @@ got left the *monitor* — the node under all eight faders — with no outright
 address at all. The two rows below it are free now that nothing saves, and
 four a half is still every node anyone plays. A select past the end of the
 graph says so on the log rather than going quiet, since the button really is
-dead on that graph. Nothing is bound to quit, and twenty buttons are bound to
-nothing at all — the Mute and Record rows whole, and the ● record button
-above all, which is the one a blind slip should not find. Nine of the
+dead on that graph. Nothing is bound to quit, and seventeen buttons are bound
+to nothing at all — the Mute and Record rows whole, and marker prev. Nine of
+the
 twenty-four knobs are not on the surface, which has sixteen controls and
 binds fifteen of them: the three per-channel gain offsets, which colour a
 rigid gain that is
@@ -279,7 +281,7 @@ The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.
 A latching button plays on every second press.
 
-### Putting one knob back, and fine mode
+### Putting one knob back, and playing the tempo
 
 Stop puts the whole panel back to the graph as it was loaded. **Rewind puts
 back the one knob you were just turning**, to its *identity* — the value at
@@ -300,33 +302,13 @@ after either would put back a knob nobody has touched. Only that knob's fader
 lets go, so a single-knob reset does not charge the rest of the panel a
 pickup sweep.
 
-**Track-prev latches fine mode, and lights while it is on** — the one thing
-that says a mode is on to somebody watching a fullscreen display rather than
-the log. In fine mode a control is read as *how far it moved* rather than
-where it is, geared sixteen to one: the 128 steps a 7-bit control has land
-2032 of them across the knob's travel instead of 127. It is still the same
-nudge a key press makes, so the rails, the wrap and the rigid three-channel
-gain hold exactly as they did — there is nowhere fine mode can put a knob
-that a hand could not.
-
-A fader that is *moved* in fine mode lets go of its knob, and one that is not
-keeps it. The one that moved has walked a long way from a knob it turned a
-sixteenth as far, so a grip it kept would throw that knob on the next coarse
-touch; the one that did not move is still standing where its knob is. So a
-one-knob trim costs one pickup sweep rather than a panel-wide one — the same
-answer the single-knob reset gives. The cost of a relative read on an
-absolute control is the end stops: a fine sweep covers a sixteenth of the
-travel, and past that you leave fine mode, sweep the fader back to somewhere
-with room (it picks its knob up on the way past, as it always does) and go
-back in.
-
-One number, `FINE_GEARING` in `midi.rs`, is the whole gearing. It is one
-number rather than the keys' own per-knob step because a step chosen to be
-*visible* under a repeating key is not the same quantity as "finer than the
-fader" — on the bloom radius, the chroma bleed, the grain and the key
-softness the key step is 0.002 against a fader step of 0.00197, so gearing
-off the keys would have made fine mode a *coarsen* mode. Every binding above
-is one `midi.toml` away from being somewhere else.
+**The track pair plays the tempo**: |◀ slower, ▶| faster, a press being the
+fourth root of two so four of them halve or double the rate. It is the one
+control that acts on the whole piece rather than on a node of the graph, and
+the TRACK silkscreen is the one pair the surface prints as a pair — a minus
+and a plus want a pair to sit on. `--rate` is where the piece starts; the
+track pair is where it is played from there, and the rate line a second later
+is the readout. Nothing is latched and nothing lights: a tempo is heard.
 
 ### The lit buttons
 
@@ -337,8 +319,8 @@ key or the Solo row — and go out when the instrument does. A node past the
 fourth of its half has no button to light, and lights none: a graph may run
 deeper than the surface, and a lamp on the wrong button is worse than no
 lamp. A latched mode lights the button holding it by the same rule, off that
-button's *action*, so a `midi.toml` that moves
-fine mode moves its lamp with it.
+button's *action*, so a `midi.toml` that moves the overlay moves its lamp with
+it.
 
 That takes setting up, and the app does the setting up. A nanoKONTROL2 leaves
 the factory in **LED Mode: Internal**, where a button lights itself while it is
@@ -615,8 +597,7 @@ below assumes a US layout.
 | `r` | reset every knob |
 | `;` | the focused monitor's seed: a white blob or dark glass |
 | backspace | reset the last knob turned, to its identity |
-| tab | fine mode for the surface's knobs, on or off |
-| `7` `8` | the tempo: slower / faster, four presses to halve or double it |
+| `7` `8` | the tempo: slower / faster, four presses to halve or double it — the track pair on the surface |
 | `f11` | cover the display, or stop covering it |
 | enter | the focused monitor on the whole display, or the tiled bank |
 | `` ` `` | the controls overlay, on or off |
@@ -708,12 +689,7 @@ left off, a clock byte landing between a control number and its value, a scene
 dump that must not read as a hundred knob moves, and notes and bends that are
 not knobs. The pickup against a fader that has to reach its knob before it
 moves it, one already standing on it, and one that loses its grip on an
-unplug — and against fine mode, where a fader is read as how far it moved:
-that the message which only says where it is standing turns nothing, that a
-move is that many geared steps and a whole sweep a sixteenth of the travel,
-that it needs no pickup and still cannot throw a knob, and that the fader
-which moved lets go while the one beside it, which did not, keeps its knob.
-The map against a duplicate binding, a key nothing
+unplug. The map against a duplicate binding, a key nothing
 answers to, and a literal file rather than a round trip, because a round trip
 agrees with itself whatever the keys are called. The card search against a `/proc/asound/cards`
 with two other cards that also have raw MIDI devices. And the whole path —

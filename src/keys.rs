@@ -28,11 +28,6 @@ pub enum Action {
     /// instrument has two dozen of them and no display to point at one with,
     /// and the knob a hand wants back is the knob that hand was just on.
     ResetLastKnob,
-    /// Turn the surface's fine mode on or off. A latch rather than a held
-    /// modifier: the device's buttons are momentary and every binding here
-    /// is a key press, so a mode is a press that stays — and the panel
-    /// lights the button that is holding it.
-    Fine,
     /// Swap the focused monitor's seed for the other kind: a white blob on
     /// the glass, or dark glass holding only what the switcher paints on it.
     /// A button and not a knob, because the two are not two settings of one
@@ -237,20 +232,10 @@ const COMMANDS: &[Command] = &[
         "reset the last knob turned",
         "reset 1",
     ),
-    // Tab, for stepping the whole surface down to the keys' own step. Off on
-    // the left with nothing else near it: a mode left on by a slip is worse
-    // than one that takes a reach to find.
-    cmd(
-        KeyCode::Tab,
-        "tab",
-        Action::Fine,
-        "fine mode for the surface's knobs, on or off",
-        "fine",
-    ),
     // The tempo, on the two digits the gain channels and the send left
     // between them: the one control that acts on the whole piece rather than
     // on a node of the graph, and the digits are where the other levels
-    // already are.
+    // already are. On the surface it is the track pair.
     cmd(
         KeyCode::Digit7,
         "7",
@@ -606,7 +591,6 @@ mod tests {
             action_for(KeyCode::Backspace, false),
             Some(Action::ResetLastKnob)
         );
-        assert_eq!(action_for(KeyCode::Tab, false), Some(Action::Fine));
         assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
         assert_eq!(
             action_for(KeyCode::Numpad1, false),

@@ -440,13 +440,14 @@ fn nano_buttons() -> Vec<Button> {
         // button whose silkscreen says start. It lights while the focused
         // monitor has a blob on the glass, so the panel says which of the
         // two rigs that monitor is — a toggle with no indicator on a
-        // fullscreen display being the footgun fine mode makes the case
-        // about.
+        // fullscreen display being a footgun.
         button(41, ";"),
-        // Fine mode, up on the track pair with nothing else near it: a latch
-        // left on by a slip is worse than one that takes a reach to find,
-        // and this is the only button on the surface a hand has to *mean*.
-        button(58, "tab"),
+        // The tempo, on the one pair of buttons the silkscreen prints as a
+        // pair: the rate is the one control that moves the whole piece
+        // rather than a node of the graph, and a minus and a plus want a
+        // pair to sit on.
+        button(58, "7"),
+        button(59, "8"),
         // The capture pair, on the two buttons whose silkscreen already says
         // what they do: marker set takes a still of the display, and record
         // records it for as long as a hand stays on it.
@@ -595,19 +596,6 @@ struct Pickup {
 /// fader can ever reach.
 const STEP: f32 = 1.0 / 127.0;
 
-/// How much of a knob's travel a whole sweep of its control covers in fine
-/// mode. A sixteenth, so the 128 steps a 7-bit control has land 2032 of them
-/// across the travel instead of 127 — and a sweep still moves the knob far
-/// enough to be a trim rather than a nudge.
-///
-/// One number for every knob rather than the keys own per-knob step. A step
-/// chosen to be *visible* under a repeating key is not the same quantity as
-/// "finer than the fader", and on four knobs it is not even the same sign:
-/// the bloom radius, the chroma bleed, the grain and the key softness all run
-/// 0 to 0.25, where a fader step is 0.00197 and the key step is 0.002 — so
-/// gearing off the keys would have made fine mode a *coarsen* mode on them.
-const FINE_GEARING: f32 = 1.0 / 16.0;
-
 impl Pickup {
     /// Whether this move of the fader reaches its knob, which is at `value`.
     fn catches(&mut self, fader: f32, knob: Knob, value: f32) -> bool {
@@ -626,26 +614,6 @@ impl Pickup {
             Limit::Clamp(..) => reaches(at),
         };
         self.caught
-    }
-
-    /// How far the control moved since the message before it, as a fraction
-    /// of its travel — the whole of what fine mode reads off a fader.
-    ///
-    /// `None` for the first message after a release, which is the one that
-    /// says where the fader is standing: a move is two positions and there
-    /// is only one.
-    ///
-    /// Nothing can be thrown by a read that only says how far something
-    /// moved, so this waits for nothing — but the grip goes, because it was
-    /// a claim about where the fader *stands* and the fader has just walked
-    /// away from the knob while turning it a sixteenth as far. Dropped here,
-    /// on the one control that moved, rather than across the panel when the
-    /// mode is turned on or off: a fader nobody touched is holding a knob
-    /// that has not moved either.
-    fn moved(&mut self, fader: f32) -> Option<f32> {
-        let was = self.was.replace(fader)?;
-        self.caught = false;
-        Some(fader - was)
     }
 }
 
@@ -673,11 +641,6 @@ pub struct Midi {
     port: Option<Port>,
     /// One per entry of `map.fader`, in the same order.
     pickup: Vec<Pickup>,
-    /// Whether the controls are read as how far they moved rather than as
-    /// where they are — see [`Midi::toggle_fine`]. Here rather than in the
-    /// caller because it is one fact about how this surface is read, and a
-    /// copy kept beside the one that decides is a copy to keep in step.
-    fine: bool,
     /// One per entry of `map.button`: whether it is being held. A button is
     /// acted on when it goes down, so a surface whose buttons latch — the
     /// nanoKONTROL2 can be set either way — plays every other press.
@@ -733,7 +696,6 @@ impl Midi {
         Ok(Midi {
             action,
             pickup: vec![Pickup::default(); map.fader.len()],
-            fine: false,
             held: vec![false; map.button.len()],
             map,
             snd: PathBuf::from(DEV_SND),
@@ -829,9 +791,7 @@ impl Midi {
     /// on the wire.
     ///
     /// `seed`, `overlay` and `solo` are what the caller owns — one fact
-    /// about the focused monitor and two latched modes. Fine mode is this
-    /// type's own, and asking for it back to hand it straight in would be
-    /// the answer taking a trip through the question.
+    /// about the focused monitor and two latched modes.
     pub fn show(&self, focus: Focus, seed: Seed, overlay: bool, solo: bool) {
         if let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) {
             lamps.show(self.wanted(focus, seed, overlay, solo));
@@ -862,7 +822,6 @@ impl Midi {
         let when = |on: bool, action| if on { self.lamp_of(action) } else { 0 };
         let mut want = self.lamp_of(Action::FocusCamera(focus.camera))
             | self.lamp_of(Action::FocusMonitor(focus.monitor))
-            | when(self.fine, Action::Fine)
             | when(seed.lit(), Action::Seed)
             | when(overlay, Action::Overlay)
             | when(solo, Action::Solo);
@@ -884,18 +843,6 @@ impl Midi {
         for pickup in &mut self.pickup {
             *pickup = Pickup::default();
         }
-    }
-
-    /// Turn fine mode on or off, and say which it now is.
-    ///
-    /// Nothing is let go here. A fader only goes stale by being *moved*
-    /// under a relative read, and that is exactly where [`Pickup::moved`]
-    /// drops its grip — so a fader nobody touched in fine mode keeps the one
-    /// it had, and a one-knob trim does not charge the whole panel a pickup
-    /// sweep. Which is the same answer [`Midi::release_knob`] gives.
-    pub fn toggle_fine(&mut self) -> bool {
-        self.fine = !self.fine;
-        self.fine
     }
 
     /// Let go of just the controls that hold `knob` — what a reset of one
@@ -989,17 +936,6 @@ impl Midi {
         if let Some(i) = self.map.fader.iter().position(|f| f.cc == message.control) {
             let knob = self.map.fader[i].knob;
             let fader = f32::from(message.value) / 127.0;
-            // Fine mode reads the control as how far it *moved* rather than
-            // where it is, geared down by [`FINE_GEARING`]. A `Nudge` and not a
-            // `Set`, which is what keeps the promise the coarse path makes:
-            // the rails, the wrap and the rigid three-channel gain are the
-            // key press's, so there is still nowhere fine mode can put a
-            // knob that a hand could not.
-            if self.fine {
-                let moved = self.pickup[i].moved(fader)?;
-                let (low, high) = knob.limit().ends();
-                return Some(Action::Nudge(knob, moved * (high - low) * FINE_GEARING));
-            }
             return self.pickup[i]
                 .catches(fader, knob, params.knob(knob, focus))
                 .then(|| Action::Set(knob, value_at(knob, fader)));
@@ -1431,8 +1367,8 @@ mod tests {
     fn a_latched_mode_lights_the_button_that_holds_it() {
         // The one thing that says a mode is on to a performer looking at a
         // fullscreen display. Off the button's *action*, so a `midi.toml`
-        // that moves fine mode moves its lamp with it.
-        let mut midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        // that moves a mode moves its lamp with it.
+        let midi = Midi::new(Map::nano_kontrol2()).unwrap();
         let focus = at(0, 0);
         let base = midi.wanted(focus, Seed::Dark, false, false);
         assert_eq!(
@@ -1445,23 +1381,14 @@ mod tests {
             crate::lamps::lamp(44),
             "the display's solo is forward"
         );
-        assert!(midi.toggle_fine());
-        assert_eq!(
-            midi.wanted(focus, Seed::Dark, false, false) & !base,
-            crate::lamps::lamp(58),
-            "fine mode is track-prev on the factory map"
-        );
-        assert!(!midi.toggle_fine());
-        assert_eq!(midi.wanted(focus, Seed::Dark, false, false), base);
 
         // A map that binds the mode's key nowhere lights nothing extra,
         // rather than the button that number used to be.
         let mut map = Map::nano_kontrol2();
-        map.button.retain(|b| b.cc != 58);
-        let mut midi = Midi::new(map).unwrap();
+        map.button.retain(|b| b.cc != 46);
+        let midi = Midi::new(map).unwrap();
         let base = midi.wanted(focus, Seed::Dark, false, false);
-        assert!(midi.toggle_fine());
-        assert_eq!(midi.wanted(focus, Seed::Dark, false, false), base);
+        assert_eq!(midi.wanted(focus, Seed::Dark, true, false), base);
     }
 
     #[test]
@@ -1652,7 +1579,8 @@ mod tests {
                 button(46, "`"),
                 button(44, "enter"),
                 button(41, ";"),
-                button(58, "tab"),
+                button(58, "7"),
+                button(59, "8"),
                 button(60, "f7"),
                 button(45, "f8"),
             ]
@@ -1662,7 +1590,7 @@ mod tests {
         assert!(!map.fader.iter().any(|f| f.cc == 0));
         // And the buttons it leaves alone: one bound here is one a blind
         // slip can find.
-        for cc in (M_ROW..M_ROW + 8).chain(R_ROW..R_ROW + 8).chain([59, 61]) {
+        for cc in (M_ROW..M_ROW + 8).chain(R_ROW..R_ROW + 8).chain([61]) {
             assert!(
                 !map.button.iter().any(|b| b.cc == cc),
                 "{} is bound",
@@ -1870,95 +1798,6 @@ mod tests {
         ));
     }
 
-    /// The nudge one `feed` produced, or a failure naming what came out
-    /// instead. Every fine-mode assertion is about a delta, and a delta of
-    /// two positions divided by 127 does not land on a round number.
-    fn one_nudge(acted: &[Action], knob: Knob) -> f32 {
-        match acted {
-            [Action::Nudge(turned, delta)] if *turned == knob => *delta,
-            other => panic!("wanted one nudge of {}, got {other:?}", knob.name()),
-        }
-    }
-
-    #[test]
-    fn fine_mode_reads_a_fader_as_how_far_it_moved() {
-        let (mut midi, params) = surface();
-        assert!(midi.toggle_fine());
-        // The first message after the mode is entered says where the fader
-        // is standing. A move is two positions and there is only one, so
-        // nothing turns yet — however far the fader is from its knob.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 64)), []);
-        // Contrast is fader 5, over a range of 0 to 4. Eight of the 127
-        // steps, geared a sixteenth: 8/127 of the travel, of a quarter of
-        // that range.
-        let want = 8.0 / 127.0 * 4.0 / 16.0;
-        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 72)), Knob::Contrast);
-        assert!((delta - want).abs() < 1e-6, "{delta} is not {want}");
-        // And down is the same distance the other way.
-        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 64)), Knob::Contrast);
-        assert!((delta + want).abs() < 1e-6, "{delta} is not {}", -want);
-        // A whole sweep of the control covers a sixteenth of the travel,
-        // which is the entire point: 2032 places to stand instead of 127.
-        feed(&mut midi, &params, &cc(4, 0));
-        let mut swept = 0.0;
-        for value in 1..=127 {
-            if let [Action::Nudge(Knob::Contrast, delta)] =
-                feed(&mut midi, &params, &cc(4, value))[..]
-            {
-                swept += delta;
-            }
-        }
-        assert!(
-            (swept - 4.0 / 16.0).abs() < 1e-4,
-            "a full sweep moved {swept}"
-        );
-    }
-
-    #[test]
-    fn fine_mode_does_not_wait_for_pickup_and_cannot_throw_a_knob() {
-        // A fader at the bottom while contrast stands a quarter up. Coarse,
-        // that fader does nothing until the sweep reaches the knob; fine, it
-        // moves the knob at once — and only by how far it travelled, which
-        // is the whole reason it is safe to skip the wait.
-        let (mut midi, params) = surface();
-        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 1)), []);
-        assert!(midi.toggle_fine());
-        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 2)), Knob::Contrast);
-        let step = 4.0 / 127.0 / 16.0;
-        assert!((delta - step).abs() < 1e-6, "{delta} is not one fine step");
-    }
-
-    #[test]
-    fn only_the_faders_moved_in_fine_mode_let_go() {
-        // A fine sweep walks a fader a long way from a knob it turned a
-        // sixteenth as far, so a grip kept through it would throw that knob
-        // on the next coarse touch. But that is true of the fader that
-        // *moved* and of no other: letting go of the panel on the way in and
-        // again on the way out would charge every other fader a pickup sweep
-        // for a one-knob trim — the very cost `release_knob` exists to
-        // refuse.
-        let (mut midi, params) = surface();
-        // Catch contrast and gamma, each by sweeping up from the bottom past
-        // where its knob stands.
-        for control in [4, 5] {
-            assert_eq!(feed(&mut midi, &params, &cc(control, 0)), []);
-            assert_eq!(feed(&mut midi, &params, &cc(control, 40)).len(), 1);
-        }
-        assert!(midi.toggle_fine());
-        // Only contrast is touched in fine mode, and it walks to the top.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 127)).len(), 1);
-        assert!(!midi.toggle_fine());
-        // Contrast has to be swept back to its knob: coarse, the fader is at
-        // the top while the knob is a quarter up, and a grip that survived
-        // would slam contrast to 4.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 120)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 20)).len(), 1);
-        // Gamma never moved and never let go — its fader and its knob still
-        // agree, so there is nothing to re-take.
-        assert_eq!(feed(&mut midi, &params, &cc(5, 120)).len(), 1);
-    }
-
     #[test]
     fn a_reset_of_one_knob_lets_go_of_that_knob_alone() {
         // The whole-panel release would charge every other fader a pickup
@@ -1975,41 +1814,6 @@ mod tests {
         // untouched and still follows its fader anywhere.
         assert_eq!(feed(&mut midi, &params, &cc(4, 120)), []);
         assert_eq!(feed(&mut midi, &params, &cc(5, 120)).len(), 1);
-    }
-
-    #[test]
-    fn fine_mode_gears_the_whole_travel_and_not_just_its_top() {
-        // Contrast runs 0 to 4, so a gearing that used the top of the travel
-        // instead of its width would be right about contrast and wrong about
-        // every knob whose bottom is not zero. Pan x runs -1 to 1: half the
-        // step under `high` alone, and a phase would be halved too.
-        let (mut midi, params) = surface();
-        assert!(midi.toggle_fine());
-        assert_eq!(feed(&mut midi, &params, &cc(18, 64)), []);
-        let delta = one_nudge(&feed(&mut midi, &params, &cc(18, 72)), Knob::TranslateX);
-        let want = 8.0 / 127.0 * 2.0 / 16.0;
-        assert!((delta - want).abs() < 1e-6, "{delta} is not {want}");
-    }
-
-    #[test]
-    fn each_fader_in_fine_mode_reads_its_own_travel() {
-        // Two faders worked in turn. Each nudge is that fader's own move —
-        // a shared or mis-indexed last position would make one the
-        // *difference between two different faders*, which is unbounded.
-        let (mut midi, params) = surface();
-        assert!(midi.toggle_fine());
-        assert_eq!(feed(&mut midi, &params, &cc(4, 10)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(5, 100)), []);
-        let step = |range: f32, steps: f32| steps / 127.0 * range / 16.0;
-        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 14)), Knob::Contrast);
-        assert!((delta - step(4.0, 4.0)).abs() < 1e-6, "contrast {delta}");
-        let delta = one_nudge(&feed(&mut midi, &params, &cc(5, 98)), Knob::Gamma);
-        assert!((delta - step(3.75, -2.0)).abs() < 1e-6, "gamma {delta}");
-        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 15)), Knob::Contrast);
-        assert!(
-            (delta - step(4.0, 1.0)).abs() < 1e-6,
-            "contrast again {delta}"
-        );
     }
 
     #[test]
@@ -2234,14 +2038,21 @@ mod tests {
             assert_eq!(feed(&mut midi, &params, &cc(control, 127)), []);
         }
         // The transport strip: rewind puts one knob back, stop the whole
-        // panel, cycle lifts the overlay, track-prev latches fine mode.
+        // panel, cycle lifts the overlay, the track pair moves the tempo.
         assert_eq!(
             feed(&mut midi, &params, &cc(43, 127)),
             [Action::ResetLastKnob]
         );
         assert_eq!(feed(&mut midi, &params, &cc(42, 127)), [Action::Reset]);
         assert_eq!(feed(&mut midi, &params, &cc(46, 127)), [Action::Overlay]);
-        assert_eq!(feed(&mut midi, &params, &cc(58, 127)), [Action::Fine]);
+        assert_eq!(
+            feed(&mut midi, &params, &cc(58, 127)),
+            [Action::Tempo(crate::tempo::Step::Slower)]
+        );
+        assert_eq!(
+            feed(&mut midi, &params, &cc(59, 127)),
+            [Action::Tempo(crate::tempo::Step::Faster)]
+        );
     }
 
     #[test]
