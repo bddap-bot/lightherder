@@ -59,13 +59,11 @@ pub struct App {
     /// The running external inputs, in `params.inputs` order, which is the
     /// order `Feedback::write_input` indexes them by.
     sources: Vec<Source>,
-    /// Where the preset slots are kept.
-    slots: std::path::PathBuf,
     /// The control surface, connected or not — it is looked for while the
     /// instrument runs rather than at startup, so plugging one in mid-piece
     /// is the whole of setting it up.
     midi: Midi,
-    /// Whether shift is down, which only the slot keys read.
+    /// Whether shift is down, which only the node keys read.
     shift: bool,
     /// The last knob that moved, which is the one [`Action::ResetLastKnob`] puts
     /// back. `None` until something is turned — on a panel nothing has
@@ -168,12 +166,10 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     for input in &params.inputs {
         log::info!("input: {input}");
     }
-    let slots = crate::slots::default_dir();
-    log::info!("preset slots: {}", slots.display());
     // Read before the window opens, like the inputs and for the same reason:
     // a map that will not load is a terminal error, not a surface that turns
     // out to be playing the wrong knobs once there is light on the glass.
-    let map = Map::load(&slots)?;
+    let map = Map::load(&crate::midi::map_path())?;
     // The controls, off the map that is about to be played rather than off a
     // second read of the same file. Fullscreen this scrolls past behind the
     // instrument; it is here for the terminal it was started from, which is
@@ -194,7 +190,6 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             params,
             focus: Focus::default(),
             sources,
-            slots,
             midi,
             shift: false,
             last_knob: None,
@@ -385,91 +380,18 @@ impl App {
         event_loop.exit();
     }
 
-    /// Take `params` as the live graph, rebuilding whatever no longer serves
-    /// it: the inputs are reopened when they changed, and the bank and its
-    /// presenter are rebuilt when the layer counts moved — which is also when
-    /// the inputs that stayed are asked to upload again. A slot stores the
-    /// whole panel, so a recall reconstructs the rig rather than refusing a
-    /// graph shaped differently from what is playing. A same-shape adopt
-    /// still touches neither, so the loops keep running: what it changes is
-    /// the knobs the next pass reads, not the light already on the glass.
-    ///
-    /// Fallible because a graph can ask for more bank than the cap allows,
-    /// or for an input that will not open — and everything fallible is done
-    /// before anything is torn down, so an error leaves the running rig
-    /// exactly as it was.
-    ///
-    /// The one way `self.params` is replaced, because the focus was walked
-    /// on the old one and a graph with fewer cameras would leave it pointing
-    /// at nothing — every read of it, the readout included, indexes straight
-    /// in. Two callers, one of which used to forget.
-    fn adopt(&mut self, params: Params) -> Result<(), String> {
-        crate::feedback::bank_fits(&params, self.resolution)?;
-        // The layer counts are baked into the bank's textures, so a graph
-        // that moved either one gets a new bank below.
-        let rebank = params.monitors.len() != self.params.monitors.len()
-            || params.inputs.len() != self.params.inputs.len();
-        let sources = (params.inputs != self.params.inputs)
-            .then(|| {
-                params
-                    .inputs
-                    .iter()
-                    .map(|input| Source::open(input, self.resolution))
-                    .collect::<Result<Vec<Source>, String>>()
-            })
-            .transpose()?;
-        match sources {
-            Some(sources) => self.sources = sources,
-            // The inputs are the same ones, but a rebuilt bank is a blank
-            // one and a still pattern uploads exactly once — so the sources
-            // that stayed have to hand their frames over again.
-            None if rebank => self.sources.iter_mut().for_each(Source::replay),
-            None => {}
-        }
-        // The picture is of the graph's own cameras and monitors.
-        let redraw = params.cameras.len() != self.params.cameras.len()
-            || params.monitors.len() != self.params.monitors.len();
-        // Blanked, as any bank is at creation, which is what a rig with
-        // different monitors means anyway.
-        if let Some(live) = self.live.as_mut() {
-            if rebank {
-                let (width, height) = self.resolution;
-                live.feedback = Feedback::new(&self.gpu.device, width, height, &params);
-                live.present = Present::new(&self.gpu.device, &live.feedback, live.config.format);
-            }
-            if redraw {
-                live.overlay = Overlay::new(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    live.config.format,
-                    self.midi.map(),
-                    &params,
-                );
-            }
-        }
-        self.focus = self.focus.clamped(&params);
-        self.params = params;
+    /// Every knob back to the graph the instrument was started on. The rig
+    /// itself is untouched — the shape of the graph is the launch
+    /// configuration's and nothing at the keys can move it — so the loops
+    /// keep running and what changes is the knobs the next pass reads.
+    fn reset(&mut self) {
+        self.params = self.initial.clone();
         // The whole panel just moved without a fader moving with it — and
         // without a hand moving with it either, so the knob "the last knob
-        // turned" names was turned on a panel that is gone. Rewind after a
-        // recall would otherwise write over the preset it just played back.
+        // turned" names was turned on a panel that is gone.
         self.midi.release();
         self.last_knob = None;
-        Ok(())
-    }
-
-    /// Rebuild the rig from a slot. The only refusals are a slot that will
-    /// not read and a graph the instrument would refuse at startup; either
-    /// way the running rig plays on untouched.
-    fn recall(&mut self, slot: usize) {
-        let params = match crate::slots::recall(&self.slots, slot) {
-            Ok(params) => params,
-            Err(why) => return log::error!("slot {}: {why}", slot + 1),
-        };
-        match self.adopt(params) {
-            Ok(()) => log::info!("slot {}: {}", slot + 1, self.params.describe(self.focus)),
-            Err(why) => log::error!("slot {}: {why}", slot + 1),
-        }
+        log::info!("reset: {}", self.params.describe(self.focus));
     }
 
     /// Point the camera knobs at one camera by its place in the graph. A
@@ -521,8 +443,7 @@ impl App {
         self.solo.then_some(self.focus.monitor)
     }
 
-    /// Point the knobs at another node. The one way `self.focus` moves, for
-    /// the same reason [`App::adopt`] is the one way `params` is replaced: a
+    /// Point the knobs at another node. The one way `self.focus` moves: a
     /// fader that has caught a knob is holding *that* node's knob, and the
     /// new node's is somewhere else entirely — without letting go, the next
     /// rotary touched throws it to wherever the fader is standing.
@@ -591,7 +512,7 @@ impl App {
     /// Put the last knob that moved back to its identity, and nothing else.
     ///
     /// Only that knob's own faders let go — [`Midi::release_knob`] rather
-    /// than the whole panel's release, which is what a recall or a refocus
+    /// than the whole panel's release, which is what a reset or a refocus
     /// owes: one knob moved without its fader, so charging every other fader
     /// a pickup sweep for it would make a single-knob reset more expensive
     /// on the hands than the whole-panel one.
@@ -639,15 +560,7 @@ impl App {
             },
             Action::FocusCamera(camera) => self.focus_camera(camera),
             Action::FocusMonitor(monitor) => self.focus_monitor(monitor),
-            Action::Store(slot) => match crate::slots::store(&self.slots, slot, &self.params) {
-                Ok(path) => log::info!("slot {}: wrote {}", slot + 1, path.display()),
-                Err(why) => log::error!("slot {}: {why}", slot + 1),
-            },
-            Action::Recall(slot) => self.recall(slot),
-            Action::Reset => match self.adopt(self.initial.clone()) {
-                Ok(()) => log::info!("reset: {}", self.params.describe(self.focus)),
-                Err(why) => log::error!("reset: {why}"),
-            },
+            Action::Reset => self.reset(),
             Action::ResetLastKnob => self.reset_knob(),
             // Toggled first and reported after. `log::info!` does not
             // evaluate its arguments when the level is off, so a mode change
@@ -716,11 +629,11 @@ impl App {
     ///
     /// The surface is read once a frame, and each message is turned into an
     /// action against the panel the message before it left — not against a
-    /// snapshot of the whole batch. A slot button and a fader inside one
-    /// frame is a real two-handed gesture, and resolved against a snapshot
-    /// the fader would be dragging a knob back out of the preset the button
-    /// just recalled. Every message is played even after one has asked to
-    /// stop: the run loop ends after this frame, not inside it.
+    /// snapshot of the whole batch. A Stop and a fader inside one frame is a
+    /// real two-handed gesture, and resolved against a snapshot the fader
+    /// would be dragging a knob back out of the panel the button just put
+    /// back. Every message is played even after one has asked to stop: the
+    /// run loop ends after this frame, not inside it.
     ///
     /// Then the panel is written — see [`Midi::show`] for why every redraw
     /// and not each of the several places the focus moves. A method of its
@@ -880,19 +793,11 @@ mod tests {
     use crate::config;
     use crate::tempo::Step;
 
-    /// A directory of this test's own, like the slots tests keep.
-    fn scratch(what: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("lightherder-app-{}-{what}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
     /// An instrument playing `params`, headless: no window has opened, so
-    /// `live` is `None` the way it is before `resumed` — which is also the
-    /// state the bank rebuild has to be right about. `None` when the machine
-    /// has no adapter, said on stderr the way tests/feedback_gpu.rs skips.
-    fn playing(params: Params, slots: std::path::PathBuf) -> Option<App> {
+    /// `live` is `None` the way it is before `resumed`. `None` when the
+    /// machine has no adapter, said on stderr the way tests/feedback_gpu.rs
+    /// skips.
+    fn playing(params: Params) -> Option<App> {
         // One device for the whole module, like tests/feedback_gpu.rs keeps
         // one: a test apiece opened its own, and a headless Vulkan stack
         // does not survive that many being created and dropped at once —
@@ -923,9 +828,7 @@ mod tests {
             params,
             focus: Focus::default(),
             sources,
-            slots: slots.clone(),
-            // No file in a scratch directory, so this is the factory map.
-            midi: Midi::new(Map::load(&slots).unwrap()).unwrap(),
+            midi: Midi::new(Map::nano_kontrol2()).unwrap(),
             shift: false,
             last_knob: None,
             resolution,
@@ -944,70 +847,30 @@ mod tests {
     }
 
     #[test]
-    fn a_recall_rebuilds_the_rig_across_graph_shapes() {
-        // The couch flow of issue #10: the Play button launches the default
-        // rig, and a slot holds a rig with an input on the switcher.
-        // `external` is one, and its input is a drawn pattern, so this runs
-        // on a machine with no capture device.
-        let dir = scratch("cross-shape");
-        let stored = config::external();
-        crate::slots::store(&dir, 0, &stored).unwrap();
-        crate::slots::store(&dir, 1, &config::single()).unwrap();
-        // The same graph with a second monitor and a second camera, for the
-        // sideways recall below and the focus that has to land after it.
-        let mut wider = stored.clone();
-        wider.monitors.push(wider.monitors[0].clone());
-        wider.cameras.push(wider.cameras[0].clone());
-        wider.routing = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
-        wider.routing_inputs = vec![vec![0.014, 0.0]];
-        for camera in &mut wider.cameras {
-            camera.look.push(0.0);
-        }
-        config::validate(&wider).unwrap();
-        crate::slots::store(&dir, 2, &wider).unwrap();
-        let Some(mut app) = playing(config::single(), dir.clone()) else {
+    fn a_reset_puts_the_panel_back_on_the_graph_the_instrument_started_on() {
+        // What Stop takes back: every knob, on every node, to the launch
+        // configuration's own values rather than to the identity — and the
+        // rig it was playing keeps playing.
+        let Some(mut app) = playing(config::external()) else {
             return;
         };
-        assert!(app.sources.is_empty());
+        let started = app.params.clone();
+        let sources = app.sources.len();
+        play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
+        play(&mut app, Action::FocusMonitor(0));
+        play(&mut app, Action::Nudge(Knob::Gamma, 0.5));
+        assert_ne!(app.params, started);
 
-        app.recall(0);
-        assert_eq!(app.params, stored);
-        assert_eq!(app.sources.len(), stored.inputs.len());
-
-        // Sideways, to the same rig with a second monitor: the inputs did not
-        // change but the bank is rebuilt, and a new bank is blank. A still
-        // pattern hands its frame over exactly once, so a source carried
-        // across that swap would leave its layer black for the rest of the
-        // run — the reopen has to follow the bank, not just the inputs.
-        assert!(app.sources[0].frame().is_some(), "nothing to upload");
-        assert!(app.sources[0].frame().is_none(), "uploaded twice");
-        app.recall(2);
-        assert_eq!(app.params.inputs, stored.inputs, "the same bars");
-        assert!(
-            app.sources[0].frame().is_some(),
-            "the rebuilt bank never got the bars"
-        );
-
-        // And back down: the focus walked onto the second camera, which the
-        // recalled graph does not have, so the recall has to land it inside.
-        app.focus = Focus {
-            camera: 1,
-            monitor: 0,
-            input: 0,
-        };
-        app.recall(1);
-        assert_eq!(app.params, config::single());
-        assert!(app.sources.is_empty());
-        assert_eq!(app.focus, Focus::default());
-
-        std::fs::remove_dir_all(&dir).unwrap();
+        play(&mut app, Action::Reset);
+        assert_eq!(app.params, started);
+        assert_eq!(app.sources.len(), sources, "the inputs were reopened");
     }
 
     #[test]
     fn the_seed_button_swaps_one_monitor_s_rig_and_leaves_the_rest() {
         // Two monitors, both lamp-lit, so "it toggled" and "it toggled the
         // one under the faders" are different observations.
-        let Some(mut app) = playing(config::crossed(), scratch("seed-toggle")) else {
+        let Some(mut app) = playing(config::crossed()) else {
             return;
         };
         app.focus_monitor(1);
@@ -1036,9 +899,7 @@ mod tests {
     fn a_camera_the_graph_does_not_have_is_a_button_that_does_nothing() {
         // The select row is eight wide and every shipped graph is shallower,
         // so most of a set is played with some of it pointing past the end.
-        // No slot is written, so nothing makes the directory and there is
-        // nothing to take away afterwards.
-        let Some(mut app) = playing(config::crossed(), scratch("select-past-the-end")) else {
+        let Some(mut app) = playing(config::crossed()) else {
             return;
         };
         assert_eq!(app.params.cameras.len(), 2);
@@ -1058,7 +919,7 @@ mod tests {
         // must not become the knob backspace takes back — that button would
         // then put a knob the hand never turned back to its identity, and
         // report a panel it did not change.
-        let Some(mut app) = playing(config::single(), scratch("send-with-no-input")) else {
+        let Some(mut app) = playing(config::single()) else {
             return;
         };
         assert!(app.params.inputs.is_empty());
@@ -1075,7 +936,7 @@ mod tests {
         assert_ne!(zoom, Knob::Zoom.identity(), "the zoom was never off it");
 
         // And on a graph that has one, the send is a knob like any other.
-        let Some(mut app) = playing(config::external(), scratch("send-with-an-input")) else {
+        let Some(mut app) = playing(config::external()) else {
             return;
         };
         let sent = app.params.knob(Knob::Send, app.focus);
@@ -1090,17 +951,13 @@ mod tests {
     }
 
     #[test]
-    fn the_input_focus_walks_and_lands_inside_a_recalled_graph() {
-        // The focus's third index: `p` steps it, and a recall onto a rig
-        // with fewer inputs has to bring it back inside or the readout names
-        // a source the graph has not got.
-        let dir = scratch("input-focus");
+    fn the_input_focus_walks_round_the_switcher_and_the_readout_says_where() {
+        // The focus's third index: `p` steps it, and the readout names the
+        // source the send is on.
         let mut three = config::external();
         three.inputs = vec![config::external().inputs[0].clone(); 3];
         three.routing_inputs = vec![vec![0.014], vec![0.0], vec![0.0]];
-        crate::slots::store(&dir, 0, &three).unwrap();
-        crate::slots::store(&dir, 1, &config::external()).unwrap();
-        let Some(mut app) = playing(three.clone(), dir.clone()) else {
+        let Some(mut app) = playing(three) else {
             return;
         };
 
@@ -1108,15 +965,16 @@ mod tests {
         play(&mut app, Action::NextInput);
         assert_eq!(app.focus.input, 2);
         assert!(app.params.describe(app.focus).contains("input 3/3"));
-        app.recall(1);
-        assert_eq!(app.focus.input, 0, "the focus stayed off the end");
-        assert!(app.params.describe(app.focus).contains("input 1/1"));
+        // And round, since a step is the only way there is.
+        play(&mut app, Action::NextInput);
+        assert_eq!(app.focus.input, 0);
+        assert!(app.params.describe(app.focus).contains("input 1/3"));
 
-        // And a graph with no inputs at all reads out no send.
-        app.adopt(config::single()).unwrap();
+        // A graph with no inputs at all reads out no send.
+        let Some(app) = playing(config::single()) else {
+            return;
+        };
         assert!(!app.params.describe(app.focus).contains("send"));
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1124,7 +982,7 @@ mod tests {
         // The whole point of the button: Stop already puts everything back,
         // and what a hand mid-piece wants is the one knob it just pushed too
         // far.
-        let Some(mut app) = playing(config::crossed(), scratch("reset-one")) else {
+        let Some(mut app) = playing(config::crossed()) else {
             return;
         };
         app.focus = Focus {
@@ -1189,7 +1047,7 @@ mod tests {
         // apart. Real lamps on a real file descriptor; the device node is
         // the only thing stood in for.
         use crate::lamps::lamp;
-        let Some(mut app) = playing(config::crossed(), scratch("a-frame-of-the-surface")) else {
+        let Some(mut app) = playing(config::crossed()) else {
             return;
         };
         // The seed carries a lamp of its own, and which monitors are seeded
@@ -1247,7 +1105,7 @@ mod tests {
 
     #[test]
     fn a_reset_takes_the_knob_out_of_the_hands_of_the_fader_holding_it() {
-        let Some(mut app) = playing(config::single(), scratch("reset-one-release")) else {
+        let Some(mut app) = playing(config::single()) else {
             return;
         };
         // Gamma is fader 6 and contrast fader 5. Sweep each up from the
@@ -1295,12 +1153,9 @@ mod tests {
     fn the_knob_a_reset_means_does_not_outlive_the_panel_it_was_turned_on() {
         // "The knob that hand was just on" stops being true the moment the
         // panel moves without the hands. A focus change lands the knobs on
-        // another node, and a recall replaces the graph outright — so a
-        // rewind after either would reset a knob nobody has touched, and
-        // after a recall it would write over the preset just played back.
-        let dir = scratch("reset-one-stale");
-        crate::slots::store(&dir, 0, &config::single()).unwrap();
-        let Some(mut app) = playing(config::crossed(), dir.clone()) else {
+        // another node and a reset puts the whole panel back, so a rewind
+        // after either would reset a knob nobody has touched.
+        let Some(mut app) = playing(config::crossed()) else {
             return;
         };
 
@@ -1310,13 +1165,11 @@ mod tests {
         play(&mut app, Action::ResetLastKnob);
         assert_eq!(app.params, moved, "a focus change left the knob named");
 
-        // And across a recall, which is the one that would overwrite a
-        // preset. The nudge is on the panel that the recall then replaces.
         play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
-        play(&mut app, Action::Recall(0));
-        let recalled = app.params.clone();
+        play(&mut app, Action::Reset);
+        let reset = app.params.clone();
         play(&mut app, Action::ResetLastKnob);
-        assert_eq!(app.params, recalled, "a recall left the knob named");
+        assert_eq!(app.params, reset, "a reset left the knob named");
 
         // A knob turned *after* the move is named again, so this clears the
         // name rather than disabling the button.
@@ -1326,14 +1179,13 @@ mod tests {
             app.params.knob(Knob::Gamma, app.focus),
             Knob::Gamma.identity()
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_reset_before_any_knob_has_turned_does_nothing() {
         // There is no "that one" to mean yet, and the panel must not take a
         // guess at which knob was meant.
-        let Some(mut app) = playing(config::single(), scratch("reset-one-cold")) else {
+        let Some(mut app) = playing(config::single()) else {
             return;
         };
         let before = app.params.clone();
@@ -1346,7 +1198,7 @@ mod tests {
         // The key, not the method: `Action::Fine` is the whole of what the
         // tab key and the track-prev button do, and a mode nothing reaches
         // through the action is a mode the instrument has not got.
-        let Some(mut app) = playing(config::single(), scratch("fine-key")) else {
+        let Some(mut app) = playing(config::single()) else {
             return;
         };
         let contrast = |app: &App| app.params.knob(Knob::Contrast, app.focus);
@@ -1378,7 +1230,7 @@ mod tests {
         // The select row moves the knobs to another node; the faders stay
         // where the hands left them. Without the release the next touch
         // throws that node's knob to a position that stood for the old one.
-        let Some(mut app) = playing(config::crossed(), scratch("focus-release")) else {
+        let Some(mut app) = playing(config::crossed()) else {
             return;
         };
         // Catch contrast on monitor 1 and drive it to the top of its travel.
@@ -1406,7 +1258,7 @@ mod tests {
         for camera in &mut wider.cameras {
             camera.look.push(0.0);
         }
-        let Some(mut app) = playing(wider, scratch("select-monitor-bounds")) else {
+        let Some(mut app) = playing(wider) else {
             return;
         };
         assert_eq!(app.params.cameras.len(), 2);
@@ -1425,7 +1277,7 @@ mod tests {
         // The solo carries no monitor of its own, so the keys that walk the
         // focus walk what is on the glass — and a bank that is not soloed
         // shows the lot however far the focus moves.
-        let Some(mut app) = playing(config::crossed(), scratch("solo")) else {
+        let Some(mut app) = playing(config::crossed()) else {
             return;
         };
         assert_eq!(app.soloed(), None);
@@ -1444,7 +1296,7 @@ mod tests {
         // The whole vocabulary is playable without a window system now that
         // the run loop is asked for rather than reached for, so the one
         // action that ends it can be checked alongside the ones that do not.
-        let Some(mut app) = playing(config::single(), scratch("quit")) else {
+        let Some(mut app) = playing(config::single()) else {
             return;
         };
         assert_eq!(app.act(Action::Quit), Flow::Stop);
@@ -1465,7 +1317,7 @@ mod tests {
         // The half the tempo tests cannot reach: which key carries which
         // step. A table that hands the faster ratio to the slower key is a
         // wiring mistake no arithmetic test would see.
-        let Some(mut app) = playing(config::single(), scratch("tempo")) else {
+        let Some(mut app) = playing(config::single()) else {
             return;
         };
         let started = app.tempo.rate();
@@ -1494,7 +1346,7 @@ mod tests {
         // The right half of the row points the faders at a monitor, which
         // before this had only the `m` step. Past the end it does nothing,
         // for the same reason the camera half does.
-        let Some(mut app) = playing(config::crossed(), scratch("select-monitor")) else {
+        let Some(mut app) = playing(config::crossed()) else {
             return;
         };
         assert_eq!(app.params.monitors.len(), 2);
@@ -1503,21 +1355,5 @@ mod tests {
         assert_eq!(app.focus.camera, 0, "the other hand moved");
         play(&mut app, Action::FocusMonitor(7));
         assert_eq!(app.focus.monitor, 1);
-    }
-
-    #[test]
-    fn a_slot_that_will_not_read_leaves_the_rig_playing() {
-        let dir = scratch("unreadable");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(crate::slots::path(&dir, 0), "not toml [").unwrap();
-        let Some(mut app) = playing(config::external(), dir.clone()) else {
-            return;
-        };
-        let before = app.params.clone();
-        app.recall(0); // corrupt
-        app.recall(1); // empty
-        assert_eq!(app.params, before);
-        assert_eq!(app.sources.len(), before.inputs.len());
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

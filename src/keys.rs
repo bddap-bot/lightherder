@@ -4,7 +4,6 @@
 use winit::keyboard::KeyCode;
 
 use crate::params::Knob;
-use crate::slots::SLOTS;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
@@ -34,10 +33,6 @@ pub enum Action {
     /// is a key press, so a mode is a press that stays — and the panel
     /// lights the button that is holding it.
     Fine,
-    /// Write the whole panel to a preset slot.
-    Store(usize),
-    /// Play a preset slot back.
-    Recall(usize),
     /// Swap the focused monitor's seed for the other kind: a white blob on
     /// the glass, or dark glass holding only what the switcher paints on it.
     /// A button and not a knob, because the two are not two settings of one
@@ -59,20 +54,6 @@ pub enum Action {
     Overlay,
     Quit,
 }
-
-/// The preset slots. Function keys because they are the only block of eight
-/// that is not already a knob, and because a slip onto one mid-performance
-/// should not be a knob moving.
-pub(crate) const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
-    (KeyCode::F1, "f1"),
-    (KeyCode::F2, "f2"),
-    (KeyCode::F3, "f3"),
-    (KeyCode::F4, "f4"),
-    (KeyCode::F5, "f5"),
-    (KeyCode::F6, "f6"),
-    (KeyCode::F7, "f7"),
-    (KeyCode::F8, "f8"),
-];
 
 /// How many nodes of each side of the focus have a key of their own. Eight
 /// because that is the keypad, and because it is a control surface's channel
@@ -318,20 +299,9 @@ const fn axis(
     }
 }
 
-/// `shift` is read by two tables and no others. On a slot key it is the
-/// difference between recall and store: both are irreversible — a recall
-/// walks over a live panel nothing has stored — but a hand mid-piece reaches
-/// for a slot far more often than it writes one, and the modifier is the
-/// only thing a keyboard has to tell the two apart. On a node key it is
-/// which side of the focus is meant, camera bare and monitor shifted.
+/// `shift` is read by the node keys and no others: which side of the focus a
+/// key means, camera bare and monitor shifted.
 pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
-    if let Some(slot) = SLOT_KEYS.iter().position(|(bound, _)| *bound == key) {
-        return Some(if shift {
-            Action::Store(slot)
-        } else {
-            Action::Recall(slot)
-        });
-    }
     if let Some(node) = NODE_KEYS.iter().position(|(bound, _)| *bound == key) {
         return Some(if shift {
             Action::FocusMonitor(node)
@@ -354,22 +324,18 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
 /// [`action_for_label`], [`describes`] and [`short`], so their wordings can
 /// differ but what a label reaches cannot.
 enum Binding {
-    Slot { slot: usize, shift: bool },
     Node { node: usize, shift: bool },
     Axis { axis: &'static Axis, up: bool },
     Command(&'static Command),
 }
 
-/// A leading `"shift "` is stripped for every table, and the two that read
-/// it keep it — exactly as [`action_for`] reads the physical key.
+/// A leading `"shift "` is stripped for every table, and the one that reads
+/// it keeps it — exactly as [`action_for`] reads the physical key.
 fn binding(label: &str) -> Option<Binding> {
     let (shift, bare) = match label.strip_prefix("shift ") {
         Some(rest) => (true, rest),
         None => (false, label),
     };
-    if let Some(slot) = SLOT_KEYS.iter().position(|(_, bound)| *bound == bare) {
-        return Some(Binding::Slot { slot, shift });
-    }
     if let Some(node) = NODE_KEYS.iter().position(|(_, bound)| *bound == bare) {
         return Some(Binding::Node { node, shift });
     }
@@ -398,16 +364,13 @@ pub fn labels() -> impl Iterator<Item = &'static str> {
         .flat_map(|axis| [axis.down.1, axis.up.1])
         .chain(COMMANDS.iter().map(|c| c.label))
         .chain(NODE_KEYS.iter().map(|(_, label)| *label))
-        .chain(SLOT_KEYS.iter().map(|(_, label)| *label))
 }
 
-/// What the key spelled `label` does, `"shift f1"` included. `None` for a
+/// What the key spelled `label` does, `"shift num1"` included. `None` for a
 /// label no table claims, which is how a hand-written MIDI map is caught at
 /// load rather than in the middle of a performance.
 pub fn action_for_label(label: &str) -> Option<Action> {
     Some(match binding(label)? {
-        Binding::Slot { slot, shift: true } => Action::Store(slot),
-        Binding::Slot { slot, shift: false } => Action::Recall(slot),
         Binding::Node { node, shift: true } => Action::FocusMonitor(node),
         Binding::Node { node, shift: false } => Action::FocusCamera(node),
         Binding::Axis { axis, up } => {
@@ -423,10 +386,6 @@ pub fn action_for_label(label: &str) -> Option<Action> {
 /// the key it presses cannot be described two different ways.
 pub fn describes(label: &str) -> Option<String> {
     Some(match binding(label)? {
-        Binding::Slot { slot, shift } => {
-            let what = if shift { "store" } else { "recall" };
-            format!("{what} preset slot {}", slot + 1)
-        }
         Binding::Node { node, shift } => {
             let side = if shift { "monitor" } else { "camera" };
             format!("focus {side} {}", node + 1)
@@ -444,10 +403,6 @@ pub fn describes(label: &str) -> Option<String> {
 /// on the card. `None` for a label no table claims.
 pub fn short(label: &str) -> Option<String> {
     Some(match binding(label)? {
-        Binding::Slot { slot, shift } => {
-            let what = if shift { "save" } else { "slot" };
-            format!("{what} {}", slot + 1)
-        }
         Binding::Node { node, shift } => {
             let side = if shift { "mon" } else { "cam" };
             format!("{side} {}", node + 1)
@@ -476,11 +431,6 @@ pub fn help() -> String {
     out.push_str(&format!("  {keys:<12} focus camera 1 to {nodes}\n"));
     let keys = format!("shift {first} / {last}");
     out.push_str(&format!("  {keys:<12} focus monitor 1 to {nodes}\n"));
-    let (first, last) = (SLOT_KEYS[0].1, SLOT_KEYS[SLOTS - 1].1);
-    let keys = format!("{first} / {last}");
-    out.push_str(&format!("  {keys:<12} recall preset slot 1 to {SLOTS}\n"));
-    let keys = format!("shift {first} / {last}");
-    out.push_str(&format!("  {keys:<12} store preset slot 1 to {SLOTS}\n"));
     out
 }
 
@@ -494,7 +444,6 @@ mod tests {
             .flat_map(|a| [a.down.0, a.up.0])
             .chain(COMMANDS.iter().map(|c| c.key))
             .chain(NODE_KEYS.iter().map(|(key, _)| *key))
-            .chain(SLOT_KEYS.iter().map(|(key, _)| *key))
             .collect()
     }
 
@@ -564,24 +513,13 @@ mod tests {
     }
 
     #[test]
-    fn the_slot_keys_recall_and_shift_stores() {
-        for (slot, (key, label)) in SLOT_KEYS.iter().enumerate() {
-            assert_eq!(action_for(*key, false), Some(Action::Recall(slot)));
-            assert_eq!(action_for(*key, true), Some(Action::Store(slot)));
-            assert!(help().contains(label) || (1..SLOTS - 1).contains(&slot));
-        }
-    }
-
-    #[test]
-    fn shift_is_the_slot_and_node_keys_business_and_nobody_else_s() {
+    fn shift_is_the_node_keys_business_and_nobody_else_s() {
         // Held shift must not make a knob key mean something else: on a
-        // physical layout it is held for all sorts of reasons. The two
-        // tables that do read it read it as the same shape — a second thing
-        // the same block of keys names — and never as a different value of
-        // the same thing.
+        // physical layout it is held for all sorts of reasons. The one table
+        // that does read it reads it as the same shape — the other side of
+        // the focus — and never as a different value of the same thing.
         for key in every_key() {
-            let reads_shift = SLOT_KEYS.iter().any(|(bound, _)| *bound == key)
-                || NODE_KEYS.iter().any(|(bound, _)| *bound == key);
+            let reads_shift = NODE_KEYS.iter().any(|(bound, _)| *bound == key);
             if !reads_shift {
                 assert_eq!(action_for(key, true), action_for(key, false), "{key:?}");
                 continue;
@@ -644,10 +582,8 @@ mod tests {
     #[test]
     fn the_help_names_every_binding() {
         let help = help();
-        // The header, the two lines the node keys share, and the two the
-        // slot keys share.
-        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 5);
-        assert!(help.contains("recall preset slot") && help.contains("store preset slot"));
+        // The header and the two lines the node keys share.
+        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 3);
         assert!(help.contains("focus camera 1 to 8") && help.contains("focus monitor 1 to 8"));
         // And that the monitor half needs shift, in the key range rather
         // than only in the words: two identical ranges meaning two different
@@ -698,11 +634,6 @@ mod tests {
             }
         }
         // And it says what the key does, not what its neighbour does.
-        assert_eq!(describes("f3").as_deref(), Some("recall preset slot 3"));
-        assert_eq!(
-            describes("shift f3").as_deref(),
-            Some("store preset slot 3")
-        );
         assert_eq!(describes("=").as_deref(), Some("zoom up"));
         assert_eq!(describes("-").as_deref(), Some("zoom down"));
         assert_eq!(describes("r").as_deref(), Some("reset every knob"));
@@ -722,8 +653,6 @@ mod tests {
                 assert!(!short.is_empty(), "{label}: an empty caption");
             }
         }
-        assert_eq!(short("f3").as_deref(), Some("slot 3"));
-        assert_eq!(short("shift f3").as_deref(), Some("save 3"));
         assert_eq!(short("=").as_deref(), Some("zoom +"));
         assert_eq!(short("-").as_deref(), Some("zoom -"));
         assert_eq!(short("space").as_deref(), Some("blank"));
@@ -735,8 +664,6 @@ mod tests {
     #[test]
     fn the_overlay_toggle_is_reachable_from_keyboard_and_label_alike() {
         assert_eq!(action_for(KeyCode::Backquote, false), Some(Action::Overlay));
-        // Held shift must not hide the help from a hand that happens to be
-        // storing a slot with the other.
         assert_eq!(action_for(KeyCode::Backquote, true), Some(Action::Overlay));
         assert_eq!(action_for_label("`"), Some(Action::Overlay));
     }
@@ -745,8 +672,6 @@ mod tests {
     fn a_label_reaches_the_same_action_the_key_does() {
         assert_eq!(action_for_label("r"), Some(Action::Reset));
         assert_eq!(action_for_label("space"), Some(Action::Clear));
-        assert_eq!(action_for_label("f3"), Some(Action::Recall(2)));
-        assert_eq!(action_for_label("shift f3"), Some(Action::Store(2)));
         assert_eq!(
             action_for_label("="),
             Some(Action::Nudge(Knob::Zoom, Knob::Zoom.increment()))
@@ -765,23 +690,14 @@ mod tests {
         // what the instrument prints; a label on one and not the other is a
         // binding a performer cannot discover or one the help lies about.
         let labels: Vec<&str> = labels().collect();
-        assert_eq!(
-            labels.len(),
-            AXES.len() * 2 + COMMANDS.len() + KEYED_NODES + SLOTS
-        );
+        assert_eq!(labels.len(), AXES.len() * 2 + COMMANDS.len() + KEYED_NODES);
         let help = help();
-        // The camera keys and the slots each print as one range line, its
-        // ends only, so the six in the middle of either are named by those
-        // ends rather than each in turn.
-        let named: Vec<&str> = labels[..labels.len() - KEYED_NODES - SLOTS]
+        // The camera keys print as one range line, its ends only, so the six
+        // in the middle are named by those ends rather than each in turn.
+        let named: Vec<&str> = labels[..labels.len() - KEYED_NODES]
             .iter()
             .copied()
-            .chain([
-                NODE_KEYS[0].1,
-                NODE_KEYS[KEYED_NODES - 1].1,
-                SLOT_KEYS[0].1,
-                SLOT_KEYS[SLOTS - 1].1,
-            ])
+            .chain([NODE_KEYS[0].1, NODE_KEYS[KEYED_NODES - 1].1])
             .collect();
         for label in named {
             assert!(help.contains(label), "{label} is not in the help");
@@ -795,13 +711,6 @@ mod tests {
         }
         for c in COMMANDS {
             assert_eq!(action_for_label(c.label), action_for(c.key, false));
-        }
-        for (key, label) in SLOT_KEYS {
-            assert_eq!(action_for_label(label), action_for(key, false));
-            assert_eq!(
-                action_for_label(&format!("shift {label}")),
-                action_for(key, true)
-            );
         }
         for (key, label) in NODE_KEYS {
             assert_eq!(action_for_label(label), action_for(key, false));

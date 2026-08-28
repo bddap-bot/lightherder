@@ -70,7 +70,7 @@ impl Affine2 {
 
 /// Framing of a camera pointed at a monitor: how the monitor's image is
 /// magnified, turned and shifted on its way back onto that monitor.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Framing {
     /// >1 magnifies the image once per pass.

@@ -281,8 +281,7 @@ pub fn load(arg: &str) -> Result<Params, String> {
 }
 
 /// One TOML file of [`Params`], validated. The one way a graph is read off
-/// disk — the preset slots go through here too, so a saved performance and a
-/// hand-written config get the same door and the same checks.
+/// disk.
 pub fn read(path: &std::path::Path) -> Result<Params, String> {
     let shown = path.display();
     let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
@@ -574,32 +573,6 @@ mod tests {
     }
 
     #[test]
-    fn a_config_file_round_trips() {
-        let dir = std::env::temp_dir().join(format!("lightherder-cfg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        // Between them these carry a non-default value in every field the
-        // format has: the routing and splitter weights, the input patch, the
-        // character and the rail, the keyer's luma half, and the inputs. The
-        // chroma half is on no preset, so it is turned up here by hand
-        // rather than left untested.
-        let chroma_keyed = {
-            let mut params = analog();
-            params.cameras[0].key = Key {
-                hue: 1.2,
-                tolerance: 0.3,
-                ..Key::OFF
-            };
-            params
-        };
-        for params in [crossed(), analog(), external(), webcam(), chroma_keyed] {
-            let path = dir.join("preset.toml");
-            std::fs::write(&path, toml::to_string(&params).unwrap()).unwrap();
-            assert_eq!(load(path.to_str().unwrap()).unwrap(), params);
-        }
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
     fn a_seed_is_written_in_a_file_the_way_the_readme_spells_it() {
         // The union's two shapes as a hand writes them, which is the one
         // thing a serde round trip of the crate's own output cannot check.
@@ -741,9 +714,6 @@ mod tests {
         .unwrap();
         validate(&params).unwrap();
         assert_eq!(params.inputs, one_of_every_input().inputs);
-        // And out again, so a file written by the instrument reads back in.
-        let written = toml::to_string(&params).unwrap();
-        assert_eq!(toml::from_str::<Params>(&written).unwrap(), params);
     }
 
     #[test]

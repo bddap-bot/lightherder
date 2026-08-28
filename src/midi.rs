@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use web_time::Instant;
 
 use crate::keys::{action_for_label, labels, Action};
@@ -65,9 +65,9 @@ pub struct ControlChange {
 
 /// What the surface's controls are wired to.
 ///
-/// Loaded from `midi.toml` beside the preset slots when there is one, and
+/// Loaded from [`map_path`] when there is a file there, and
 /// [`Map::nano_kontrol2`] when there is not.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Map {
     /// Matched, case-insensitively, against the lines of [`CARDS`]: the
@@ -84,24 +84,37 @@ pub struct Map {
     pub button: Vec<Button>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fader {
     pub(crate) cc: u8,
     pub(crate) knob: Knob,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Button {
     pub(crate) cc: u8,
     /// A key, spelled the way the printed help spells it — `"r"`, `"space"`,
-    /// `"shift f1"`.
+    /// `"shift num1"`.
     pub(crate) key: String,
 }
 
 const fn fader(cc: u8, knob: Knob) -> Fader {
     Fader { cc, knob }
+}
+
+/// Where the performer's map is kept: `$XDG_CONFIG_HOME`, or the `~/.config`
+/// the spec falls back to, with a relative `XDG_CONFIG_HOME` ignored the way
+/// the spec says to.
+pub fn map_path() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("lightherder")
+        .join("midi.toml")
 }
 
 impl Map {
@@ -173,19 +186,12 @@ impl Map {
         out
     }
 
-    /// Where the map is kept: beside the preset slots, because both are the
-    /// performer's own configuration of one instrument.
-    fn path(dir: &Path) -> PathBuf {
-        dir.join("midi.toml")
-    }
-
     /// The performer's map if there is one, the factory layout if there is
     /// not. A file that is there and will not parse is an error rather than
     /// a silent fall back to the default: a surface that quietly plays the
     /// wrong knobs is worse than one that will not start.
-    pub fn load(dir: &Path) -> Result<Map, String> {
-        let path = Map::path(dir);
-        let text = match std::fs::read_to_string(&path) {
+    pub fn load(path: &Path) -> Result<Map, String> {
+        let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             // No file, or nowhere a file could be — a browser has no
             // filesystem at all, and "there is no map" is the same answer.
@@ -242,12 +248,12 @@ impl Map {
                     known.join(", ")
                 ));
             }
-            // A "shift " that changes nothing. Only the slot keys and the
-            // node keys read it, so a binding that writes one anywhere else
-            // is asking for something the instrument will not do — and a
-            // performer finding that out mid-set is worse than a line at
-            // startup. Asked of the tables rather than named here, so a key
-            // that starts reading shift needs no second edit.
+            // A "shift " that changes nothing. Only the node keys read it,
+            // so a binding that writes one anywhere else is asking for
+            // something the instrument will not do — and a performer finding
+            // that out mid-set is worse than a line at startup. Asked of the
+            // tables rather than named here, so a key that starts reading
+            // shift needs no second edit.
             if let Some(bare) = b.key.strip_prefix("shift ") {
                 if action_for_label(bare) == action_for_label(&b.key) {
                     return Err(format!(
@@ -425,14 +431,6 @@ fn nano_buttons() -> Vec<Button> {
             format!("shift {key}"),
         ));
     }
-    // Mute plays slot n back, Record writes over it — the two lower rows in
-    // the order of how much they commit. Nothing here is guarded: a single
-    // press on either is irreversible, and the only thing standing between
-    // them is which row a hand lands on.
-    for (slot, (_, key)) in crate::keys::SLOT_KEYS.iter().enumerate() {
-        out.push(button(M_ROW + slot as u8, *key));
-        out.push(button(R_ROW + slot as u8, format!("shift {key}")));
-    }
     out.extend([
         button(62, "space"),
         // The tape row's left half is the reset ladder, in the order of how
@@ -461,9 +459,9 @@ fn nano_buttons() -> Vec<Button> {
         // and this is the only button on the surface a hand has to *mean*.
         button(58, "tab"),
     ]);
-    // Record, track-next and the first two markers are left unbound. Record
-    // above all: it is the one button a blind slip should not find, and the
-    // surface has no want of another irreversible press.
+    // The Mute and Record rows, record, track-next and the first two markers
+    // are left unbound. Record above all: it is the one button a blind slip
+    // should not find.
     out
 }
 
@@ -791,10 +789,10 @@ impl Midi {
     /// blocks, and never waits on a device that is not plugged in.
     ///
     /// Messages rather than actions, so the caller can turn each one into an
-    /// action against the panel the one before it left — a fader and a slot
+    /// action against the panel the one before it left — a fader and a
     /// button inside one frame is a real two-handed gesture, and a whole
-    /// batch decided against one snapshot has the fader dragging a knob out
-    /// of the preset the button just recalled.
+    /// batch decided against one snapshot has the fader answering a panel
+    /// the button has already moved.
     pub fn poll(&mut self) -> Vec<ControlChange> {
         self.connect();
         let mut messages = Vec::new();
@@ -826,8 +824,7 @@ impl Midi {
     ///
     /// The held ones are not decoration. Taking the surface's LED mode takes
     /// every button's light at once — see [`crate::lamps`] — so a button that
-    /// lit itself under a finger has to be lit here or it goes dark for good,
-    /// and the Record row that overwrites a preset slot is on that list.
+    /// lit itself under a finger has to be lit here or it goes dark for good.
     ///
     /// Said again every redraw rather than at each of the several places the
     /// focus moves: this is the one call that cannot miss one, and it also
@@ -881,13 +878,13 @@ impl Midi {
         want
     }
 
-    /// Let go of every fader's grip on its knob. Three times the knobs move
-    /// without the faders moving with them — a recall, a reset, and the
-    /// focus landing on a node whose knobs are somewhere else — and one
-    /// where the faders move without the knobs: an unplug, after which
-    /// nothing can vouch for where a fader is standing. Without this the
-    /// next fader brushed throws its knob to wherever the fader is standing,
-    /// which is the recall undone one knob at a time.
+    /// Let go of every fader's grip on its knob. Twice the knobs move
+    /// without the faders moving with them — a reset, and the focus landing
+    /// on a node whose knobs are somewhere else — and once the faders move
+    /// without the knobs: an unplug, after which nothing can vouch for where
+    /// a fader is standing. Without this the next fader brushed throws its
+    /// knob to wherever the fader is standing, which is the reset undone one
+    /// knob at a time.
     pub fn release(&mut self) {
         for pickup in &mut self.pickup {
             *pickup = Pickup::default();
@@ -1405,16 +1402,16 @@ mod tests {
         let focus = at(2, 1);
         let pair = crate::lamps::lamp(34) | crate::lamps::lamp(37);
         assert_eq!(midi.wanted(focus, Seed::Dark, false, false), pair);
-        // M3 goes down: recall slot 3, whose light nothing else would give
+        // A finger goes down on blank, whose light nothing else would give
         // back. All three lamps, not one.
-        assert_eq!(feed(&mut midi, &params, &cc(50, 127)), [Action::Recall(2)]);
+        assert_eq!(feed(&mut midi, &params, &cc(62, 127)), [Action::Clear]);
         assert_eq!(
             midi.wanted(focus, Seed::Dark, false, false),
-            pair | crate::lamps::lamp(50)
+            pair | crate::lamps::lamp(62)
         );
         // And out again when the finger comes off, which is a message that
         // does nothing else at all.
-        assert_eq!(feed(&mut midi, &params, &cc(50, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(62, 0)), []);
         assert_eq!(midi.wanted(focus, Seed::Dark, false, false), pair);
         // A node the select row does not reach lights nothing of its own,
         // one side at a time so neither can cover for the other.
@@ -1645,17 +1642,8 @@ mod tests {
             })
             .collect();
         assert_eq!(map.button[..8], nodes[..]);
-        let slots: Vec<Button> = (1..=8)
-            .flat_map(|n| {
-                [
-                    button(47 + n, format!("f{n}")),
-                    button(63 + n, format!("shift f{n}")),
-                ]
-            })
-            .collect();
-        assert_eq!(map.button[8..24], slots[..]);
         assert_eq!(
-            map.button[24..],
+            map.button[8..],
             [
                 button(62, "space"),
                 button(43, "backspace"),
@@ -1669,9 +1657,13 @@ mod tests {
         // The one fader the map leaves alone. A knob quietly wired onto it
         // later is a knob a hand finds by throwing it.
         assert!(!map.fader.iter().any(|f| f.cc == 0));
-        // And the four the factory map leaves alone, record above all: a
-        // button bound here is a button a blind slip can find.
-        for cc in [45, 59, 60, 61] {
+        // And the buttons the factory map leaves alone — the Mute and Record
+        // rows whole, record above all: a button bound here is a button a
+        // blind slip can find.
+        for cc in (M_ROW..M_ROW + 8)
+            .chain(R_ROW..R_ROW + 8)
+            .chain([45, 59, 60, 61])
+        {
             assert!(
                 !map.button.iter().any(|b| b.cc == cc),
                 "{} is bound",
@@ -1729,7 +1721,7 @@ mod tests {
     fn a_map_that_would_play_the_wrong_thing_is_refused() {
         // Within one list...
         let mut map = Map::nano_kontrol2();
-        map.button.push(button(48, "esc"));
+        map.button.push(button(S_ROW, "esc"));
         assert!(map.validate().unwrap_err().contains("bound twice"));
 
         // ...and across the two, which matters more: `action_for` looks at
@@ -1750,7 +1742,7 @@ mod tests {
         assert!(why.contains("wiggle"), "{why}");
         // The error lists what a key may be, because a config file is written
         // by hand and there are forty of them.
-        assert!(why.contains("space") && why.contains("f1"), "{why}");
+        assert!(why.contains("space") && why.contains("num1"), "{why}");
 
         let mut map = Map::nano_kontrol2();
         map.device = String::new();
@@ -1767,32 +1759,33 @@ mod tests {
     fn a_map_file_is_read_the_way_it_is_written() {
         // A literal file at the literal name the README documents — not a
         // round trip, which agrees with itself whatever serde was told these
-        // keys are called and wherever `Map::path` decides to look.
+        // keys are called and wherever `map_path` decides to look.
         let dir = scratch("map-file");
-        assert_eq!(Map::path(&dir).file_name().unwrap(), "midi.toml");
+        assert_eq!(map_path().file_name().unwrap(), "midi.toml");
         std::fs::write(
             dir.join("midi.toml"),
             "device = \"nanoKONTROL\"\n\
              [[fader]]\ncc = 0\nknob = \"hue\"\n\
-             [[button]]\ncc = 41\nkey = \"shift f2\"\n",
+             [[button]]\ncc = 41\nkey = \"shift num2\"\n",
         )
         .unwrap();
-        let map = Map::load(&dir).unwrap();
+        let map = Map::load(&dir.join("midi.toml")).unwrap();
         assert_eq!(map.fader, [fader(0, Knob::Hue)]);
-        assert_eq!(map.button, [button(41, "shift f2")]);
+        assert_eq!(map.button, [button(41, "shift num2")]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn no_map_file_is_the_factory_map_and_a_broken_one_is_an_error() {
         let dir = scratch("map-absent");
-        assert_eq!(Map::load(&dir).unwrap(), Map::nano_kontrol2());
+        let path = dir.join("midi.toml");
+        assert_eq!(Map::load(&path).unwrap(), Map::nano_kontrol2());
         std::fs::write(
             dir.join("midi.toml"),
             "device = \"x\"\n[[fader]]\ncc = 0\nknob = \"wobble\"\n",
         )
         .unwrap();
-        let why = Map::load(&dir).unwrap_err();
+        let why = Map::load(&path).unwrap_err();
         assert!(why.contains("wobble"), "{why}");
         // A file that parses but would misplay is caught by the same door.
         std::fs::write(
@@ -1800,7 +1793,7 @@ mod tests {
             "device = \"x\"\n[[button]]\ncc = 1\nkey = \"nope\"\n",
         )
         .unwrap();
-        assert!(Map::load(&dir).unwrap_err().contains("nope"));
+        assert!(Map::load(&path).unwrap_err().contains("nope"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2193,7 +2186,7 @@ mod tests {
     }
 
     #[test]
-    fn the_buttons_reach_the_nodes_the_slots_and_the_transport() {
+    fn the_buttons_reach_the_nodes_and_the_transport() {
         let (mut midi, params) = surface();
         // One from each row, at both ends of it: the rows are three
         // eight-wide blocks of control numbers, and a block written from the
@@ -2216,10 +2209,12 @@ mod tests {
             feed(&mut midi, &params, &cc(39, 127)),
             [Action::FocusMonitor(3)]
         );
-        assert_eq!(feed(&mut midi, &params, &cc(48, 127)), [Action::Recall(0)]);
-        assert_eq!(feed(&mut midi, &params, &cc(55, 127)), [Action::Recall(7)]);
-        assert_eq!(feed(&mut midi, &params, &cc(64, 127)), [Action::Store(0)]);
-        assert_eq!(feed(&mut midi, &params, &cc(71, 127)), [Action::Store(7)]);
+        // The Mute and Record rows are dead: what they played is gone, and
+        // the surface says so by doing nothing rather than by doing
+        // something else.
+        for control in (M_ROW..M_ROW + 8).chain(R_ROW..R_ROW + 8) {
+            assert_eq!(feed(&mut midi, &params, &cc(control, 127)), []);
+        }
         // The transport strip: rewind puts one knob back, stop the whole
         // panel, cycle lifts the overlay, track-prev latches fine mode.
         assert_eq!(

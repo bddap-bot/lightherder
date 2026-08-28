@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer};
 
 use crate::affine::Framing;
 use crate::input::Input;
@@ -14,7 +14,7 @@ use crate::input::Input;
 /// None of these is the loop gain wearing a hat. The gain is a per-channel
 /// multiply of the light coming *back*, and is what puts any chroma into a
 /// white seed's trail at all; these turn the chroma that is already there.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Colour {
     /// Phase of the chroma subcarrier, in radians. Turning it a little each
@@ -110,7 +110,7 @@ impl Colour {
 ///
 /// The monitor's end of the same story is its [`Monitor::headroom`]: these
 /// are the signal's imperfections, that one is the amplifier's.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Character {
     /// Fraction of the light the lens scatters into a halo instead of
@@ -161,7 +161,7 @@ impl Default for Character {
 /// Every camera watches monitors, so every key here is a gate on the
 /// feedback itself — the dark of a trail refused a trip round, or one hue of
 /// it — which is its own instrument to play.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Key {
     /// The luma the key passes in full. Cutting is complete one `softness`
@@ -220,7 +220,7 @@ pub fn key_weights(hue: f32) -> [f32; 3] {
 
 /// One camera in the graph: what it sees, how it frames it, and how much of
 /// the light it hands on.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Camera {
     /// How this camera's view is magnified, turned and shifted relative to
@@ -304,7 +304,7 @@ fn identity_graph() -> Params {
 /// the dark rig's level is already played elsewhere, on the switcher's
 /// crosspoints and the gains behind them, which is why this costs the
 /// surface a button and not a fader.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Seed {
     /// A soft white spot on the glass at this brightness, which is above
@@ -369,7 +369,7 @@ impl fmt::Display for Seed {
 }
 
 /// One monitor in the graph: its front panel and what lights it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Monitor {
     pub colour: Colour,
@@ -410,7 +410,7 @@ impl Monitor {
 /// switcher routing the first onto the second. This is both the live state
 /// the knobs mutate and the on-disk config format — one struct, so the two
 /// cannot drift.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Params {
     pub cameras: Vec<Camera>,
@@ -465,21 +465,6 @@ pub struct Focus {
     pub camera: usize,
     pub monitor: usize,
     pub input: usize,
-}
-
-impl Focus {
-    /// Back inside `params`, which may have fewer nodes than the graph this
-    /// focus was walked on — a recalled preset can bring fewer cameras.
-    /// `config::validate` is what guarantees there is a camera and a monitor
-    /// to land on. Inputs it does not: most graphs have none, and that is the
-    /// one half of a focus that can name nothing — see [`Params::knob`].
-    pub fn clamped(self, params: &Params) -> Focus {
-        Focus {
-            camera: self.camera.min(params.cameras.len().saturating_sub(1)),
-            monitor: self.monitor.min(params.monitors.len().saturating_sub(1)),
-            input: self.input.min(params.inputs.len().saturating_sub(1)),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -788,15 +773,9 @@ impl Knob {
     }
 }
 
-/// By name, not by variant: a config file naming a knob should read the way
-/// the help prints it, and deriving would give it a second spelling to drift
+/// By name, not by variant: a config file naming a knob reads the way the
+/// help prints it, and deriving would give it a second spelling to drift
 /// from.
-impl Serialize for Knob {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.name())
-    }
-}
-
 impl<'de> Deserialize<'de> for Knob {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Knob, D::Error> {
         let name = String::deserialize(deserializer)?;
@@ -860,7 +839,7 @@ impl Params {
     /// A send on a graph with no inputs reads as the connection not made,
     /// which is what it is: there is no crosspoint, so no light comes over
     /// one. That is the only reading here that is not a field — every other
-    /// knob's node is one `Focus::clamped` guarantees exists.
+    /// knob's node is one the focus can only have been walked onto.
     pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
@@ -1233,19 +1212,6 @@ mod tests {
     }
 
     #[test]
-    fn a_seed_reads_back_off_disk_as_the_rig_it_was() {
-        // A preset slot is a config file, so the two variants have to
-        // survive the round trip apart — a union that serialised to one
-        // shape would recall the wrong rig.
-        for seed in [Seed::Dark, Seed::BLOB, Seed::WhiteBlob(0.42)] {
-            let mut params = Params::default();
-            params.monitors[0].seed = seed;
-            let text = toml::to_string(&params).unwrap();
-            assert_eq!(toml::from_str::<Params>(&text).unwrap(), params, "{text}");
-        }
-    }
-
-    #[test]
     fn the_readout_names_the_seed_s_rig_and_not_a_level() {
         // The log line is the instrument's whole readout, and a level alone
         // leaves a performer working out from "0.000" which of the two rigs
@@ -1599,8 +1565,11 @@ mod tests {
     fn a_knob_is_the_same_name_on_disk_as_on_the_terminal() {
         for knob in Knob::ALL {
             assert_eq!(Knob::from_name(knob.name()), Some(knob));
-            let written = toml::Value::try_from(knob).unwrap();
-            assert_eq!(written.as_str(), Some(knob.name()), "{knob:?} on disk");
+            // Through a literal line of TOML, which is how a `midi.toml`
+            // names one: the terminal's spelling has to be the file's.
+            let read: std::collections::HashMap<String, Knob> =
+                toml::from_str(&format!("knob = {:?}", knob.name())).unwrap();
+            assert_eq!(read["knob"], knob, "{knob:?} on disk");
         }
         assert_eq!(Knob::from_name("no such knob"), None);
     }
@@ -1615,57 +1584,6 @@ mod tests {
                 .any(|other| other.name() == knob.name());
             assert!(!clash, "{knob:?} shares its name");
         }
-    }
-
-    #[test]
-    fn a_focus_lands_inside_the_graph_it_is_pointed_at() {
-        let focus = Focus {
-            camera: 3,
-            monitor: 3,
-            input: 0,
-        };
-        assert_eq!(focus.clamped(&crate::config::insanity()), focus);
-        assert_eq!(focus.clamped(&Params::default()), Focus::default());
-        // A graph with different counts on the two sides, from a focus with
-        // different indices: symmetric cases cannot tell the two apart, and
-        // this is the shape a recall actually lands on.
-        let lopsided = {
-            // `crossed` with a monitor taken away: two cameras, one monitor.
-            let mut params = crate::config::crossed();
-            params.monitors.truncate(1);
-            params.routing.truncate(1);
-            for camera in &mut params.cameras {
-                camera.look.truncate(1);
-            }
-            crate::config::validate(&params).unwrap();
-            params
-        };
-        assert_eq!(
-            Focus {
-                camera: 1,
-                monitor: 3,
-                input: 0,
-            }
-            .clamped(&lopsided),
-            Focus {
-                camera: 1,
-                monitor: 0,
-                input: 0,
-            }
-        );
-        assert_eq!(
-            Focus {
-                camera: 5,
-                monitor: 0,
-                input: 0,
-            }
-            .clamped(&lopsided),
-            Focus {
-                camera: 1,
-                monitor: 0,
-                input: 0,
-            }
-        );
     }
 
     #[test]

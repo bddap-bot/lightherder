@@ -28,7 +28,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// How long an input has to hand over its first frame before it counts as
 /// broken. A capture device negotiates a format and a file may be on a slow
@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One external source in the graph.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
     /// Drawn here, once. Still on purpose: motion in this instrument is the
@@ -57,7 +57,7 @@ pub enum Input {
 /// is what drawing earns over `lavfi`: exact levels a test can assert without
 /// pinning an ffmpeg version. Geometry has no such claim — a grid or a
 /// timecode is `{ format = "lavfi", device = "testsrc2" }` and always was.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Pattern {
     /// Eight vertical bars at 75%: white, yellow, cyan, green, magenta, red,

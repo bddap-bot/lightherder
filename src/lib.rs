@@ -16,7 +16,6 @@ pub mod midi;
 pub mod overlay;
 pub mod params;
 pub mod present;
-pub mod slots;
 pub mod tempo;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
@@ -26,7 +25,7 @@ pub mod web;
 /// from the tables that drive the instrument rather than from a copy kept
 /// beside them.
 pub fn cheatsheet() -> Result<String, String> {
-    let map = midi::Map::load(&slots::default_dir())?;
+    let map = midi::Map::load(&midi::map_path())?;
     Ok(format!("{}{}", keys::help(), map.card()))
 }
 
