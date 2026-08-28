@@ -31,9 +31,9 @@ pub enum Mode {
     /// mapped — and exit.
     Cheatsheet,
     /// Step the graph off screen, as fast as the GPU will take it, and report
-    /// what a frame costs. The only way to see how much of a frame is spare:
-    /// on a display the loop is paced by the vertical blank, so a window
-    /// reports sixty at every resolution it can still make in time.
+    /// what a frame costs. The only way to see how much of a pass is spare: on
+    /// a display the loop is paced by the tempo, so a window reports the rate
+    /// it was asked for at every resolution it can still make in time.
     Bench,
     /// Print how to start it, and stop.
     Usage,

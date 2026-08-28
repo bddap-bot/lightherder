@@ -461,6 +461,7 @@ nix-shell --run "cargo run --release -- --windowed crossed"
 | --- | --- |
 | `--windowed` | a window rather than the whole display |
 | `--resolution 3840x2160` | how big every monitor is (default 1920x1080) |
+| `--rate 30` | passes a second, i.e. the speed the piece plays at (default 60, 1 to 240) |
 | `--cheatsheet` | the controls — keys and surface both — and exit |
 | `--bench` | what a frame costs, off screen, and exit |
 
@@ -507,14 +508,29 @@ integrated adapter instead.
 
 ## Deploy
 
-**The frame rate is a tempo, not a smoothness setting.** The loop evolves one
-pass per frame — the camera pulls back 0.6% and turns 0.05 rad per *frame*, and
-the trail decays per frame — so a spiral drawn in a second at sixty is drawn in
-a twenty-fifth of one at fifteen hundred. The present mode is pinned to Fifo
-for that reason rather than taken from the adapter, which offers something
-faster and would be a different piece. The log prints the rate once a second:
-deployed there is no terminal in front of the instrument, and a rate that has
-left sixty is the first thing to know about a graph the machine cannot hold.
+**The pass rate is a tempo, not a smoothness setting.** The loop evolves one
+pass at a time — the camera pulls back 0.6% and turns 0.05 rad per *pass*, and
+the trail decays per pass — so a spiral drawn in a second at sixty is drawn in
+a twenty-fifth of one at fifteen hundred. That makes the rate a control rather
+than a property of the machine, and `7` and `8` move it while the piece plays;
+`--rate` starts it somewhere other than sixty.
+
+**The display keeps its own clock.** A pass is not a present: passes fall due
+on the wall clock at the tempo, and whatever batch of them has run goes to the
+glass on the next vertical blank. The two were one number until #16, which
+made the swapchain a floor under the tempo — Fifo blocks, so a compositor
+handing out fewer frames than sixty played the piece slow, and the only way
+out was Immediate and a torn frame. A torn frame is a wrong frame in a piece
+whose look is the point, so the present mode stays pinned to Fifo and the
+tempo no longer depends on it: a display path granting 41 frames a second
+runs the sixty passes anyway, one or two to a present.
+
+The log prints both clocks once a second — `sim 60 Hz of 60, present 72 Hz` —
+and deployed there is no terminal in front of the instrument, so that line is
+the whole of what can be read. The two say different things. Passes under the
+tempo is the machine or the graph, and the piece really is playing slow.
+Presents under the passes is only the display path, which is allowed to show
+fewer frames than the piece has.
 
 **When the display belongs to another user's session** — as it does on the
 machine this was built for — the instrument runs as that user, who cannot read
@@ -540,13 +556,14 @@ Its own log is how you know it worked, since nothing else on that machine can
 see the screen — and it takes two lines, because they are two different things:
 `1 monitors of 3840x2160` is the bank, and `window 3840x2160 (covering the
 display), presenting Fifo at Rgba8UnormSrgb` is the window. A 4K window over a
-1080p bank prints the second and not the first. Then sixty a second, from the
-first frame rather than from before the pipelines were built.
+1080p bank prints the second and not the first. Then the rate line a second
+later, counted from the first pass rather than from before the pipelines were
+built.
 
 ### What a frame costs
 
-On a display the loop runs at the vertical blank whatever it costs, so a window
-reporting sixty says only that a frame fit — not by how much. `--bench` runs
+On a display a pass has a whole beat to fit inside, so a rate line at the
+tempo says only that it fit — not by how much. `--bench` runs
 the same passes with nothing pacing them: 600 frames after a warm-up, the graph
 stepped and presented into a target the size of the display.
 
@@ -559,8 +576,9 @@ stepped and presented into a target the size of the display.
 | `crossed` (2 monitors) | 0.25 | 0.75 |
 | `insanity` (4 monitors, all-to-all) | 0.67 | 2.35 |
 
-A 60 Hz frame is 16.7 ms, so the heaviest graph that ships uses a seventh of
-one at 4K. Measured on an RTX 2080. What the numbers leave out is a frame's
+A beat at sixty is 16.7 ms, so the heaviest graph that ships uses a seventh of
+one at 4K — which is also the headroom the tempo keys spend: the same graph has
+room for several passes inside one beat. Measured on an RTX 2080. What the numbers leave out is a frame's
 edges rather than its loop: handing the frame to the compositor, and the
 upload of a live input, which for a video file or a capture device is a
 conversion and two writes of a whole frame every frame. `webcam` is measured
@@ -615,6 +633,7 @@ below assumes a US layout.
 | `;` | the focused monitor's seed: a white blob or dark glass |
 | backspace | reset the last knob turned, to its identity |
 | tab | fine mode for the surface's knobs, on or off |
+| `7` `8` | the tempo: passes a second, four presses to halve or double it |
 | `f11` | cover the display, or stop covering it |
 | `` ` `` | the controls overlay, on or off |
 | esc | quit |
