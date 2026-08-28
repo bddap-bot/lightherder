@@ -22,7 +22,21 @@ pub enum Action {
     /// the graph. A select rather than a step: a hand that means "that one"
     /// should not have to walk past the ones it does not mean.
     FocusCamera(usize),
+    /// The same for the monitor half of the focus. It had only the step for
+    /// a long while, which left the eight faders' node the one thing on the
+    /// instrument a hand could not point at outright.
+    FocusMonitor(usize),
     Reset,
+    /// Put the last knob that moved back to its identity, and nothing else.
+    /// Named by having been turned rather than by a control of its own: the
+    /// instrument has two dozen knobs and no display to point at one with,
+    /// and the knob a hand wants back is the knob that hand was just on.
+    ResetKnob,
+    /// Turn the surface's fine mode on or off. A latch rather than a held
+    /// modifier: the device's buttons are momentary and every binding here
+    /// is a key press, so a mode is a press that stays — and the panel
+    /// lights the button that is holding it.
+    Fine,
     /// Write the whole panel to a preset slot.
     Store(usize),
     /// Play a preset slot back.
@@ -50,17 +64,24 @@ pub(crate) const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
     (KeyCode::F8, "f8"),
 ];
 
-/// How many cameras have a key of their own. Eight because that is the
-/// keypad, and because it is a control surface's channel strips — a graph
-/// may hold more cameras than either, and `n` is what walks to those.
-pub(crate) const KEYED_CAMERAS: usize = 8;
+/// How many nodes of each side of the focus have a key of their own. Eight
+/// because that is the keypad, and because it is a control surface's channel
+/// strips — a graph may hold more nodes than either, and `n` and `m` are what
+/// walk to those.
+pub(crate) const KEYED_NODES: usize = 8;
 
-/// The cameras a key reaches outright. The numeric keypad because it is
-/// already numbered the way the cameras are, because it is the last block of
+/// The nodes a key reaches outright: a camera bare, and the monitor of the
+/// same number with `shift` in front. The numeric keypad because it is
+/// already numbered the way the graph is, because it is the last block of
 /// eight the board has left, and because these are physical key codes — so a
 /// board with NumLock off still sends them. A slip onto one moves the focus
 /// and nothing else on the glass.
-pub(crate) const CAMERA_KEYS: [(KeyCode, &str); KEYED_CAMERAS] = [
+///
+/// `shift` for the monitor rather than a second block of eight keys: the
+/// board has no second block, and the two halves of the focus are the same
+/// question asked of the two sides of the graph — which is the shape a
+/// modifier has, not the shape two unrelated tables have.
+pub(crate) const NODE_KEYS: [(KeyCode, &str); KEYED_NODES] = [
     (KeyCode::Numpad1, "num1"),
     (KeyCode::Numpad2, "num2"),
     (KeyCode::Numpad3, "num3"),
@@ -184,6 +205,25 @@ const COMMANDS: &[Command] = &[
         "reset every knob",
         "reset",
     ),
+    // Backspace, because what it does to a knob is what it does to a
+    // character: takes back the last one.
+    cmd(
+        KeyCode::Backspace,
+        "backspace",
+        Action::ResetKnob,
+        "reset the last knob turned",
+        "reset 1",
+    ),
+    // Tab, for stepping the whole surface down to the keys' own step. Off on
+    // the left with nothing else near it: a mode left on by a slip is worse
+    // than one that takes a reach to find.
+    cmd(
+        KeyCode::Tab,
+        "tab",
+        Action::Fine,
+        "fine mode for the surface's knobs, on or off",
+        "fine",
+    ),
     cmd(
         KeyCode::F11,
         "f11",
@@ -233,11 +273,12 @@ const fn axis(
     }
 }
 
-/// `shift` is read by the slot keys and nothing else: recall is one press
-/// and store is the press you have to mean. Both are irreversible — a recall
+/// `shift` is read by two tables and no others. On a slot key it is the
+/// difference between recall and store: both are irreversible — a recall
 /// walks over a live panel nothing has stored — but a hand mid-piece reaches
 /// for a slot far more often than it writes one, and the modifier is the
-/// only thing a keyboard has to tell the two apart.
+/// only thing a keyboard has to tell the two apart. On a node key it is
+/// which side of the focus is meant, camera bare and monitor shifted.
 pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
     if let Some(slot) = SLOT_KEYS.iter().position(|(bound, _)| *bound == key) {
         return Some(if shift {
@@ -246,8 +287,12 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
             Action::Recall(slot)
         });
     }
-    if let Some(camera) = CAMERA_KEYS.iter().position(|(bound, _)| *bound == key) {
-        return Some(Action::FocusCamera(camera));
+    if let Some(node) = NODE_KEYS.iter().position(|(bound, _)| *bound == key) {
+        return Some(if shift {
+            Action::FocusMonitor(node)
+        } else {
+            Action::FocusCamera(node)
+        });
     }
     for axis in AXES {
         if axis.down.0 == key {
@@ -265,13 +310,13 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
 /// differ but what a label reaches cannot.
 enum Binding {
     Slot { slot: usize, shift: bool },
-    Camera(usize),
+    Node { node: usize, shift: bool },
     Axis { axis: &'static Axis, up: bool },
     Command(&'static Command),
 }
 
-/// A leading `"shift "` is stripped for every table but only the slots keep
-/// it, exactly as [`action_for`] reads the physical key.
+/// A leading `"shift "` is stripped for every table, and the two that read
+/// it keep it — exactly as [`action_for`] reads the physical key.
 fn binding(label: &str) -> Option<Binding> {
     let (shift, bare) = match label.strip_prefix("shift ") {
         Some(rest) => (true, rest),
@@ -280,8 +325,8 @@ fn binding(label: &str) -> Option<Binding> {
     if let Some(slot) = SLOT_KEYS.iter().position(|(_, bound)| *bound == bare) {
         return Some(Binding::Slot { slot, shift });
     }
-    if let Some(camera) = CAMERA_KEYS.iter().position(|(_, bound)| *bound == bare) {
-        return Some(Binding::Camera(camera));
+    if let Some(node) = NODE_KEYS.iter().position(|(_, bound)| *bound == bare) {
+        return Some(Binding::Node { node, shift });
     }
     for axis in AXES {
         if axis.down.1 == bare {
@@ -307,7 +352,7 @@ pub fn labels() -> impl Iterator<Item = &'static str> {
     AXES.iter()
         .flat_map(|axis| [axis.down.1, axis.up.1])
         .chain(COMMANDS.iter().map(|c| c.label))
-        .chain(CAMERA_KEYS.iter().map(|(_, label)| *label))
+        .chain(NODE_KEYS.iter().map(|(_, label)| *label))
         .chain(SLOT_KEYS.iter().map(|(_, label)| *label))
 }
 
@@ -318,7 +363,8 @@ pub fn action_for_label(label: &str) -> Option<Action> {
     Some(match binding(label)? {
         Binding::Slot { slot, shift: true } => Action::Store(slot),
         Binding::Slot { slot, shift: false } => Action::Recall(slot),
-        Binding::Camera(camera) => Action::FocusCamera(camera),
+        Binding::Node { node, shift: true } => Action::FocusMonitor(node),
+        Binding::Node { node, shift: false } => Action::FocusCamera(node),
         Binding::Axis { axis, up } => {
             let step = axis.knob.increment();
             Action::Nudge(axis.knob, if up { step } else { -step })
@@ -336,7 +382,10 @@ pub fn describes(label: &str) -> Option<String> {
             let what = if shift { "store" } else { "recall" };
             format!("{what} preset slot {}", slot + 1)
         }
-        Binding::Camera(camera) => format!("focus camera {}", camera + 1),
+        Binding::Node { node, shift } => {
+            let side = if shift { "monitor" } else { "camera" };
+            format!("focus {side} {}", node + 1)
+        }
         Binding::Axis { axis, up } => {
             format!("{} {}", axis.knob.name(), if up { "up" } else { "down" })
         }
@@ -354,7 +403,10 @@ pub fn short(label: &str) -> Option<String> {
             let what = if shift { "save" } else { "slot" };
             format!("{what} {}", slot + 1)
         }
-        Binding::Camera(camera) => format!("cam {}", camera + 1),
+        Binding::Node { node, shift } => {
+            let side = if shift { "mon" } else { "cam" };
+            format!("{side} {}", node + 1)
+        }
         Binding::Axis { axis, up } => {
             format!("{} {}", axis.knob.name(), if up { "+" } else { "-" })
         }
@@ -373,10 +425,12 @@ pub fn help() -> String {
     }
     // Off the tables' own labels, like the two above them: a key rebound
     // must not leave the help naming the old one.
-    let cameras = CAMERA_KEYS.len();
-    let (first, last) = (CAMERA_KEYS[0].1, CAMERA_KEYS[cameras - 1].1);
+    let nodes = NODE_KEYS.len();
+    let (first, last) = (NODE_KEYS[0].1, NODE_KEYS[nodes - 1].1);
     let keys = format!("{first} / {last}");
-    out.push_str(&format!("  {keys:<12} focus camera 1 to {cameras}\n"));
+    out.push_str(&format!("  {keys:<12} focus camera 1 to {nodes}\n"));
+    let keys = format!("shift {first} / {last}");
+    out.push_str(&format!("  {keys:<12} focus monitor 1 to {nodes}\n"));
     let (first, last) = (SLOT_KEYS[0].1, SLOT_KEYS[SLOTS - 1].1);
     let keys = format!("{first} / {last}");
     out.push_str(&format!("  {keys:<12} recall preset slot 1 to {SLOTS}\n"));
@@ -394,7 +448,7 @@ mod tests {
         AXES.iter()
             .flat_map(|a| [a.down.0, a.up.0])
             .chain(COMMANDS.iter().map(|c| c.key))
-            .chain(CAMERA_KEYS.iter().map(|(key, _)| *key))
+            .chain(NODE_KEYS.iter().map(|(key, _)| *key))
             .chain(SLOT_KEYS.iter().map(|(key, _)| *key))
             .collect()
     }
@@ -462,25 +516,60 @@ mod tests {
     }
 
     #[test]
-    fn shift_is_the_slot_keys_business_and_nobody_else_s() {
+    fn shift_is_the_slot_and_node_keys_business_and_nobody_else_s() {
         // Held shift must not make a knob key mean something else: on a
-        // physical layout it is held for all sorts of reasons.
+        // physical layout it is held for all sorts of reasons. The two
+        // tables that do read it read it as the same shape — a second thing
+        // the same block of keys names — and never as a different value of
+        // the same thing.
         for key in every_key() {
-            if SLOT_KEYS.iter().any(|(bound, _)| *bound == key) {
+            let reads_shift = SLOT_KEYS.iter().any(|(bound, _)| *bound == key)
+                || NODE_KEYS.iter().any(|(bound, _)| *bound == key);
+            if !reads_shift {
+                assert_eq!(action_for(key, true), action_for(key, false), "{key:?}");
                 continue;
             }
-            assert_eq!(action_for(key, true), action_for(key, false), "{key:?}");
+            assert_ne!(action_for(key, true), action_for(key, false), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_node_key_is_a_camera_bare_and_a_monitor_shifted() {
+        for (node, (key, label)) in NODE_KEYS.iter().enumerate() {
+            assert_eq!(action_for(*key, false), Some(Action::FocusCamera(node)));
+            assert_eq!(action_for(*key, true), Some(Action::FocusMonitor(node)));
+            // And the same through the label, which is the whole of what a
+            // MIDI map may say — a button that reaches one and not the other
+            // is a surface with a vocabulary the keys have not got.
+            assert_eq!(action_for_label(label), Some(Action::FocusCamera(node)));
+            assert_eq!(
+                action_for_label(&format!("shift {label}")),
+                Some(Action::FocusMonitor(node))
+            );
+            assert_eq!(
+                describes(label).unwrap(),
+                format!("focus camera {}", node + 1)
+            );
+            assert_eq!(
+                describes(&format!("shift {label}")).unwrap(),
+                format!("focus monitor {}", node + 1)
+            );
+            assert_eq!(short(label).unwrap(), format!("cam {}", node + 1));
+            assert_eq!(
+                short(&format!("shift {label}")).unwrap(),
+                format!("mon {}", node + 1)
+            );
         }
     }
 
     #[test]
     fn the_help_names_every_binding() {
         let help = help();
-        // The header, the line the camera keys share, and the two the slot
-        // keys share.
-        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 4);
+        // The header, the two lines the node keys share, and the two the
+        // slot keys share.
+        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 5);
         assert!(help.contains("recall preset slot") && help.contains("store preset slot"));
-        assert!(help.contains("focus camera 1 to 8"));
+        assert!(help.contains("focus camera 1 to 8") && help.contains("focus monitor 1 to 8"));
         for axis in AXES {
             assert!(help.contains(axis.down.1), "{} missing", axis.down.1);
             assert!(help.contains(axis.up.1), "{} missing", axis.up.1);
@@ -588,18 +677,18 @@ mod tests {
         let labels: Vec<&str> = labels().collect();
         assert_eq!(
             labels.len(),
-            AXES.len() * 2 + COMMANDS.len() + KEYED_CAMERAS + SLOTS
+            AXES.len() * 2 + COMMANDS.len() + KEYED_NODES + SLOTS
         );
         let help = help();
         // The camera keys and the slots each print as one range line, its
         // ends only, so the six in the middle of either are named by those
         // ends rather than each in turn.
-        let named: Vec<&str> = labels[..labels.len() - KEYED_CAMERAS - SLOTS]
+        let named: Vec<&str> = labels[..labels.len() - KEYED_NODES - SLOTS]
             .iter()
             .copied()
             .chain([
-                CAMERA_KEYS[0].1,
-                CAMERA_KEYS[KEYED_CAMERAS - 1].1,
+                NODE_KEYS[0].1,
+                NODE_KEYS[KEYED_NODES - 1].1,
                 SLOT_KEYS[0].1,
                 SLOT_KEYS[SLOTS - 1].1,
             ])
@@ -624,7 +713,7 @@ mod tests {
                 action_for(key, true)
             );
         }
-        for (key, label) in CAMERA_KEYS {
+        for (key, label) in NODE_KEYS {
             assert_eq!(action_for_label(label), action_for(key, false));
         }
     }
@@ -632,10 +721,10 @@ mod tests {
     #[test]
     fn a_camera_key_selects_the_camera_it_is_numbered_for() {
         // Numbered from one on the key and from zero in the graph.
-        for (camera, (key, _)) in CAMERA_KEYS.iter().enumerate() {
+        for (camera, (key, _)) in NODE_KEYS.iter().enumerate() {
             assert_eq!(action_for(*key, false), Some(Action::FocusCamera(camera)));
         }
-        let third = CAMERA_KEYS[2].1;
+        let third = NODE_KEYS[2].1;
         assert_eq!(describes(third).as_deref(), Some("focus camera 3"));
         assert_eq!(short(third).as_deref(), Some("cam 3"));
     }

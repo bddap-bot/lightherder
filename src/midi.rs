@@ -374,6 +374,33 @@ pub(crate) fn nano_kontrol2(device: &str) -> bool {
     device.to_lowercase().contains("nanokontrol")
 }
 
+/// The control number that selects each node, by node — the lamp that says
+/// where one hand's knobs are. `which` picks the side: a button whose action
+/// is a select of that side names the node it selects.
+///
+/// The first button that names a node wins, so a map that binds two to one
+/// node lights the one it lists first. A node no button names has no lamp
+/// rather than the nearest one: a graph may run deeper than the select row,
+/// and a light on the wrong button is worse than no light.
+fn select_lamps(
+    action: &[Action],
+    map: &Map,
+    which: fn(&Action) -> Option<usize>,
+) -> Vec<Option<u8>> {
+    action
+        .iter()
+        .zip(&map.button)
+        .fold(Vec::new(), |mut lamp, (action, button)| {
+            if let Some(node) = which(action) {
+                if lamp.len() <= node {
+                    lamp.resize(node + 1, None);
+                }
+                lamp[node].get_or_insert(button.cc);
+            }
+            lamp
+        })
+}
+
 fn button(cc: u8, key: impl Into<String>) -> Button {
     Button {
         cc,
@@ -381,42 +408,67 @@ fn button(cc: u8, key: impl Into<String>) -> Button {
     }
 }
 
+/// How many nodes of each side of the focus the Solo row selects. Four
+/// because no graph anyone plays has more than four cameras or four
+/// monitors, and eight buttons spent on the camera half left the *monitor*
+/// half — the eight faders' node — with no outright address at all, only the
+/// `m` step and no lamp. Half a row that names nothing beats half a row that
+/// names a camera the graph has not got.
+///
+/// A graph deeper than this is reached the way a graph deeper than the
+/// surface always was: `n` and `m` walk to it.
+const SELECTED_NODES: usize = 4;
+
 /// The nanoKONTROL2's buttons, in the three rows and the transport strip it
 /// has them in.
 fn nano_buttons() -> Vec<Button> {
     let mut out = Vec::new();
-    // A strip's three buttons are the three things a performer does to the
-    // thing that strip stands for, in the order of how much they commit:
-    // Solo points the knobs at camera n, Mute plays slot n back, Record
-    // writes over it. Solo selects because that is what a hand off a mixer
-    // reaches for it to do. Nothing here is guarded — the surface has no
-    // modifier, so a single press on either of the lower two rows is
-    // irreversible, and the only thing standing between them is which row a
-    // hand lands on.
+    // The Solo row points the knobs at a node: the left four at the camera
+    // the rotaries turn, the right four at the monitor the faders turn. Solo
+    // selects because that is what a hand off a mixer reaches for it to do,
+    // and the row splits down the middle because the surface's two hands do.
     //
     // Off the key tables rather than beside them, so a label is written once
     // and a rebound key takes its button with it.
-    for (camera, (_, key)) in crate::keys::CAMERA_KEYS.iter().enumerate() {
-        out.push(button(S_ROW + camera as u8, *key));
+    for node in 0..SELECTED_NODES {
+        let (_, key) = crate::keys::NODE_KEYS[node];
+        out.push(button(S_ROW + node as u8, key));
+        out.push(button(
+            S_ROW + (SELECTED_NODES + node) as u8,
+            format!("shift {key}"),
+        ));
     }
+    // Mute plays slot n back, Record writes over it — the two lower rows in
+    // the order of how much they commit. Nothing here is guarded: a single
+    // press on either is irreversible, and the only thing standing between
+    // them is which row a hand lands on.
     for (slot, (_, key)) in crate::keys::SLOT_KEYS.iter().enumerate() {
         out.push(button(M_ROW + slot as u8, *key));
         out.push(button(R_ROW + slot as u8, format!("shift {key}")));
     }
     out.extend([
-        // The markers: the two that move the focus, and the one that blanks
-        // the glass. The camera step stays even though the Solo row selects,
-        // because a graph may run deeper than the eight strips the surface
-        // has.
+        // The markers: the two that step the focus, and the one that blanks
+        // the glass. The steps stay even though the Solo row selects,
+        // because a graph may run deeper than the half-row each side has.
         button(60, "n"),
         button(61, "m"),
         button(62, "space"),
-        // Stop, for the one button that puts the whole panel back.
+        // The tape row's left half is the reset ladder, in the order of how
+        // much it takes back: rewind puts the last knob turned back, stop
+        // puts the whole panel back.
+        button(43, "backspace"),
         button(42, "r"),
         // Cycle shows and hides the overlay that explains all of the above —
         // the one button whose job survives not knowing what any button does.
         button(46, "`"),
+        // Fine mode, up on the track pair with nothing else near it: a latch
+        // left on by a slip is worse than one that takes a reach to find,
+        // and this is the only button on the surface a hand has to *mean*.
+        button(58, "tab"),
     ]);
+    // Forward, play, record and track-next are left unbound on purpose.
+    // Record above all: it is the one button a blind slip should not find,
+    // and the surface has no want of another irreversible press.
     out
 }
 
@@ -559,6 +611,18 @@ struct Pickup {
 /// fader can ever reach.
 const STEP: f32 = 1.0 / 127.0;
 
+/// How much of a knob's travel a whole sweep of its control covers in fine
+/// mode. A sixteenth, so the 128 steps a 7-bit control has land 2032 of them
+/// across the travel instead of 127 — and a sweep still moves the knob far
+/// enough to be a trim rather than a nudge.
+///
+/// One number for every knob rather than the keys' own per-knob step: a step
+/// chosen to be *visible* under a repeating key is not the same quantity as
+/// "finer than the fader", and on the knobs that run 0 to 1 the two are
+/// barely different — the route crosspoint's key step is only a sixth finer
+/// than its fader's, which is no fine mode at all.
+const FINE: f32 = 1.0 / 16.0;
+
 impl Pickup {
     /// Whether this move of the fader reaches its knob, which is at `value`.
     fn catches(&mut self, fader: f32, knob: Knob, value: f32) -> bool {
@@ -578,6 +642,19 @@ impl Pickup {
         };
         self.caught
     }
+
+    /// How far the control moved since the message before it, as a fraction
+    /// of its travel — the whole of what fine mode reads off a fader.
+    ///
+    /// `None` for the first message after a release, which is the one that
+    /// says where the fader is standing: a move is two positions and there
+    /// is only one. Nothing is caught or let go here, because a control
+    /// sending how far it moved cannot throw its knob anywhere — which is
+    /// the only thing [`Pickup::catches`] exists to stop.
+    fn creep(&mut self, fader: f32) -> Option<f32> {
+        let was = self.was.replace(fader)?;
+        Some(fader - was)
+    }
 }
 
 /// The surface, connected or not.
@@ -596,18 +673,25 @@ pub struct Midi {
     port: Option<Port>,
     /// One per entry of `map.fader`, in the same order.
     pickup: Vec<Pickup>,
+    /// Whether the controls are read as how far they moved rather than as
+    /// where they are — see [`Midi::toggle_fine`]. Here rather than in the
+    /// caller because it is one fact about how this surface is read, and a
+    /// copy kept beside the one that decides is a copy to keep in step.
+    fine: bool,
     /// One per entry of `map.button`: whether it is being held. A button is
     /// acted on when it goes down, so a surface whose buttons latch — the
     /// nanoKONTROL2 can be set either way — plays every other press.
     held: Vec<bool>,
-    /// The control number of the button that selects each camera, by camera.
-    /// That button's lamp is the one that says where the knobs are, so it is
-    /// read off the map in force rather than off the factory layout: a
-    /// `midi.toml` that moves the select row moves the light with it.
+    /// The control number of the button that selects each camera, by camera,
+    /// and the same for each monitor. Those two lamps are what say where the
+    /// two hands' knobs are, so they are read off the map in force rather
+    /// than off the factory layout: a `midi.toml` that moves the select row
+    /// moves the lights with it.
     ///
-    /// Indexed by **camera**, unlike every other list here, which is indexed
+    /// Indexed by **node**, unlike every other list here, which is indexed
     /// by button.
-    lamp: Vec<Option<u8>>,
+    lamp_camera: Vec<Option<u8>>,
+    lamp_monitor: Vec<Option<u8>>,
     next_scan: Instant,
     /// The last thing that went wrong looking for the surface, so a device
     /// that is there and will not open is said once rather than sixty times a
@@ -634,23 +718,17 @@ impl Midi {
             .map(|b| action_for_label(&b.key).expect("validate checked every label"))
             .collect();
         Ok(Midi {
-            // Indexed by camera: the button whose lamp says the knobs are on
-            // it. The first button that names a camera wins, so a map that
-            // binds two to one camera lights the one it lists first.
-            lamp: action
-                .iter()
-                .zip(&map.button)
-                .fold(Vec::new(), |mut lamp, (action, button)| {
-                    if let Action::FocusCamera(camera) = action {
-                        if lamp.len() <= *camera {
-                            lamp.resize(camera + 1, None);
-                        }
-                        lamp[*camera].get_or_insert(button.cc);
-                    }
-                    lamp
-                }),
+            lamp_camera: select_lamps(&action, &map, |a| match a {
+                Action::FocusCamera(camera) => Some(*camera),
+                _ => None,
+            }),
+            lamp_monitor: select_lamps(&action, &map, |a| match a {
+                Action::FocusMonitor(monitor) => Some(*monitor),
+                _ => None,
+            }),
             action,
             pickup: vec![Pickup::default(); map.fader.len()],
+            fine: false,
             held: vec![false; map.button.len()],
             map,
             snd: PathBuf::from(DEV_SND),
@@ -710,8 +788,10 @@ impl Midi {
         messages
     }
 
-    /// Light the panel for a focus on `camera`: that camera's select button,
-    /// and every button a finger is on.
+    /// Light the panel for `focus`: the select button of the camera the
+    /// rotaries turn and of the monitor the faders turn, every button a
+    /// finger is on, and every button whose key holds one of the latched
+    /// modes in `on`.
     ///
     /// The held ones are not decoration. Taking the surface's LED mode takes
     /// every button's light at once — see [`crate::lamps`] — so a button that
@@ -724,21 +804,32 @@ impl Midi {
     /// change follows to light it. Saying the same panel again costs nothing
     /// on the wire.
     ///
-    /// A camera past the end of the select row lights nothing: a graph may
-    /// run deeper than the eight strips the surface has, and a lamp on the
-    /// wrong button is worse than no lamp.
-    pub fn show(&self, camera: usize) {
+    /// A node past the end of its half of the select row lights nothing: a
+    /// graph may run deeper than the four strips each half has, and a lamp
+    /// on the wrong button is worse than no lamp.
+    ///
+    /// `on` is the latched modes as the caller keeps them — one slot per
+    /// mode, `None` for a mode that is off — because it is handed over every
+    /// redraw and a list built each time would be a frame's worth of
+    /// allocation for two entries.
+    pub fn show(&self, focus: Focus, on: &[Option<Action>]) {
         if let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) {
-            lamps.show(self.wanted(camera));
+            lamps.show(self.wanted(focus, on));
         }
     }
 
     /// The panel [`Midi::show`] would ask for, apart from whether there is a
     /// surface to ask.
-    fn wanted(&self, camera: usize) -> Lamplight {
-        let mut want = self.lamp.get(camera).copied().flatten().map_or(0, lamp);
-        for (button, held) in self.map.button.iter().zip(&self.held) {
-            if *held {
+    ///
+    /// A mode is lit by its *action*, not by a control number kept here: the
+    /// button that holds a mode is whichever one the map binds that mode's
+    /// key to, so a `midi.toml` that moves it moves the lamp with it, and a
+    /// map that binds it nowhere lights nothing rather than the wrong thing.
+    fn wanted(&self, focus: Focus, on: &[Option<Action>]) -> Lamplight {
+        let at = |row: &[Option<u8>], node: usize| row.get(node).copied().flatten().map_or(0, lamp);
+        let mut want = at(&self.lamp_camera, focus.camera) | at(&self.lamp_monitor, focus.monitor);
+        for ((button, action), held) in self.map.button.iter().zip(&self.action).zip(&self.held) {
+            if *held || on.contains(&Some(*action)) {
                 want |= lamp(button.cc);
             }
         }
@@ -755,6 +846,40 @@ impl Midi {
     pub fn release(&mut self) {
         for pickup in &mut self.pickup {
             *pickup = Pickup::default();
+        }
+    }
+
+    /// Whether fine mode is on, which is what the panel lights its button
+    /// off.
+    pub fn fine(&self) -> bool {
+        self.fine
+    }
+
+    /// Turn fine mode on or off, and say which it now is.
+    ///
+    /// Every fader lets go, in both directions. Fine mode reads a fader as
+    /// how far it moved rather than where it is, so on the way in what a
+    /// fader was holding stops meaning anything, and on the way out the
+    /// fader has walked a long way from a knob it was turning a little.
+    /// Without this the first coarse touch after fine mode throws that knob
+    /// to wherever the fader is standing — the very thing pickup exists to
+    /// stop.
+    pub fn toggle_fine(&mut self) -> bool {
+        self.fine = !self.fine;
+        self.release();
+        self.fine
+    }
+
+    /// Let go of just the controls that hold `knob` — what a reset of one
+    /// knob owes, where [`Midi::release`] would charge the whole panel a
+    /// pickup sweep for it. Everything the full release says applies here to
+    /// this one knob: it has moved without its fader moving with it, so a
+    /// fader left caught would throw it back on the next touch.
+    pub fn release_knob(&mut self, knob: Knob) {
+        for (pickup, fader) in self.pickup.iter_mut().zip(&self.map.fader) {
+            if fader.knob == knob {
+                *pickup = Pickup::default();
+            }
         }
     }
 
@@ -830,6 +955,17 @@ impl Midi {
         if let Some(i) = self.map.fader.iter().position(|f| f.cc == message.control) {
             let knob = self.map.fader[i].knob;
             let fader = f32::from(message.value) / 127.0;
+            // Fine mode reads the control as how far it *moved* rather than
+            // where it is, geared down by [`FINE`]. A `Nudge` and not a
+            // `Set`, which is what keeps the promise the coarse path makes:
+            // the rails, the wrap and the rigid three-channel gain are the
+            // key press's, so there is still nowhere fine mode can put a
+            // knob that a hand could not.
+            if self.fine {
+                let moved = self.pickup[i].creep(fader)?;
+                let (low, high) = knob.limit().ends();
+                return Some(Action::Nudge(knob, moved * (high - low) * FINE));
+            }
             return self.pickup[i]
                 .catches(fader, knob, params.knob(knob, focus))
                 .then(|| Action::Set(knob, value_at(knob, fader)));
@@ -1157,43 +1293,96 @@ mod tests {
         assert_eq!(sysex(&bytes), [vec![0xF0, 0x42, 0x40, 0xF7]]);
     }
 
+    /// The focus a test means, spelled out — `Focus::default()` says nothing
+    /// about which index is which, and a swapped pair would still compile.
+    fn at(camera: usize, monitor: usize) -> Focus {
+        Focus { camera, monitor }
+    }
+
     #[test]
-    fn the_lamp_of_each_camera_is_the_button_that_selects_it() {
+    fn the_lamp_of_each_node_is_the_button_that_selects_it() {
         // Off the map, so the factory Solo row and a `midi.toml` that moved
-        // it both light the button a hand actually reaches for.
+        // it both light the button a hand actually reaches for. The row
+        // splits down the middle: the left four are the cameras the rotaries
+        // turn, the right four the monitors the faders turn.
         let midi = Midi::new(Map::nano_kontrol2()).unwrap();
-        assert_eq!(midi.lamp, (32..40).map(Some).collect::<Vec<_>>());
+        assert_eq!(midi.lamp_camera, (32..36).map(Some).collect::<Vec<_>>());
+        assert_eq!(midi.lamp_monitor, (36..40).map(Some).collect::<Vec<_>>());
 
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| !(32..40).contains(&b.cc));
         map.button.push(button(90, "num2"));
+        map.button.push(button(91, "shift num3"));
         let midi = Midi::new(map).unwrap();
-        assert_eq!(midi.lamp, [None, Some(90)]);
-        // A camera past the end of the select row has no lamp rather than
-        // the nearest one: a graph may run deeper than the surface.
-        assert_eq!(midi.lamp.get(7).copied().flatten(), None);
+        assert_eq!(midi.lamp_camera, [None, Some(90)]);
+        assert_eq!(midi.lamp_monitor, [None, None, Some(91)]);
+        // A node past the end of the select row has no lamp rather than the
+        // nearest one: a graph may run deeper than the surface.
+        assert_eq!(midi.lamp_camera.get(7).copied().flatten(), None);
+        assert_eq!(midi.lamp_monitor.get(7).copied().flatten(), None);
     }
 
     #[test]
-    fn the_panel_is_the_focused_camera_and_whatever_is_under_a_finger() {
+    fn the_panel_is_the_focused_pair_and_whatever_is_under_a_finger() {
         // Taking the surface's LED mode takes every button's light, so a held
         // button has to be lit here or it goes dark for good — and the focus
-        // lamp has to survive alongside it rather than instead of it.
+        // lamps have to survive alongside it rather than instead of it.
         let (mut midi, params) = surface();
-        assert_eq!(midi.wanted(2), crate::lamps::lamp(34));
+        // Camera 3 is S3 and monitor 2 is S6: one lamp per hand, both lit.
+        let focus = at(2, 1);
+        assert_eq!(
+            midi.wanted(focus, &[]),
+            crate::lamps::lamp(34) | crate::lamps::lamp(37)
+        );
         // M3 goes down: recall slot 3, whose light nothing else would give
-        // back. Both lamps, not one.
+        // back. All three lamps, not one.
         assert_eq!(feed(&mut midi, &params, &cc(50, 127)), [Action::Recall(2)]);
         assert_eq!(
-            midi.wanted(2),
-            crate::lamps::lamp(34) | crate::lamps::lamp(50)
+            midi.wanted(focus, &[]),
+            crate::lamps::lamp(34) | crate::lamps::lamp(37) | crate::lamps::lamp(50)
         );
         // And out again when the finger comes off, which is a message that
         // does nothing else at all.
         assert_eq!(feed(&mut midi, &params, &cc(50, 0)), []);
-        assert_eq!(midi.wanted(2), crate::lamps::lamp(34));
-        // A camera the select row does not reach lights nothing of its own.
-        assert_eq!(midi.wanted(99), 0);
+        assert_eq!(
+            midi.wanted(focus, &[]),
+            crate::lamps::lamp(34) | crate::lamps::lamp(37)
+        );
+        // A node the select row does not reach lights nothing of its own,
+        // one side at a time so neither can cover for the other.
+        assert_eq!(midi.wanted(at(99, 1), &[]), crate::lamps::lamp(37));
+        assert_eq!(midi.wanted(at(2, 99), &[]), crate::lamps::lamp(34));
+        assert_eq!(midi.wanted(at(99, 99), &[]), 0);
+    }
+
+    #[test]
+    fn a_latched_mode_lights_the_button_that_holds_it() {
+        // The one thing that says a mode is on to a performer looking at a
+        // fullscreen display. Off the button's *action*, so a `midi.toml`
+        // that moves fine mode moves its lamp with it.
+        let midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        let focus = at(0, 0);
+        let dark = midi.wanted(focus, &[None, None]);
+        assert_eq!(
+            midi.wanted(focus, &[Some(Action::Fine), None]) & !dark,
+            crate::lamps::lamp(58),
+            "fine mode is track-prev on the factory map"
+        );
+        assert_eq!(
+            midi.wanted(focus, &[None, Some(Action::Overlay)]) & !dark,
+            crate::lamps::lamp(46),
+            "the overlay is cycle"
+        );
+
+        // A map that binds the mode's key nowhere lights nothing extra,
+        // rather than the button that number used to be.
+        let mut map = Map::nano_kontrol2();
+        map.button.retain(|b| b.cc != 58);
+        let midi = Midi::new(map).unwrap();
+        assert_eq!(
+            midi.wanted(focus, &[Some(Action::Fine), None]),
+            midi.wanted(focus, &[None, None])
+        );
     }
 
     #[test]
@@ -1329,8 +1518,20 @@ mod tests {
                 fader(23, Knob::Noise),
             ]
         );
-        let cameras: Vec<Button> = (1..=8).map(|n| button(31 + n, format!("num{n}"))).collect();
-        assert_eq!(map.button[..8], cameras[..]);
+        // The select row, split down the middle: the left four strips are the
+        // cameras the rotaries turn, the right four the monitors the faders
+        // turn. Written out rather than generated, so a row that slides by
+        // one — or a half that turns back into four more cameras — fails
+        // here rather than under a hand mid-piece.
+        let nodes: Vec<Button> = (1..=4)
+            .flat_map(|n| {
+                [
+                    button(31 + n, format!("num{n}")),
+                    button(35 + n, format!("shift num{n}")),
+                ]
+            })
+            .collect();
+        assert_eq!(map.button[..8], nodes[..]);
         let slots: Vec<Button> = (1..=8)
             .flat_map(|n| {
                 [
@@ -1346,10 +1547,21 @@ mod tests {
                 button(60, "n"),
                 button(61, "m"),
                 button(62, "space"),
+                button(43, "backspace"),
                 button(42, "r"),
                 button(46, "`"),
+                button(58, "tab"),
             ]
         );
+        // And the four the factory map leaves alone, record above all: a
+        // button bound here is a button a blind slip can find.
+        for cc in [44, 41, 45, 59] {
+            assert!(
+                !map.button.iter().any(|b| b.cc == cc),
+                "{} is bound",
+                silkscreen(&map.device, cc)
+            );
+        }
     }
 
     #[test]
@@ -1650,27 +1862,39 @@ mod tests {
     }
 
     #[test]
-    fn the_buttons_reach_the_cameras_the_slots_and_the_transport() {
+    fn the_buttons_reach_the_nodes_the_slots_and_the_transport() {
         let (mut midi, params) = surface();
         // One from each row, at both ends of it: the rows are three
         // eight-wide blocks of control numbers, and a block written from the
-        // wrong first number lands whole on the wrong row.
+        // wrong first number lands whole on the wrong row. Both ends of the
+        // Solo row are also both *halves* of it — a split written the wrong
+        // way round would still pass on cc 32 alone.
         assert_eq!(
             feed(&mut midi, &params, &cc(32, 127)),
             [Action::FocusCamera(0)]
         );
         assert_eq!(
+            feed(&mut midi, &params, &cc(35, 127)),
+            [Action::FocusCamera(3)]
+        );
+        assert_eq!(
+            feed(&mut midi, &params, &cc(36, 127)),
+            [Action::FocusMonitor(0)]
+        );
+        assert_eq!(
             feed(&mut midi, &params, &cc(39, 127)),
-            [Action::FocusCamera(7)]
+            [Action::FocusMonitor(3)]
         );
         assert_eq!(feed(&mut midi, &params, &cc(48, 127)), [Action::Recall(0)]);
         assert_eq!(feed(&mut midi, &params, &cc(55, 127)), [Action::Recall(7)]);
         assert_eq!(feed(&mut midi, &params, &cc(64, 127)), [Action::Store(0)]);
         assert_eq!(feed(&mut midi, &params, &cc(71, 127)), [Action::Store(7)]);
-        // The transport strip: stop puts the panel back, cycle lifts the
-        // overlay.
+        // The transport strip: rewind puts one knob back, stop the whole
+        // panel, cycle lifts the overlay, track-prev latches fine mode.
+        assert_eq!(feed(&mut midi, &params, &cc(43, 127)), [Action::ResetKnob]);
         assert_eq!(feed(&mut midi, &params, &cc(42, 127)), [Action::Reset]);
         assert_eq!(feed(&mut midi, &params, &cc(46, 127)), [Action::Overlay]);
+        assert_eq!(feed(&mut midi, &params, &cc(58, 127)), [Action::Fine]);
     }
 
     #[test]

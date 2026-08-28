@@ -17,7 +17,7 @@ use crate::input::Source;
 use crate::keys::{action_for, Action};
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
-use crate::params::{Focus, Params};
+use crate::params::{Focus, Knob, Params};
 use crate::present::Present;
 
 /// Borderless rather than exclusive: the instrument renders at its own
@@ -84,6 +84,10 @@ pub struct App {
     midi: Midi,
     /// Whether shift is down, which only the slot keys read.
     shift: bool,
+    /// The last knob that moved, which is the one [`Action::ResetKnob`] puts
+    /// back. `None` until something is turned — on a panel nothing has
+    /// touched there is no "that one" to mean.
+    last_knob: Option<Knob>,
     /// How big every monitor is — see [`crate::cli::DEFAULT_RESOLUTION`], and
     /// note that the window has nothing to do with it.
     resolution: (u32, u32),
@@ -196,6 +200,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             slots,
             midi,
             shift: false,
+            last_knob: None,
             resolution: cli.resolution,
             fullscreen: cli.fullscreen,
             overlay_shown: false,
@@ -460,6 +465,17 @@ impl App {
         }
     }
 
+    /// The same for the monitor the faders turn, and past the end for the
+    /// same reason.
+    fn focus_monitor(&mut self, monitor: usize) {
+        if monitor < self.params.monitors.len() {
+            self.refocus(Focus {
+                monitor,
+                ..self.focus
+            });
+        }
+    }
+
     /// Point the knobs at another node. The one way `self.focus` moves, for
     /// the same reason [`App::adopt`] is the one way `params` is replaced: a
     /// fader that has caught a knob is holding *that* node's knob, and the
@@ -497,6 +513,44 @@ impl App {
         self.metered = Instant::now();
     }
 
+    /// Put the last knob that moved back to its identity, and nothing else.
+    ///
+    /// Only that knob's own faders let go — [`Midi::release_knob`] rather
+    /// than the whole panel's release, which is what a recall or a refocus
+    /// owes: one knob moved without its fader, so charging every other fader
+    /// a pickup sweep for it would make a single-knob reset more expensive
+    /// on the hands than the whole-panel one.
+    fn reset_knob(&mut self) {
+        let Some(knob) = self.last_knob else {
+            // Not silent: the button did nothing, and the one place a
+            // performer can find out why is the line the rest of the panel
+            // reports on.
+            return log::info!("no knob has been turned yet");
+        };
+        self.params.set(knob, knob.identity(), self.focus);
+        self.midi.release_knob(knob);
+        log::info!(
+            "{} reset: {}",
+            knob.name(),
+            self.params.describe(self.focus)
+        );
+    }
+
+    /// The latched modes that are on, for the panel's lamps: a mode lights
+    /// the button whose key toggles it, which is the only thing that says a
+    /// mode is on to a performer looking at a fullscreen display rather than
+    /// at the log.
+    ///
+    /// One slot per mode, `None` for one that is off, because the redraw
+    /// asks for this sixty times a second and a list built each time would
+    /// be an allocation per frame for two entries.
+    fn modes(&self) -> [Option<Action>; 2] {
+        [
+            self.midi.fine().then_some(Action::Fine),
+            self.overlay_shown.then_some(Action::Overlay),
+        ]
+    }
+
     /// One action, from wherever it came. The keyboard and the control
     /// surface both land here and nowhere else, so a binding cannot mean one
     /// thing under a finger and another under a fader.
@@ -504,10 +558,12 @@ impl App {
         match action {
             Action::Nudge(knob, delta) => {
                 self.params.nudge(knob, delta, self.focus);
+                self.last_knob = Some(knob);
                 log::info!("{}", self.params.describe(self.focus));
             }
             Action::Set(knob, value) => {
                 self.params.set(knob, value, self.focus);
+                self.last_knob = Some(knob);
                 log::info!("{}", self.params.describe(self.focus));
             }
             Action::NextCamera => {
@@ -518,6 +574,7 @@ impl App {
                 });
             }
             Action::FocusCamera(camera) => self.focus_camera(camera),
+            Action::FocusMonitor(monitor) => self.focus_monitor(monitor),
             Action::NextMonitor => {
                 let monitor = (self.focus.monitor + 1) % self.params.monitors.len();
                 self.refocus(Focus {
@@ -534,6 +591,11 @@ impl App {
                 Ok(()) => log::info!("reset: {}", self.params.describe(self.focus)),
                 Err(why) => log::error!("reset: {why}"),
             },
+            Action::ResetKnob => self.reset_knob(),
+            Action::Fine => log::info!(
+                "fine {}",
+                if self.midi.toggle_fine() { "on" } else { "off" }
+            ),
             Action::Clear => {
                 if let Some(live) = self.live.as_mut() {
                     live.feedback.clear(&self.gpu.device, &self.gpu.queue);
@@ -645,7 +707,7 @@ impl ApplicationHandler for App {
                 }
                 // And the panel is written every redraw — see [`Midi::show`]
                 // for why every redraw and not each place the focus moves.
-                self.midi.show(self.focus.camera);
+                self.midi.show(self.focus, &self.modes());
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
@@ -730,6 +792,7 @@ mod tests {
             // No file in a scratch directory, so this is the factory map.
             midi: Midi::new(Map::load(&slots).unwrap()).unwrap(),
             shift: false,
+            last_knob: None,
             resolution,
             fullscreen: false,
             overlay_shown: false,

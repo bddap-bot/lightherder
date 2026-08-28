@@ -255,6 +255,33 @@ fn unity_gain() -> [f32; 3] {
     [1.0; 3]
 }
 
+/// One camera on one monitor with every stage doing nothing to the light —
+/// the graph [`Knob::identity`] reads each knob's neutral value out of.
+///
+/// A whole `Params` rather than the handful of constants it is made of, so a
+/// knob's identity is read by the same [`Params::knob`] the surface and the
+/// keys read its value by: a knob that later moves to another field cannot
+/// be neutral here and live there.
+fn identity_graph() -> Params {
+    Params {
+        cameras: vec![Camera {
+            framing: Framing::identity(),
+            gain: unity_gain(),
+            character: Character::CLEAN,
+            key: Key::OFF,
+            look: vec![1.0],
+            look_inputs: Vec::new(),
+        }],
+        monitors: vec![Monitor::default()],
+        inputs: Vec::new(),
+        // A crosspoint's identity is unity, like the loop gain's: the
+        // switcher handing the camera on whole. Zero is the switcher turned
+        // *off*, which is a choice about the graph rather than a stage doing
+        // nothing to the light.
+        routing: vec![vec![1.0]],
+    }
+}
+
 /// One monitor in the graph: its front panel and its seed spot.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -553,6 +580,19 @@ impl Knob {
             | Knob::Noise
             | Knob::KeySoftness => 0.002,
         }
+    }
+
+    /// Where this knob stands with its stage doing nothing to the light:
+    /// zoom 1, no turn, no pan, unity gain, a clean path, the keys off, a
+    /// neutral front panel, no seed. This is what one knob is put back to
+    /// without the rest of the panel going with it.
+    ///
+    /// Read out of [`identity_graph`] rather than written here as a second
+    /// table of numbers: every value it holds is already a named constant a
+    /// config file defaults to, and a table beside them is a copy to keep in
+    /// step. The graph costs two small allocations, once per button press.
+    pub fn identity(self) -> f32 {
+        identity_graph().knob(self, Focus::default())
     }
 
     pub const fn limit(self) -> Limit {
