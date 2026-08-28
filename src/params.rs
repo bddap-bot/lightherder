@@ -1083,6 +1083,125 @@ mod tests {
         }
     }
 
+    /// Every knob's identity, written out as the number it is rather than as
+    /// the constant [`identity_graph`] is built from. Read off the same
+    /// constant the code reads and a knob wired to the wrong field would
+    /// agree with itself: this table is the independent word.
+    const IDENTITIES: [(Knob, f32); 24] = [
+        (Knob::Zoom, 1.0),
+        (Knob::Rotation, 0.0),
+        (Knob::TranslateX, 0.0),
+        (Knob::TranslateY, 0.0),
+        (Knob::Gain, 1.0),
+        (Knob::GainR, 1.0),
+        (Knob::GainG, 1.0),
+        (Knob::GainB, 1.0),
+        (Knob::Bloom, 0.0),
+        // Not zero, and neither is the key's softness: both are aim points
+        // that nothing reads until the stage they belong to is turned up,
+        // and a reset to zero would land that knob hard-edged.
+        (Knob::BloomRadius, 0.03),
+        (Knob::ChromaBleed, 0.0),
+        (Knob::Noise, 0.0),
+        (Knob::KeyThreshold, 0.0),
+        (Knob::KeySoftness, 0.05),
+        (Knob::KeyHue, 0.0),
+        // The top of its travel is the off state, so that is where a keyer
+        // doing nothing to the light stands.
+        (Knob::KeyTolerance, 0.7),
+        (Knob::Seed, 0.0),
+        (Knob::Hue, 0.0),
+        (Knob::Saturation, 1.0),
+        (Knob::Brightness, 0.0),
+        (Knob::Contrast, 1.0),
+        (Knob::Gamma, 1.0),
+        // The rail at twice display white: an amplifier always has one, and
+        // this is the one that touches nothing a monitor can show.
+        (Knob::Headroom, 2.0),
+        // Unity, like the loop gain — the switcher handing the camera on
+        // whole. Zero is the switcher turned off, which blanks the monitor's
+        // feed: a choice about the graph, not a stage doing nothing.
+        (Knob::Route, 1.0),
+    ];
+
+    #[test]
+    fn a_knobs_identity_is_its_stage_doing_nothing() {
+        assert_eq!(
+            IDENTITIES.len(),
+            Knob::ALL.len(),
+            "a knob added since has no identity anyone chose"
+        );
+        for (knob, want) in IDENTITIES {
+            assert_eq!(knob.identity(), want, "{}", knob.name());
+            assert!(
+                Knob::ALL.contains(&knob),
+                "{} is not a knob any more",
+                knob.name()
+            );
+        }
+    }
+
+    #[test]
+    fn every_identity_is_somewhere_its_own_knob_can_stand() {
+        // An identity outside the travel is one the reset can never land on,
+        // and `nudge` would quietly clamp it to a rail instead of saying so.
+        for knob in Knob::ALL {
+            let (low, high) = knob.limit().ends();
+            let at = knob.identity();
+            assert!(at >= low && at <= high, "{} is {at}", knob.name());
+        }
+    }
+
+    #[test]
+    fn resetting_a_knob_lands_it_on_its_identity_and_leaves_the_rest() {
+        // Through `Params::set`, which is what the reset actually calls: a
+        // phase wraps, the rigid gain splits into its three channels, and
+        // every one of them has to arrive.
+        let focus = Focus::default();
+        for knob in Knob::ALL {
+            let mut params = p();
+            let before = params.clone();
+            params.set(knob, knob.identity(), focus);
+            assert!(
+                (params.knob(knob, focus) - knob.identity()).abs() < 1e-6,
+                "{} landed on {}",
+                knob.name(),
+                params.knob(knob, focus)
+            );
+            // And nothing else moved. The rigid gain is the one knob that is
+            // not a field of its own — it turns the three channels and reads
+            // as their mean — so it and they move together in both
+            // directions, and that pair is the only exemption.
+            let channel = |k: Knob| matches!(k, Knob::GainR | Knob::GainG | Knob::GainB);
+            for other in Knob::ALL {
+                let rigid = (knob == Knob::Gain && channel(other))
+                    || (channel(knob) && other == Knob::Gain);
+                if other == knob || rigid {
+                    continue;
+                }
+                assert_eq!(
+                    params.knob(other, focus),
+                    before.knob(other, focus),
+                    "resetting {} moved {}",
+                    knob.name(),
+                    other.name()
+                );
+            }
+        }
+        // The colour offsets the rigid gain slides survive it: the mean is
+        // 1.0 and the channels are still as far apart as they were.
+        let mut params = p();
+        let before = params.cameras[0].gain;
+        params.set(Knob::Gain, Knob::Gain.identity(), focus);
+        let after = params.cameras[0].gain;
+        for channel in 0..3 {
+            assert!(
+                ((after[channel] - after[0]) - (before[channel] - before[0])).abs() < 1e-6,
+                "the offsets moved: {before:?} -> {after:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_encode_matrix_is_the_decode_matrix_inverted() {
         // Transcribed rather than computed, and it is the only reason the

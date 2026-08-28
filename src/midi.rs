@@ -657,6 +657,14 @@ impl Pickup {
     }
 }
 
+/// One control change, for a test in another module to play into the
+/// instrument. The fields stay private so that nothing outside this module
+/// can invent a message the decoder would never have produced.
+#[cfg(test)]
+pub(crate) fn change(control: u8, value: u8) -> ControlChange {
+    ControlChange { control, value }
+}
+
 /// The surface, connected or not.
 pub struct Midi {
     map: Map,
@@ -1767,6 +1775,107 @@ mod tests {
             feed(&mut midi, &params, &cc(4, 127))[..],
             [Action::Set(Knob::Contrast, v)] if (v - 4.0).abs() < 1e-6
         ));
+    }
+
+    /// The nudge one `feed` produced, or a failure naming what came out
+    /// instead. Every fine-mode assertion is about a delta, and a delta of
+    /// two positions divided by 127 does not land on a round number.
+    fn one_nudge(acted: &[Action], knob: Knob) -> f32 {
+        match acted {
+            [Action::Nudge(turned, delta)] if *turned == knob => *delta,
+            other => panic!("wanted one nudge of {}, got {other:?}", knob.name()),
+        }
+    }
+
+    #[test]
+    fn fine_mode_reads_a_fader_as_how_far_it_moved() {
+        let (mut midi, params) = surface();
+        assert!(midi.toggle_fine());
+        // The first message after the mode is entered says where the fader
+        // is standing. A move is two positions and there is only one, so
+        // nothing turns yet — however far the fader is from its knob.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 64)), []);
+        // Contrast is fader 5, over a range of 0 to 4. Eight of the 127
+        // steps, geared a sixteenth: 8/127 of the travel, of a quarter of
+        // that range.
+        let want = 8.0 / 127.0 * 4.0 / 16.0;
+        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 72)), Knob::Contrast);
+        assert!((delta - want).abs() < 1e-6, "{delta} is not {want}");
+        // And down is the same distance the other way.
+        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 64)), Knob::Contrast);
+        assert!((delta + want).abs() < 1e-6, "{delta} is not {}", -want);
+        // A whole sweep of the control covers a sixteenth of the travel,
+        // which is the entire point: 2032 places to stand instead of 127.
+        feed(&mut midi, &params, &cc(4, 0));
+        let mut swept = 0.0;
+        for value in 1..=127 {
+            if let [Action::Nudge(Knob::Contrast, delta)] =
+                feed(&mut midi, &params, &cc(4, value))[..]
+            {
+                swept += delta;
+            }
+        }
+        assert!(
+            (swept - 4.0 / 16.0).abs() < 1e-4,
+            "a full sweep moved {swept}"
+        );
+    }
+
+    #[test]
+    fn fine_mode_does_not_wait_for_pickup_and_cannot_throw_a_knob() {
+        // A fader at the bottom while contrast stands a quarter up. Coarse,
+        // that fader does nothing until the sweep reaches the knob; fine, it
+        // moves the knob at once — and only by how far it travelled, which
+        // is the whole reason it is safe to skip the wait.
+        let (mut midi, params) = surface();
+        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 1)), []);
+        assert!(midi.toggle_fine());
+        assert_eq!(feed(&mut midi, &params, &cc(4, 1)), []);
+        let delta = one_nudge(&feed(&mut midi, &params, &cc(4, 2)), Knob::Contrast);
+        let step = 4.0 / 127.0 / 16.0;
+        assert!((delta - step).abs() < 1e-6, "{delta} is not one fine step");
+    }
+
+    #[test]
+    fn fine_mode_lets_go_of_every_fader_in_both_directions() {
+        // Entering: what a fader was holding stops meaning anything, since
+        // the mode no longer reads where it is standing. Leaving: the fader
+        // has walked away from a knob it turned a little, so a grip kept
+        // through the mode would throw that knob on the next coarse touch —
+        // exactly what pickup exists to stop.
+        let (mut midi, params) = surface();
+        // Catch contrast — a sweep up from the bottom past where it stands —
+        // and confirm the grip.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 40)).len(), 1);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 120)).len(), 1);
+        assert!(midi.toggle_fine());
+        assert!(!midi.toggle_fine());
+        // Back to coarse with the fader parked at the top and the knob still
+        // at 1.0: a fader that kept its grip would slam contrast to 4.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 120)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 100)), []);
+        // Sweeping back down to where the knob is takes it again.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 20)).len(), 1);
+    }
+
+    #[test]
+    fn a_reset_of_one_knob_lets_go_of_that_knob_alone() {
+        // The whole-panel release would charge every other fader a pickup
+        // sweep for one knob moving.
+        let (mut midi, params) = surface();
+        // Catch contrast (fader 5) and gamma (fader 6), each by sweeping up
+        // from the bottom past where it stands.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(5, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 40)).len(), 1);
+        assert_eq!(feed(&mut midi, &params, &cc(5, 40)).len(), 1);
+        midi.release_knob(Knob::Contrast);
+        // Contrast waits for a sweep back to where its knob now is; gamma is
+        // untouched and still follows its fader anywhere.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 120)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(5, 120)).len(), 1);
     }
 
     #[test]

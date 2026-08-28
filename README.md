@@ -216,24 +216,33 @@ Out of the box, with no configuration:
 |---|---|
 | faders 1–8 | the focused **monitor**: seed, hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
-| S 1–8 | focus camera 1–8 |
+| S 1–4 | focus camera 1–4 |
+| S 5–8 | focus monitor 1–4 |
 | M 1–8 | recall preset slot 1–8 |
 | R 1–8 | store preset slot 1–8 |
 | marker set, prev, next | next camera, next monitor, blank the monitors |
+| ◀◀ rewind | put the last knob turned back to its identity |
 | ■ stop | reset every knob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
+| |◀ track prev | fine mode, on or off |
+| ▶▶ forward, ▶ play, ● record, ▶| track next | nothing |
 
 So the left hand works one monitor, the right hand one camera, and the top
-fader is the switcher crosspoint joining the two the hands are on. A strip's
-three buttons are the three things you do to what that strip stands for, in
-order of how much they commit: Solo points the knobs at camera n, Mute plays
-slot n back, Record writes over it. The first two markers step the focus the
-way `n` and `m` do, which is how a graph deeper than eight cameras is reached
-and the only way to change which monitor the faders are on. Nothing on the
-surface is guarded: it has no shift, so a single press on the Mute row walks
-over the live panel and one on the Record row walks over a slot. Nothing is
-bound to quit: a slipped finger during a performance must not be able to stop
-the instrument. Eight of the twenty-four knobs are not on the surface, which
+fader is the switcher crosspoint joining the two the hands are on. The Solo
+row points the knobs at a node, and splits down the middle the way the two
+hands do: the left four name the camera the rotaries turn, the right four the
+monitor the faders turn. It used to name eight cameras, but no graph anyone
+plays has more than four, and spending half a row on cameras a graph has not
+got left the *monitor* — the node under all eight faders — with no outright
+address at all. Mute plays slot n back and Record writes over it, the two
+lower rows in order of how much they commit. The first two markers step the
+focus the way `n` and `m` do, which is how a graph deeper than four of either
+is reached. Nothing on the surface is guarded: it has no shift, so a single
+press on the Mute row walks over the live panel and one on the Record row
+walks over a slot. Nothing is bound to quit, and four buttons are bound to
+nothing at all — Record above all, because a button a blind slip can find is
+not where another irreversible press belongs. Eight of the twenty-four knobs
+are not on the surface, which
 has sixteen controls and no more: the three per-channel gain offsets, which
 colour a rigid gain that is itself on a rotary; the bloom radius, which sizes
 a halo whose amount is; and the keyer's four, which wait for a hand that keys
@@ -252,13 +261,42 @@ The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.
 A latching button plays on every second press.
 
-### The lit button
+### Putting one knob back, and fine mode
 
-**The focused camera's Solo button is lit**, so the panel says where the knobs
-are without anyone reading the log line. It follows the focus from wherever
-the focus moved — a number key, the Solo row, the markers, a preset recall —
-and goes out when the instrument does. A camera past the eighth has no button
-to light, and lights none.
+Stop puts the whole panel back to the graph as it was loaded. **Rewind puts
+back the one knob you were just turning**, to its *identity* — the value at
+which its stage does nothing to the light: zoom 1, no turn, no pan, unity
+gain, a clean path, the keys off, a neutral front panel, no seed. Named by
+having been turned rather than by a control of its own, because there are two
+dozen knobs and no display to point at one with, and the knob a hand wants
+back is the one that hand was just on. Only that knob's fader lets go, so a
+single-knob reset does not charge the rest of the panel a pickup sweep.
+
+**Track-prev latches fine mode, and lights while it is on** — the one thing
+that says a mode is on to somebody watching a fullscreen display rather than
+the log. In fine mode a control is read as *how far it moved* rather than
+where it is, geared sixteen to one: the 128 steps a 7-bit control has land
+2032 of them across the knob's travel instead of 127. It is still the same
+nudge a key press makes, so the rails, the wrap and the rigid three-channel
+gain hold exactly as they did — there is nowhere fine mode can put a knob
+that a hand could not. Every fader lets go on the way in and on the way out:
+a fine sweep walks a fader a long way from a knob it moved a little, and one
+that kept its grip would throw that knob on the next coarse touch.
+
+One number, `FINE` in `midi.rs`, is the whole gearing — and every binding
+above is one `midi.toml` away from being somewhere else.
+
+### The lit buttons
+
+**The Solo button of the focused camera is lit, and so is the focused
+monitor's**, so the panel says where each hand's knobs are without anyone
+reading the log line. They follow the focus from wherever it moved — a number
+key, the Solo row, the markers, a preset recall — and go out when the
+instrument does. A node past the fourth of its half has no button to light,
+and lights none: a graph may run deeper than the surface, and a lamp on the
+wrong button is worse than no lamp. A latched mode lights the button holding
+it by the same rule, off that button's *action*, so a `midi.toml` that moves
+fine mode moves its lamp with it.
 
 That takes setting up, and the app does the setting up. A nanoKONTROL2 leaves
 the factory in **LED Mode: Internal**, where a button lights itself while it is
@@ -502,26 +540,33 @@ below assumes a US layout.
 | `n` | focus the next camera |
 | `num1`…`num8` | focus camera 1–8 outright |
 | `m` | focus the next monitor |
+| shift `num1`…`num8` | focus monitor 1–8 outright |
 | `f1`…`f8` | recall preset slot |
 | shift `f1`…`f8` | store preset slot |
 | space | blank every monitor |
 | `r` | reset every knob |
+| backspace | reset the last knob turned, to its identity |
+| tab | fine mode for the surface's knobs, on or off |
 | `f11` | cover the display, or stop covering it |
 | `` ` `` | the controls overlay, on or off |
 | esc | quit |
 
 The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (seed, colour and headroom); `n` and `m` walk the two focuses
-through the graph and `num1`…`num8` pick a camera outright, and the log line
-names them. Those eight are keypad keys, so on a board with no keypad `n` is
-the only way to the cameras. Routing and splitter weights are config; the
-crosspoint that joins the two focused nodes is not — `/` and `\` sweep it,
-and it is fader 8 on the surface.
+through the graph and `num1`…`num8` pick a node of either side outright, and
+the log line names them. Those eight are keypad keys, so on a board with no
+keypad `n` and `m` are the only way to the nodes. Routing and splitter
+weights are config; the crosspoint that joins the two focused nodes is not —
+`/` and `\` sweep it, and it is fader 8 on the surface.
 
-Shift is read by the slot keys and nothing else — recall is one press, store
-is the press you have to mean. Both are irreversible, since a recall walks
-over a live panel nothing has stored; the modifier is there because a hand
-mid-piece reaches for a slot far more often than it writes one.
+Shift is read by two tables and no others. On a slot key it is the difference
+between recall and store — recall is one press, store is the press you have
+to mean; both are irreversible, since a recall walks over a live panel
+nothing has stored, and the modifier is there because a hand mid-piece
+reaches for a slot far more often than it writes one. On a keypad key it is
+which side of the focus is meant, camera bare and monitor shifted: the board
+has no second block of eight, and the two halves of the focus are the same
+question asked of the two sides of the graph.
 
 The colour and character knobs start neutral, so the instrument out of the box
 is the loop described above and nothing else. Turn one against it: `s` held
@@ -586,9 +631,13 @@ left off, a clock byte landing between a control number and its value, a scene
 dump that must not read as a hundred knob moves, and notes and bends that are
 not knobs. The pickup against a fader that has to reach its knob before it
 moves it, one already standing on it, and one that loses its grip on an
-unplug. The map against a duplicate binding, a key nothing answers to, and a
-literal file rather than a round trip, because a round trip agrees with itself
-whatever the keys are called. The card search against a `/proc/asound/cards`
+unplug — and against fine mode, where a fader is read as how far it moved:
+that the message which only says where it is standing turns nothing, that a
+move is that many geared steps and a whole sweep a sixteenth of the travel,
+that it needs no pickup and still cannot throw a knob, and that a grip is let
+go in both directions. The map against a duplicate binding, a key nothing
+answers to, and a literal file rather than a round trip, because a round trip
+agrees with itself whatever the keys are called. The card search against a `/proc/asound/cards`
 with two other cards that also have raw MIDI devices. And the whole path —
 discovery, the open, the reader thread, the decode, the map and the pickup —
 against a device that is not there when the instrument starts, appears, sends
@@ -611,6 +660,9 @@ against the same focus said sixty times, which must put nothing on the wire,
 against a held button, which must light with the focus rather than instead of
 it, against a lamp no button of the map answers to, which must never reach the
 wire, and against the exit, which must put the lamps out and the mode back.
+The two halves of the select row are lit one side at a time, so neither can
+cover for the other, and a latched mode is checked to light the button its
+key is bound to — and to light nothing when the map binds that key nowhere.
 
 ## In a browser
 

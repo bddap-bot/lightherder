@@ -554,7 +554,18 @@ impl App {
     /// One action, from wherever it came. The keyboard and the control
     /// surface both land here and nowhere else, so a binding cannot mean one
     /// thing under a finger and another under a fader.
+    /// Quit is the one action that needs the run loop, so it is the one this
+    /// keeps: everything else is [`App::act`], which the tests can play
+    /// without a window system under them.
     fn apply(&mut self, action: Action, event_loop: &ActiveEventLoop) {
+        match action {
+            Action::Quit => event_loop.exit(),
+            _ => self.act(action),
+        }
+    }
+
+    /// Every action but the one that ends the run loop.
+    fn act(&mut self, action: Action) {
         match action {
             Action::Nudge(knob, delta) => {
                 self.params.nudge(knob, delta, self.focus);
@@ -620,7 +631,8 @@ impl App {
                     }
                 );
             }
-            Action::Quit => event_loop.exit(),
+            // `apply` took it, and an action cannot be two things at once.
+            Action::Quit => unreachable!("quit needs the run loop"),
         }
     }
 }
@@ -921,6 +933,147 @@ mod tests {
         // sliding to the last camera — which would make six buttons one.
         app.focus_camera(7);
         assert_eq!(app.focus.camera, 1);
+    }
+
+    #[test]
+    fn one_knob_goes_back_and_the_rest_of_the_panel_stays() {
+        // The whole point of the button: Stop already puts everything back,
+        // and what a hand mid-piece wants is the one knob it just pushed too
+        // far.
+        let Some(mut app) = playing(config::crossed(), scratch("reset-one")) else {
+            return;
+        };
+        app.focus = Focus {
+            camera: 1,
+            monitor: 1,
+        };
+        let before = app.params.clone();
+        // Zoom, because the preset loads it at 0.994 rather than at 1.0: a
+        // reset that put back *what was loaded* instead of the identity
+        // would land on the wrong number, and there is nowhere else in this
+        // test that difference shows.
+        assert_ne!(before.knob(Knob::Zoom, app.focus), Knob::Zoom.identity());
+        app.act(Action::Nudge(Knob::Saturation, 1.0));
+        app.act(Action::Nudge(Knob::Zoom, 0.5));
+        assert_ne!(app.params, before);
+
+        // Only the last one turned, and only on the focused node — the other
+        // camera's zoom is a different number in the same field.
+        app.act(Action::ResetKnob);
+        assert_eq!(
+            app.params.knob(Knob::Zoom, app.focus),
+            Knob::Zoom.identity()
+        );
+        assert_eq!(
+            app.params.knob(Knob::Saturation, app.focus),
+            before.knob(Knob::Saturation, app.focus) + 1.0,
+            "the saturation went back too"
+        );
+        assert_eq!(app.params.cameras[0], before.cameras[0], "camera 1 moved");
+
+        // Idempotent: a second press is the same knob at the same place, not
+        // the one before it.
+        app.act(Action::ResetKnob);
+        assert_eq!(
+            app.params.knob(Knob::Zoom, app.focus),
+            Knob::Zoom.identity()
+        );
+        assert_eq!(
+            app.params.knob(Knob::Saturation, app.focus),
+            before.knob(Knob::Saturation, app.focus) + 1.0
+        );
+
+        // And a fader takes over from where the reset left the knob, not
+        // from wherever that fader happens to be standing.
+        app.act(Action::Set(Knob::Gamma, 2.0));
+        app.act(Action::ResetKnob);
+        assert_eq!(
+            app.params.knob(Knob::Gamma, app.focus),
+            Knob::Gamma.identity()
+        );
+    }
+
+    /// One message off the surface, played the way the redraw plays it:
+    /// resolved against the panel as it stands, then applied to it.
+    fn surface(app: &mut App, control: u8, value: u8) {
+        let change = crate::midi::change(control, value);
+        if let Some(action) = app.midi.action_for(change, &app.params, app.focus) {
+            app.act(action);
+        }
+    }
+
+    #[test]
+    fn a_reset_takes_the_knob_out_of_the_hands_of_the_fader_holding_it() {
+        let Some(mut app) = playing(config::single(), scratch("reset-one-release")) else {
+            return;
+        };
+        // Gamma is fader 6 and contrast fader 5. Sweep each up from the
+        // bottom past where its knob stands, which catches it, and leave
+        // both faders at the top with both knobs driven to 4. Contrast
+        // second, so it is the one the reset means.
+        for control in [5, 4] {
+            surface(&mut app, control, 0);
+            surface(&mut app, control, 127);
+        }
+        assert_eq!(app.params.knob(Knob::Gamma, app.focus), 4.0);
+        assert_eq!(app.params.knob(Knob::Contrast, app.focus), 4.0);
+        // Walk gamma away from its fader with the keys, so that whether its
+        // fader is still holding it is a question the next touch answers
+        // out loud: a grip that survived puts it back at the top, and one
+        // that was let go leaves it where the keys left it.
+        app.act(Action::Nudge(Knob::Gamma, -2.0));
+        // Contrast last, so it is the knob the reset means.
+        surface(&mut app, 4, 126);
+        surface(&mut app, 4, 127);
+
+        app.act(Action::ResetKnob);
+        let identity = Knob::Contrast.identity();
+        assert_eq!(app.params.knob(Knob::Contrast, app.focus), identity);
+        // Contrast's fader is still at the top while its knob is back at
+        // 1.0. One that kept its grip throws it straight back on the next
+        // touch — the reset undone by a hand nowhere near it.
+        surface(&mut app, 4, 126);
+        assert_eq!(app.params.knob(Knob::Contrast, app.focus), identity);
+        // And *only* that knob's grip went: gamma's fader is still holding
+        // it and takes it back to the top at a touch. A whole-panel release
+        // here would leave gamma at 2.0, charging a sweep it does not owe.
+        surface(&mut app, 5, 126);
+        assert!(
+            (app.params.knob(Knob::Gamma, app.focus) - 4.0).abs() < 0.05,
+            "gamma let go: {}",
+            app.params.knob(Knob::Gamma, app.focus)
+        );
+        // Contrast takes its fader again by sweeping back down to it.
+        surface(&mut app, 4, 20);
+        assert_ne!(app.params.knob(Knob::Contrast, app.focus), identity);
+    }
+
+    #[test]
+    fn a_reset_before_any_knob_has_turned_does_nothing() {
+        // There is no "that one" to mean yet, and the panel must not take a
+        // guess at which knob was meant.
+        let Some(mut app) = playing(config::single(), scratch("reset-one-cold")) else {
+            return;
+        };
+        let before = app.params.clone();
+        app.act(Action::ResetKnob);
+        assert_eq!(app.params, before);
+    }
+
+    #[test]
+    fn the_select_row_reaches_both_halves_of_the_focus() {
+        // The right half of the row points the faders at a monitor, which
+        // before this had only the `m` step. Past the end it does nothing,
+        // for the same reason the camera half does.
+        let Some(mut app) = playing(config::crossed(), scratch("select-monitor")) else {
+            return;
+        };
+        assert_eq!(app.params.monitors.len(), 2);
+        app.act(Action::FocusMonitor(1));
+        assert_eq!(app.focus.monitor, 1);
+        assert_eq!(app.focus.camera, 0, "the other hand moved");
+        app.act(Action::FocusMonitor(7));
+        assert_eq!(app.focus.monitor, 1);
     }
 
     #[test]
