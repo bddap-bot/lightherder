@@ -8,9 +8,11 @@ A graph of monitors and cameras: a routing matrix mixes any camera onto any
 monitor, beam splitters let one camera watch a blend of monitors, and each
 monitor keeps its own colour controls. Each path carries its own analog
 character — the lens's bloom, composite chroma bleed, grain — and each monitor
-its own amplifier rail. Cameras can also be aimed at things that are not
-monitors: test patterns, video files, capture devices. The whole panel saves
-to and recalls from eight slots. Later increments add a browser build.
+its own amplifier rail. Every camera watches monitors and only monitors, so
+every path in the graph is a loop; light from outside — test patterns, video
+files, capture devices — enters where a real rig's does, on the switcher. The
+whole panel saves to and recalls from eight slots. Later increments add a
+browser build.
 
 ## How it works
 
@@ -102,16 +104,26 @@ all four turned up.
 
 ## External inputs
 
-A camera can be aimed at something that is not a monitor. An input is a
-further layer of the same source bank, addressed by a second splitter list —
-`look` weights the monitors, `look_inputs` the inputs, each counted against
-its own kind, so adding a monitor to a graph cannot renumber what a camera
-was aimed at. Everything already built acts on an input unchanged — the
-switcher routes it, a beam splitter blends it with a monitor, the camera's
-zoom and turn frame it, the lens blooms it. Nothing in the shader knows which
-kind of source it sampled. What an input is *not* is part of the loop: no
-camera draws to one, so it takes no routing column, and it is light entering
-the graph rather than light going round it — the same role a white blob has.
+A camera watches monitors. That is the instrument: a camera on a stand in a
+room of monitors sees the light already going round, so every path in the
+graph closes and there is no such thing as an aimable source. Light that the
+graph did not make plugs into the **switcher** instead, beside the cameras,
+which is where a real rig plugs it in.
+
+An input is a further layer of the same source bank, and the switcher has a
+second half addressed to those layers — `routing[m][c]` weights the cameras
+onto monitor `m`, `routing_inputs[i][m]` weights input `i` onto the same
+monitors. Two lists, each counted against its own kind, so a camera added to
+a graph cannot silently take over an input's level: a list that no longer
+matches its own kind is a refusal rather than a shift. Nothing in the shader
+knows which kind of layer it sampled, and a monitor sums the two halves
+without being told which was which.
+
+What an input is *not* is part of the loop: no camera draws to one and none
+watches one, so it is light entering the graph rather than light going round
+it — the same role a white blob has. It arrives square on and whole, because
+there is no lens between the switcher and it: framing, gain, bloom and the
+keyer are a camera's, and an input passes none.
 
 ```toml
 inputs = [
@@ -119,7 +131,9 @@ inputs = [
   { file = "clip.mp4" },                               # looped, at its own rate
   { capture = { format = "v4l2", device = "/dev/video0" } },
 ]
-cameras = [{ look = [1.0], look_inputs = [0.0, 0.5, 0.0] }]   # this one also sees the clip
+cameras = [{ look = [1.0] }]                           # watches the monitor, as every camera does
+routing = [[0.98]]                                     # …and the switcher sends it back
+routing_inputs = [[0.0], [0.5], [0.0]]                 # the clip, onto that monitor, at half
 ```
 
 A file and a capture device are one implementation — an `ffmpeg` reading
@@ -145,11 +159,11 @@ instrument runs — but a `capture` is a format and a device string handed
 straight to ffmpeg, and `{ format = "lavfi", device = "movie=/private.mp4" }`
 puts a local file on screen. Read a graph before you play it.
 
-Injection level is just the camera's gain, and near unity a little goes a
-long way. The `external` preset hands over a seventieth of what its camera
-sees — 0.014 — into a loop at 0.985 whose monitor has no blob: the trickle
-goes round seventy times before it fades, so every photon on that monitor came
-in from outside.
+Injection level is just the crosspoint the input is patched on, and near
+unity a little goes a long way. The `external` preset sends a seventieth of
+the bars — 0.014 — onto a monitor whose loop runs at 0.985 and whose glass is
+dark: the trickle goes round seventy times before it fades, so every photon on
+that monitor came in from outside.
 
 ### The keyer
 
@@ -162,19 +176,24 @@ key colour — named as a hue, the way this instrument names every colour —
 with a tolerance for how much of it a pixel may carry; at the top of its
 travel the key is off, so grey and the far hues always pass. All four are
 ordinary knobs: on the keys, mappable from a MIDI surface, and saved in
-slots. On the camera rather than on the input, because that is where the gain
-and the framing already are — a camera
-aimed at an input through its key is the webcam rig, and a key on a loop
-camera is a gate on the feedback itself, which is its own instrument to play.
+slots. On the camera because that is the only signal path the instrument has
+— the gain, the framing and the character are all there, and what the
+switcher hands a monitor from outside it hands over whole. Every camera
+watches monitors, so every key is a gate on the feedback itself: the dark of a
+trail, or one hue of it, refused a trip round. That is its own instrument to
+play, and it is not the way a subject is lifted off a room — a webcam's
+backdrop enters the switcher already mixed with its subject, and no key stands
+between the two.
 
-The `webcam` preset is `external` with the bars swapped for
-`/dev/video0` and the luma key on: plug a camera in, recall, play.
+The `webcam` preset is `external` with the bars swapped for `/dev/video0`:
+plug a camera in, recall, play.
 
 A monitor's **seed** is what lights its loop from outside: either a soft
-white blob on the glass, or nothing of its own — the cameras the switcher
-routes onto it. One or the other, not a level with an off value, because the
-two are different rigs and a camera seed's level is already played by that
-camera's gain. `;` swaps them, PLAY does on the surface, and the button is
+white blob on the glass, or nothing of its own — dark glass, holding only
+what the switcher paints on it. One or the other, not a level with an off
+value, because the two are different rigs and the dark rig's level is already
+played on the switcher. `;` swaps them, PLAY does on the surface, and the
+button is
 lit while the focused monitor has its blob. A blob is what starts a loop with
 gain below 1.0, which decays to black with nothing feeding it. The spot sits
 off-centre on purpose: a radially symmetric spot in the middle is a fixed
@@ -458,11 +477,12 @@ monitors = [{ seed = { white_blob = 0.1 } }]
 routing = [[0.98]]
 ```
 
-`look` is the camera's beam splitter — a weight per monitor, and `look_inputs`
-the same over any `inputs`. `seed` is `{ white_blob = <brightness> }` or
-`"camera"`, and defaults to `"camera"` — a monitor lit only by what the
-switcher hands it. `routing[m][c]` is how much of camera `c` monitor
-`m` shows, and anything omitted — framing, gain, colour — is neutral.
+`look` is the camera's beam splitter, a weight per monitor. `seed` is
+`{ white_blob = <brightness> }` or `"dark"`, and defaults to `"dark"` — a
+monitor lit only by what the switcher hands it. `routing[m][c]` is how much
+of camera `c` monitor `m` shows and `routing_inputs[i][m]` how much of input
+`i`, and anything omitted — framing, gain, colour, an empty switcher half — is
+neutral.
 
 The `shell.nix` pins nixpkgs, puts the Vulkan loader and windowing libraries
 on `LD_LIBRARY_PATH`, which wgpu and winit open at run time, and carries the
@@ -580,7 +600,7 @@ below assumes a US layout.
 | shift `f1`…`f8` | store preset slot |
 | space | blank every monitor |
 | `r` | reset every knob |
-| `;` | the focused monitor's seed: a white blob or the camera |
+| `;` | the focused monitor's seed: a white blob or dark glass |
 | backspace | reset the last knob turned, to its identity |
 | tab | fine mode for the surface's knobs, on or off |
 | `f11` | cover the display, or stop covering it |
@@ -643,9 +663,10 @@ bleed carries colour sideways while leaving luma where it was, the grain
 differs frame to frame and arrives on an unlit monitor, the rail bends a peak
 onto the curve it claims while leaving everything under its knee alone, and
 two paths in one graph take their character separately. External inputs get
-the same: what was written to an input's layer is what a camera aimed at it
-sees, it is current in whichever bank the cameras read, blanking the monitors
-leaves it alone, and a splitter and a zoom act on it exactly as on a monitor.
+the same: what was written to an input's layer is what the monitor it is
+patched to shows, it is current in whichever bank the cameras read, blanking
+the monitors leaves it alone, the switcher sums it with a camera on one
+monitor, and it arrives square on however the cameras are framed.
 On a machine with no adapter each one prints the reason straight to the
 process's stderr and returns; libtest still counts them as passed.
 
