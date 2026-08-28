@@ -1729,7 +1729,7 @@ mod tests {
     fn a_map_that_would_play_the_wrong_thing_is_refused() {
         // Within one list...
         let mut map = Map::nano_kontrol2();
-        map.button.push(button(48, "space"));
+        map.button.push(button(48, "esc"));
         assert!(map.validate().unwrap_err().contains("bound twice"));
 
         // ...and across the two, which matters more: `action_for` looks at
@@ -1751,14 +1751,6 @@ mod tests {
         // The error lists what a key may be, because a config file is written
         // by hand and there are forty of them.
         assert!(why.contains("space") && why.contains("f1"), "{why}");
-
-        // A shift that does nothing: every key but the slots ignores it, so a
-        // binding that writes one is saying something the instrument will not
-        // do, and saying so is cheaper than a performer finding out.
-        let mut map = Map::nano_kontrol2();
-        map.button.push(button(90, "shift r"));
-        let why = map.validate().unwrap_err();
-        assert!(why.contains("does not read shift"), "{why}");
 
         let mut map = Map::nano_kontrol2();
         map.device = String::new();

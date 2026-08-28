@@ -278,11 +278,13 @@ dead on that graph. Nothing on the surface is guarded: it has no shift, so a
 single press on the Mute row walks over the live panel and one on the Record
 row walks over a slot. Nothing is bound to quit, and four buttons are bound
 to nothing at all — Record above all, because a button a blind slip can find
-is not where another irreversible press belongs. Eight of the twenty-four
-knobs are not on the surface, which has sixteen controls and no more: the three per-channel gain offsets, which
-colour a rigid gain that is itself on a rotary; the bloom radius, which sizes
-a halo whose amount is; and the keyer's four, which wait for a hand that keys
-more than it bleeds and swaps this map for its own. They all stay on the keys.
+is not where another irreversible press belongs. Nine of the twenty-four
+knobs are not on the surface, which has sixteen controls and binds fifteen of
+them: the three per-channel gain offsets, which colour a rigid gain that is
+itself on a rotary; the bloom radius, which sizes a halo whose amount is; the
+send, which a graph with no inputs would leave a fader holding at nothing;
+and the keyer's four, which wait for a hand that keys more than it bleeds and
+swaps this map for its own. They all stay on the keys.
 
 **A fader does not take its knob over until it has passed through where the
 knob already is.** A fader sends where it is standing, so without that,
@@ -351,8 +353,8 @@ is one `midi.toml` away from being somewhere else.
 **The Solo button of the focused camera is lit, and so is the focused
 monitor's**, so the panel says where each hand's knobs are without anyone
 reading the log line. They follow the focus from wherever it moved — a number
-key, the Solo row, a preset recall — and go out when the instrument does. A node past the fourth of its half has no button to light,
-and lights none: a graph may run deeper than the surface, and a lamp on the
+key, the Solo row, a preset recall — and go out when the instrument does. A
+node past the fourth of its half has no button to light, and lights none: a graph may run deeper than the surface, and a lamp on the
 wrong button is worse than no lamp. A latched mode lights the button holding
 it by the same rule, off that button's *action*, so a `midi.toml` that moves
 fine mode moves its lamp with it.
@@ -645,8 +647,8 @@ The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (colour and headroom); `num1`…`num8` pick a node of either
 side outright, and the log line names them. Those eight are keypad keys and
 they are the keyboard's only way to the nodes, so a board with no keypad and
-no surface plays whatever node the config focused. A third focus, `p`, names
-the input the send acts on — a step and no outright key, since a switcher has
+no surface plays camera one and monitor one, on the knobs the config gave
+them. A third focus, `p`, names the input the send acts on — a step and no outright key, since a switcher has
 four spare inputs at most, and it is a focus of its own rather than a widening
 of the camera's so that riding a send costs you none of the lens.
 
