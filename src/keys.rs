@@ -52,6 +52,11 @@ pub enum Action {
     Seed,
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
+    /// Take the tempo — passes a second, which is the speed the piece plays
+    /// at — times this ratio. A ratio and not a rate, so one action serves
+    /// both directions and the step means the same thing at either end of
+    /// the range; see [`crate::tempo`], which owns the range and the step.
+    Tempo(f32),
     /// Cover the display, or stop covering it.
     Fullscreen,
     /// Show or hide the controls overlay drawn over the picture.
@@ -254,6 +259,25 @@ const COMMANDS: &[Command] = &[
         Action::Fine,
         "fine mode for the surface's knobs, on or off",
         "fine",
+    ),
+    // The tempo, on the two digits the gain channels and the send left
+    // between them. It is the one control that acts on the whole piece
+    // rather than on a node of the graph, and the digits are where the other
+    // levels already are — a hand looking for "faster" finds it by counting
+    // along the row.
+    cmd(
+        KeyCode::Digit7,
+        "7",
+        Action::Tempo(crate::tempo::STEP_DOWN),
+        "slow the piece down (four presses halve the rate)",
+        "rate -",
+    ),
+    cmd(
+        KeyCode::Digit8,
+        "8",
+        Action::Tempo(crate::tempo::STEP_UP),
+        "speed the piece up (four presses double the rate)",
+        "rate +",
     ),
     cmd(
         KeyCode::F11,

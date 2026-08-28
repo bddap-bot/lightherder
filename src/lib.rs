@@ -17,6 +17,7 @@ pub mod overlay;
 pub mod params;
 pub mod present;
 pub mod slots;
+pub mod tempo;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 

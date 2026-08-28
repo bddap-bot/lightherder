@@ -44,6 +44,9 @@ pub struct Cli {
     /// A preset name or the path to a graph file.
     pub graph: String,
     pub resolution: (u32, u32),
+    /// Passes a second — the speed the piece plays at, which the tempo keys
+    /// move from here while it runs. See [`crate::tempo`].
+    pub rate: f32,
     /// Deployed, this instrument is the only thing on its display, so the
     /// window covers it unless asked otherwise — `--windowed` is there
     /// because a machine being worked on is not a machine being played.
@@ -56,6 +59,7 @@ impl Default for Cli {
         Cli {
             graph: PRESETS[0].0.into(),
             resolution: DEFAULT_RESOLUTION,
+            rate: crate::tempo::DEFAULT_RATE,
             fullscreen: true,
             mode: Mode::Play,
         }
@@ -68,12 +72,17 @@ pub fn usage() -> String {
         "usage: lightherder [options] [{} | graph.toml]\n\
          \x20 --windowed          open a window instead of covering the display\n\
          \x20 --resolution WxH    how big every monitor is (default {}x{})\n\
+         \x20 --rate HZ           passes a second, the speed the piece plays at\n\
+         \x20                     (default {}, {} to {}, and the 7 and 8 keys move it)\n\
          \x20 --cheatsheet        print the controls and exit\n\
          \x20 --bench             time {} frames off screen and exit\n\
          \x20 --help              this\n",
         names.join(" | "),
         DEFAULT_RESOLUTION.0,
         DEFAULT_RESOLUTION.1,
+        crate::tempo::DEFAULT_RATE,
+        crate::tempo::MIN_RATE,
+        crate::tempo::MAX_RATE,
         crate::bench::FRAMES,
     )
 }
@@ -105,21 +114,28 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
                     .ok_or_else(|| format!("--resolution needs a size\n{}", usage()))?;
                 cli.resolution = resolution(&value)?;
             }
-            _ => match arg.strip_prefix("--resolution=") {
-                Some(value) => cli.resolution = resolution(value)?,
-                None if arg.starts_with('-') => {
-                    return Err(format!("no such option: {arg}\n{}", usage()))
+            "--rate" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| format!("--rate needs a number of passes\n{}", usage()))?;
+                cli.rate = rate(&value)?;
+            }
+            _ => {
+                if let Some(value) = arg.strip_prefix("--resolution=") {
+                    cli.resolution = resolution(value)?;
+                } else if let Some(value) = arg.strip_prefix("--rate=") {
+                    cli.rate = rate(value)?;
+                } else if arg.starts_with('-') {
+                    return Err(format!("no such option: {arg}\n{}", usage()));
+                } else if let Some(first) = &graph {
+                    return Err(format!(
+                        "two graphs, {first:?} and {arg:?}; there is one instrument\n{}",
+                        usage()
+                    ));
+                } else {
+                    graph = Some(arg);
                 }
-                None => match &graph {
-                    Some(first) => {
-                        return Err(format!(
-                            "two graphs, {first:?} and {arg:?}; there is one instrument\n{}",
-                            usage()
-                        ))
-                    }
-                    None => graph = Some(arg),
-                },
-            },
+            }
         }
     }
     if let Some(graph) = graph {
@@ -157,6 +173,23 @@ fn resolution(value: &str) -> Result<(u32, u32), String> {
     Ok((side(w)?, side(h)?))
 }
 
+/// Passes a second. Refused rather than clamped when it is outside the range
+/// the instrument plays at: a performer who typed 6000 meant something, and
+/// silently playing 240 instead would answer neither the number typed nor the
+/// mistake behind it.
+fn rate(value: &str) -> Result<f32, String> {
+    use crate::tempo::{MAX_RATE, MIN_RATE};
+    let hz: f32 = value
+        .parse()
+        .map_err(|_| format!("rate {value:?} is not a number of passes a second"))?;
+    if !(MIN_RATE..=MAX_RATE).contains(&hz) {
+        return Err(format!(
+            "{hz} passes a second is outside {MIN_RATE} to {MAX_RATE}, the range this plays at"
+        ));
+    }
+    Ok(hz)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +205,7 @@ mod tests {
         assert!(cli.fullscreen);
         assert_eq!(cli.mode, Mode::Play);
         assert_eq!(cli.resolution, DEFAULT_RESOLUTION);
+        assert_eq!(cli.rate, crate::tempo::DEFAULT_RATE);
     }
 
     #[test]
@@ -209,6 +243,23 @@ mod tests {
         assert!(parse_argv(&["--resolution"])
             .unwrap_err()
             .contains("needs a size"));
+    }
+
+    #[test]
+    fn a_rate_outside_the_range_is_refused_rather_than_clamped() {
+        for spelling in [vec!["--rate=15"], vec!["--rate", "15"]] {
+            assert_eq!(parse_argv(&spelling).unwrap().rate, 15.0);
+        }
+        // Clamping would play 240 for a piece asked to run at 6000, which
+        // is neither the number typed nor a word about the mistake.
+        let why = parse_argv(&["--rate=6000"]).unwrap_err();
+        assert!(why.contains("outside"), "{why}");
+        assert!(parse_argv(&["--rate=0"]).is_err());
+        assert!(parse_argv(&["--rate=fast"])
+            .unwrap_err()
+            .contains("not a number"));
+        assert!(parse_argv(&["--rate=NaN"]).is_err());
+        assert!(parse_argv(&["--rate"]).unwrap_err().contains("needs a"));
     }
 
     #[test]
@@ -259,7 +310,13 @@ mod tests {
     #[test]
     fn the_usage_names_every_flag_the_parser_answers_to() {
         let usage = usage();
-        for flag in ["--windowed", "--resolution", "--cheatsheet", "--bench"] {
+        for flag in [
+            "--windowed",
+            "--resolution",
+            "--rate",
+            "--cheatsheet",
+            "--bench",
+        ] {
             assert!(usage.contains(flag), "{flag} is not in the usage");
         }
         // And every preset, so the list a performer is shown is the loader's
