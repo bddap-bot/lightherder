@@ -43,8 +43,6 @@ struct Live {
     config: wgpu::SurfaceConfiguration,
     feedback: Feedback,
     present: Present,
-    /// The controls overlay, built once from the map in force — the map
-    /// cannot change while the instrument runs, so neither can this.
     overlay: Overlay,
 }
 
@@ -294,7 +292,7 @@ impl Live {
         // an explicit clear.
         let feedback = Feedback::new(&gpu.device, resolution.0, resolution.1, params);
         let present = Present::new(&gpu.device, &feedback, format);
-        let overlay = Overlay::new(&gpu.device, &gpu.queue, format, map);
+        let overlay = Overlay::new(&gpu.device, &gpu.queue, format, map, params);
 
         Ok(Live {
             window,
@@ -428,6 +426,9 @@ impl App {
             None if rebank => self.sources.iter_mut().for_each(Source::replay),
             None => {}
         }
+        // The picture is of the graph's own cameras and monitors.
+        let redraw = params.cameras.len() != self.params.cameras.len()
+            || params.monitors.len() != self.params.monitors.len();
         // Blanked, as any bank is at creation, which is what a rig with
         // different monitors means anyway.
         if let Some(live) = self.live.as_mut() {
@@ -435,6 +436,15 @@ impl App {
                 let (width, height) = self.resolution;
                 live.feedback = Feedback::new(&self.gpu.device, width, height, &params);
                 live.present = Present::new(&self.gpu.device, &live.feedback, live.config.format);
+            }
+            if redraw {
+                live.overlay = Overlay::new(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    live.config.format,
+                    self.midi.map(),
+                    &params,
+                );
             }
         }
         self.focus = self.focus.clamped(&params);
