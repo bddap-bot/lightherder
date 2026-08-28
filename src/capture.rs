@@ -32,7 +32,6 @@ const RATE: f32 = 30.0;
 /// What a texture-to-buffer copy pads its rows to.
 const ROW_ALIGN: u32 = 256;
 
-/// Where captures land.
 pub fn dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -60,7 +59,7 @@ pub struct Capture {
     /// it is asked for.
     clock: Option<Tempo>,
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     path: PathBuf,
 }
 
@@ -72,7 +71,7 @@ impl Capture {
         size: (u32, u32),
         format: wgpu::TextureFormat,
     ) -> Result<Capture, String> {
-        Capture::new(device, dir, size, format, "png", &["-frames:v", "1"], None)
+        Capture::new(device, dir, size, format, "png", &[], None)
     }
 
     /// The display for as long as the capture is kept, as an H.264 file.
@@ -162,23 +161,23 @@ impl Capture {
             frames: 0,
             clock,
             child,
-            stdin,
+            stdin: Some(stdin),
             path,
         })
-    }
-
-    /// What was written, so far.
-    pub fn frames(&self) -> u64 {
-        self.frames
     }
 
     /// Draw the display into this capture and hand ffmpeg what falls due: a
     /// still's one frame, or however many [`RATE`] owes since the last call.
     ///
-    /// The rate the display hands out frames at is not the rate a video
-    /// plays back at, so a slow display duplicates the frame it did draw and
-    /// a fast one skips — either way a recording lasts as long as the hand
-    /// held the button.
+    /// The rate a display hands frames out at is not the rate a video plays
+    /// back at, so a slow display duplicates the frame it did draw and a
+    /// fast one skips. Two costs ride on that, both the recording's and
+    /// neither the piece's: the read back below waits for the GPU, and a
+    /// write waits for ffmpeg — so a display that would rather not be held
+    /// up should not be recorded. And a stall longer than [`Tempo`]'s
+    /// backlog is dropped rather than owed, exactly as the piece's own
+    /// passes are, which leaves a recording made through one shorter than
+    /// the hand was on the button.
     pub fn frame(
         &mut self,
         device: &wgpu::Device,
@@ -196,9 +195,10 @@ impl Capture {
             return Ok(());
         }
         present.draw(device, queue, &self.target, monitors, solo, overlay);
-        self.read(device, queue);
+        self.read(device, queue)?;
+        let stdin = self.stdin.as_mut().ok_or("the pipe is closed")?;
         for _ in 0..due {
-            self.stdin
+            stdin
                 .write_all(&self.frame)
                 .map_err(|e| format!("{}: {e}", self.path.display()))?;
             self.frames += 1;
@@ -206,9 +206,9 @@ impl Capture {
         Ok(())
     }
 
-    /// The capture texture into `self.frame`, packed: the copy's rows are
-    /// padded and a raw frame's are not.
-    fn read(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    /// The capture texture into `self.frame`: the copy's rows are padded and
+    /// a raw frame's are not.
+    fn read(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), String> {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("capture readback"),
         });
@@ -235,11 +235,15 @@ impl Capture {
         );
         queue.submit([encoder.finish()]);
         let slice = self.readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map the capture"));
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        // A refusal and not a panic, the way every other failure a capture
+        // can meet is: the instrument goes on playing without one.
         device
             .poll(wgpu::PollType::wait_indefinitely())
-            .expect("poll for the capture");
-        let mapped = slice.get_mapped_range().expect("the capture's pixels");
+            .map_err(|e| format!("the GPU never handed the capture back: {e}"))?;
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|e| format!("the capture's pixels: {e}"))?;
         let packed = (self.size.0 * 4) as usize;
         self.frame.clear();
         for row in mapped.chunks(self.row as usize) {
@@ -247,22 +251,35 @@ impl Capture {
         }
         drop(mapped);
         self.readback.unmap();
+        Ok(())
     }
 
-    /// Close the pipe, wait for ffmpeg, and say what it wrote.
     pub fn finish(mut self) -> Result<PathBuf, String> {
-        let empty = self.frames == 0;
-        drop(self.stdin);
-        if empty {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-            let _ = std::fs::remove_file(&self.path);
+        if self.frames == 0 {
             return Err("no frames were captured".into());
         }
+        self.stdin.take();
         match self.child.wait() {
-            Ok(status) if status.success() => Ok(self.path),
+            Ok(status) if status.success() => Ok(self.path.clone()),
             Ok(status) => Err(format!("ffmpeg {status} writing {}", self.path.display())),
             Err(e) => Err(format!("{}: {e}", self.path.display())),
+        }
+    }
+}
+
+/// Every way out of a capture, `finish` included: nothing may be left behind
+/// unwaited, and a file with no frames in it is not a capture.
+impl Drop for Capture {
+    fn drop(&mut self) {
+        // The pipe first — an ffmpeg still reading is an ffmpeg that has not
+        // ended, and closing it is what asks it to finish the file.
+        self.stdin.take();
+        if self.frames == 0 {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+        if self.frames == 0 {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }

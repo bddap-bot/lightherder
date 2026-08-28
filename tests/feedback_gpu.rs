@@ -2179,17 +2179,14 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
             .expect("a frame down the pipe");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    let frames = video.frames();
     let recording = video.finish().expect("a recording");
+    let pixels = decoded(&recording, size);
+    // What the file holds, asked of the file: a fifth of a second at thirty
+    // is six frames, however many times the display asked for one.
+    let frames = pixels.len() as u32 / (size.0 * size.1 * 4);
     assert!(
         (4..=8).contains(&frames),
         "{frames} frames in a fifth of a second at 30"
-    );
-    let pixels = decoded(&recording, size);
-    assert_eq!(
-        pixels.len() as u64,
-        u64::from(size.0 * size.1 * 4) * frames,
-        "the file holds a different number of frames than went into it"
     );
     assert!(peak(&pixels) > 32, "the recording is black");
 

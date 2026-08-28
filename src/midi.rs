@@ -435,11 +435,6 @@ fn nano_buttons() -> Vec<Button> {
         // Cycle shows and hides the overlay that explains all of the above —
         // the one button whose job survives not knowing what any button does.
         button(46, "`"),
-        // Solo: the focused monitor on the whole display. On forward, which
-        // record's reason for staying unbound never covered — this is the
-        // press on the surface that takes back the least, changing what is
-        // *looked* at and nothing the graph is doing, and the same button
-        // puts the bank back.
         button(44, "enter"),
         // The seed, on play: what a monitor's loop starts from, on the
         // button whose silkscreen says start. It lights while the focused

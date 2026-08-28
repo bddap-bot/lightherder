@@ -33,7 +33,7 @@ fn borderless(fullscreen: bool) -> Option<winit::window::Fullscreen> {
 /// performer on a fullscreen display gets of one.
 fn finished(capture: Capture) {
     match capture.finish() {
-        Ok(path) => log::info!("recorded {}", path.display()),
+        Ok(path) => log::info!("captured {}", path.display()),
         Err(why) => log::error!("capture: {why}"),
     }
 }
@@ -664,22 +664,23 @@ impl App {
         )
     }
 
-    /// What the display is showing, in a file.
+    /// How big the display is and what format it is in, which is the whole
+    /// of what a capture needs to be built against — and `None` before there
+    /// is a display at all.
+    fn glass(&self) -> Option<((u32, u32), wgpu::TextureFormat)> {
+        let live = self.live.as_ref()?;
+        Some(((live.config.width, live.config.height), live.config.format))
+    }
+
     fn screencap(&mut self) {
-        let Some(live) = self.live.as_ref() else {
+        let Some((size, format)) = self.glass() else {
             return log::info!("nothing on the glass to capture yet");
         };
-        let size = (live.config.width, live.config.height);
-        let shot = Capture::still(
-            &self.gpu.device,
-            &crate::capture::dir(),
-            size,
-            live.config.format,
-        )
-        .and_then(|mut capture| self.grab(&mut capture).map(|()| capture))
-        .and_then(Capture::finish);
-        match shot {
-            Ok(path) => log::info!("captured {}", path.display()),
+        match Capture::still(&self.gpu.device, &crate::capture::dir(), size, format) {
+            Ok(mut capture) => match self.grab(&mut capture) {
+                Ok(()) => finished(capture),
+                Err(why) => log::error!("capture: {why}"),
+            },
             Err(why) => log::error!("capture: {why}"),
         }
     }
@@ -691,16 +692,10 @@ impl App {
         if self.capture.is_some() {
             return;
         }
-        let Some(live) = self.live.as_ref() else {
+        let Some((size, format)) = self.glass() else {
             return log::info!("nothing on the glass to record yet");
         };
-        let size = (live.config.width, live.config.height);
-        match Capture::video(
-            &self.gpu.device,
-            &crate::capture::dir(),
-            size,
-            live.config.format,
-        ) {
+        match Capture::video(&self.gpu.device, &crate::capture::dir(), size, format) {
             Ok(capture) => {
                 log::info!("recording");
                 self.capture = Some(capture);
@@ -839,6 +834,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
+            // A window that loses focus is a window whose keys all come up,
+            // and on Wayland it is told so in no other way: winit sends no
+            // release for a key held when focus goes, so a recording started
+            // from the keyboard would run until the instrument was closed.
+            WindowEvent::Focused(false) => self.stop_recording(),
             WindowEvent::Resized(size) => {
                 if let Some(live) = self.live.as_mut() {
                     live.resize(&self.gpu, size.width, size.height);
@@ -886,10 +886,15 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
-                // Repeats are wanted: holding a key sweeps its knob.
                 let Some(action) = action_for(code, self.shift) else {
                     return;
                 };
+                // A held key repeats, and a repeat sweeps a knob — it is not
+                // a second press. Everything else on the keyboard acts once
+                // per press, the way the surface's buttons already do.
+                if event.repeat && !matches!(action, Action::Nudge(..)) {
+                    return;
+                }
                 let action = match event.state {
                     ElementState::Pressed => action,
                     // A release reaches only the controls that are held
@@ -1203,8 +1208,7 @@ mod tests {
             "the lamp did not follow the focus its own frame moved"
         );
         // Record is held rather than pressed, and its lamp is lit for as
-        // long as the finger is — on a fullscreen display that light is the
-        // whole of what says a recording is running.
+        // long as the finger is.
         surface.press(45);
         assert_eq!(app.surface_frame(), Flow::Play);
         assert!(
