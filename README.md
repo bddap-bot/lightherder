@@ -10,9 +10,9 @@ monitor keeps its own colour controls. Each path carries its own analog
 character — the lens's bloom, composite chroma bleed, grain — and each monitor
 its own amplifier rail. Every camera watches monitors and only monitors, so
 every path in the graph is a loop; light from outside — test patterns, video
-files, capture devices — enters where a real rig's does, on the switcher. The
-whole panel saves to and recalls from eight slots. Later increments add a
-browser build.
+files, capture devices — enters where a real rig's does, on the switcher.
+Nothing is written down: the graph comes from the command line and lives as
+long as the run, the way the hardware it is modelled on does.
 
 ## How it works
 
@@ -179,8 +179,8 @@ the room feeds nothing. The **chroma key** cuts the pixels leaning toward its
 key colour — named as a hue, the way this instrument names every colour —
 with a tolerance for how much of it a pixel may carry; at the top of its
 travel the key is off, so grey and the far hues always pass. All four are
-ordinary knobs: on the keys, mappable from a MIDI surface, and saved in
-slots. On the camera because that is the only signal path the instrument has
+ordinary knobs: on the keys and mappable from a MIDI surface. On the camera
+because that is the only signal path the instrument has
 — the gain, the framing and the character are all there, and what the
 switcher hands a monitor from outside it hands over whole. A camera watches
 monitors, so a key is a gate between one monitor and the next: on a loop's own
@@ -192,8 +192,8 @@ Lifting a subject off its room is the same gate, one monitor earlier. The
 monitor — a **window** on the room, with no camera routed to it and so no
 loop of its own — and a camera watches *that* through its luma key, handing
 the lit subject on and refusing the unlit room behind it. What survives
-drives the second monitor's loop, which is `external`'s. Plug a camera in,
-recall, play. The key has to sit one monitor upstream because a key on the
+drives the second monitor's loop, which is `external`'s. Plug a camera in and
+play. The key has to sit one monitor upstream because a key on the
 loop's own camera would gate the trail it is building, so there would never
 be a trail.
 
@@ -217,24 +217,6 @@ Out of the box the default knobs settle into a spiral: the camera pulls back
 spread across the channels, so the trail cools from white to blue as it winds
 in.
 
-## Preset slots
-
-`f1` to `f8` recall; hold shift to store. A slot is a config file and nothing
-else, written to `$XDG_CONFIG_HOME/lightherder/slot-N.toml`, read back through
-the same loader the command line uses — so a saved performance opens in an
-editor, keeps in a repository, or comes straight back as the graph the
-instrument starts on. There is no second format for a saved state, because a
-saved state is a graph.
-
-A slot with the same number of monitors and the same inputs keeps the loops
-running: it changes the knobs the next pass reads, not the light already on
-the glass. One input that differs reopens them all; a changed monitor or
-input count gets a new bank, blank the way every bank starts. Cameras,
-routing and every knob are free to differ without costing even that. The only
-refusals are the command line's own — a slot that will not load, an input
-that will not open, a bank past the cap — each leaving the rig playing
-untouched.
-
 ## The control surface
 
 The instrument is played from a **Korg nanoKONTROL2**, plugged in whenever —
@@ -253,8 +235,6 @@ Out of the box, with no configuration:
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
 | S 1–4 | focus camera 1–4 |
 | S 5–8 | focus monitor 1–4 |
-| M 1–8 | recall preset slot 1–8 |
-| R 1–8 | store preset slot 1–8 |
 | marker next | blank the monitors |
 | ◀◀ rewind | put the last knob turned back to its identity |
 | ■ stop | reset every knob |
@@ -262,6 +242,7 @@ Out of the box, with no configuration:
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | ▶▶ forward | the focused monitor on the whole display, or the tiled bank |
 | |◀ track prev | fine mode, on or off |
+| M 1–8, R 1–8 | nothing |
 | ● record, ▶| track next, marker set, marker prev | nothing |
 
 So the left hand works one monitor, the right hand one camera, and the last
@@ -271,14 +252,12 @@ hands do: the left four name the camera the rotaries turn, the right four the
 monitor the faders turn. It used to name eight cameras, but no graph anyone
 plays has more than four, and spending half a row on cameras a graph has not
 got left the *monitor* — the node under all eight faders — with no outright
-address at all. Mute plays slot n back and Record writes over it, the two
-lower rows in order of how much they commit. A select past the end of the
-graph says so on the log rather than going quiet, since the button really is
-dead on that graph. Nothing on the surface is guarded: it has no shift, so a
-single press on the Mute row walks over the live panel and one on the Record
-row walks over a slot. Nothing is bound to quit, and four buttons are bound
-to nothing at all — Record above all, because a button a blind slip can find
-is not where another irreversible press belongs. Nine of the twenty-four
+address at all. A select past the end of the graph says so on the log rather
+than going quiet, since the button really is dead on that graph. Nothing is
+bound to quit, and twenty of the twenty-four buttons are bound to nothing at
+all — the Mute and Record rows whole, and Record above all, because a button
+a blind slip can find is not where a press it cannot take back belongs. Nine
+of the twenty-four
 knobs are not on the surface, which has sixteen controls and binds fifteen of
 them: the three per-channel gain offsets, which colour a rigid gain that is
 itself on a rotary; the bloom radius, which sizes a halo whose amount is; the
@@ -291,9 +270,9 @@ knob already is.** A fader sends where it is standing, so without that,
 plugging in mid-piece throws every knob to wherever its fader was left — with
 the headroom fader slamming a monitor to white. Sweep the fader and it picks
 its knob up on the way past, and from then on the fader is the knob. It lets
-go on a recall, a reset and a change of focus — the three ways the panel moves
-without a fader moving with it — and on an unplug, after which nothing knows
-where a fader is standing.
+go on a reset and a change of focus — the two ways the panel moves without a
+fader moving with it — and on an unplug, after which nothing knows where a
+fader is standing.
 
 The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.
@@ -314,11 +293,11 @@ where zero loses that camera visibly and the fader puts it straight back.
 Named by having been turned rather than by a control of its own, because
 there are two dozen of them and no display to point at one with, and the knob a
 hand wants back is the one that hand was just on. Which stops being true the
-moment the panel moves without the hands, so a recall, a whole-panel reset
-and a change of focus all clear the name along with the faders' grips —
-otherwise rewind after a recall writes over the preset it just played back.
-Only that knob's fader lets go, so a single-knob reset does not charge the
-rest of the panel a pickup sweep.
+moment the panel moves without the hands, so a whole-panel reset and a change
+of focus both clear the name along with the faders' grips — otherwise rewind
+after either would put back a knob nobody has touched. Only that knob's fader
+lets go, so a single-knob reset does not charge the rest of the panel a
+pickup sweep.
 
 **Track-prev latches fine mode, and lights while it is on** — the one thing
 that says a mode is on to somebody watching a fullscreen display rather than
@@ -353,9 +332,10 @@ is one `midi.toml` away from being somewhere else.
 **The Solo button of the focused camera is lit, and so is the focused
 monitor's**, so the panel says where each hand's knobs are without anyone
 reading the log line. They follow the focus from wherever it moved — a number
-key, the Solo row, a preset recall — and go out when the instrument does. A
-node past the fourth of its half has no button to light, and lights none: a graph may run deeper than the surface, and a lamp on the
-wrong button is worse than no lamp. A latched mode lights the button holding
+key or the Solo row — and go out when the instrument does. A node past the
+fourth of its half has no button to light, and lights none: a graph may run
+deeper than the surface, and a lamp on the wrong button is worse than no
+lamp. A latched mode lights the button holding
 it by the same rule, off that button's *action*, so a `midi.toml` that moves
 fine mode moves its lamp with it.
 
@@ -370,10 +350,10 @@ is always the surface its owner set up. The cost is a handshake on every
 connect, which is where it belongs.
 
 **That switch is one switch for the whole panel**, which is why the app then
-drives every button rather than the eight it came for: external mode takes the
-Mute and Record rows' lights along with the Solo row's, and the Record row
-overwrites a preset slot unguarded. So a button the map binds is lit while it
-is held — exactly what internal mode did for it — and the focused camera's is
+drives every button rather than the eight it came for: external mode takes
+every row's lights, not just the Solo row's. So a button the map binds is lit
+while it is held — exactly what internal mode did for it — and the focused
+camera's is
 lit whether or not a finger is on it. What the instrument adds is one lamp;
 what it takes away is nothing. A button the map binds nothing to stays dark,
 which is now what it means.
@@ -401,7 +381,7 @@ a channel.
 
 ### Mapping config
 
-`$XDG_CONFIG_HOME/lightherder/midi.toml`, beside the preset slots. If it is not
+`$XDG_CONFIG_HOME/lightherder/midi.toml`. If it is not
 there you get the layout above; if it is there and will not load, the
 instrument says why and does not start.
 
@@ -418,8 +398,8 @@ cc = 41
 key = "space"       # any key label the printed help uses
 
 [[button]]
-cc = 64
-key = "shift f1"
+cc = 32
+key = "shift num1"
 ```
 
 A fader names a **knob** and spans its whole travel — for the two knobs that
@@ -630,8 +610,6 @@ below assumes a US layout.
 | `num1`…`num8` | focus camera 1–8 outright |
 | shift `num1`…`num8` | focus monitor 1–8 outright |
 | `p` | focus the next input |
-| `f1`…`f8` | recall preset slot |
-| shift `f1`…`f8` | store preset slot |
 | space | blank every monitor |
 | `r` | reset every knob |
 | `;` | the focused monitor's seed: a white blob or dark glass |
@@ -648,8 +626,9 @@ focused monitor (colour and headroom); `num1`…`num8` pick a node of either
 side outright, and the log line names them. Those eight are keypad keys and
 they are the keyboard's only way to the nodes, so a board with no keypad and
 no surface plays camera one and monitor one, on the knobs the config gave
-them. A third focus, `p`, names the input the send acts on — a step and no outright key, since a switcher has
-four spare inputs at most, and it is a focus of its own rather than a widening
+them. A third focus, `p`, names the input the send acts on — a step and no
+outright key, since a switcher has four spare inputs at most, and it is a
+focus of its own rather than a widening
 of the camera's so that riding a send costs you none of the lens.
 
 Splitter weights are config; the two crosspoints are not — `/` and `\` sweep
@@ -657,14 +636,10 @@ the camera one, which is fader 8 on the surface, and `9` and `0` sweep the
 send, which is on the keys alone because a graph without inputs has no send
 for a fixed fader to be holding.
 
-Shift is read by two tables and no others. On a slot key it is the difference
-between recall and store — recall is one press, store is the press you have
-to mean; both are irreversible, since a recall walks over a live panel
-nothing has stored, and the modifier is there because a hand mid-piece
-reaches for a slot far more often than it writes one. On a keypad key it is
-which side of the focus is meant, camera bare and monitor shifted: the board
-has no second block of eight, and the camera and the monitor are the same
-question asked of the two sides of the graph.
+Shift is read by the keypad keys and no others: which side of the focus is
+meant, camera bare and monitor shifted. The board has no second block of
+eight, and the camera and the monitor are the same question asked of the two
+sides of the graph.
 
 The colour and character knobs start neutral, so the instrument out of the box
 is the loop described above and nothing else. Turn one against it: `s` held
@@ -720,9 +695,6 @@ decoded, and a file that is not there refused at once rather than after the
 first-frame timeout. Outside the pinned shell the ones that need ffmpeg print
 a skip, on the same terms as the GPU tests.
 
-The slots round-trip every preset through a real file, and a slot the
-instrument never wrote is validated like any other config.
-
 The surface is tested without one plugged in, at every layer and then through
 all of them at once. The decoder against the ways a fader sweep actually
 arrives — three bytes split across reads, running status with the status byte
@@ -771,7 +743,7 @@ The same instrument, on WebGPU, at
 <https://bddap-bot.github.io/lightherder/> — the graph is chosen the way a
 page takes an argument, `?preset=insanity`, and the keys are the keys. What
 is not there is what a browser has no way to give it: the ALSA control
-surface, an ffmpeg input, and the preset slots, which are files.
+surface and an ffmpeg input.
 
 `web/build.sh` builds `web/dist` — the module, its glue and the page — and
 every push to `main` runs it and publishes the result. Locally:
