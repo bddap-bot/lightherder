@@ -169,8 +169,8 @@ const AXES: &[Axis] = &[
     // keys at the right edge, away from the knobs, because they are the two
     // controls that act on a pair of nodes rather than on either of them.
     axis(Knob::Route, KeyCode::Slash, "/", KeyCode::Backslash, "\\"),
-    // The send on the digits the gain channels stop short of, which is where
-    // an input's level used to be played from before it was the switcher's.
+    // The send on the digits the gain channels stop short of: it is a level
+    // like they are, and it is the pair of keys left beside them.
     axis(Knob::Send, KeyCode::Digit9, "9", KeyCode::Digit0, "0"),
 ];
 
@@ -202,8 +202,8 @@ const COMMANDS: &[Command] = &[
         "focus the next monitor",
         "mon >",
     ),
-    // "p" for the patch: the last free letter on the board, and the switcher's
-    // input strip is what a nearly full board had left to spend it on.
+    // "p" for the patch, beside the "n" and "m" that walk the other two
+    // halves of the focus.
     cmd(
         KeyCode::KeyP,
         "p",

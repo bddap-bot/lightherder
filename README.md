@@ -159,14 +159,14 @@ instrument runs — but a `capture` is a format and a device string handed
 straight to ffmpeg, and `{ format = "lavfi", device = "movie=/private.mp4" }`
 puts a local file on screen. Read a graph before you play it.
 
-Injection level is the crosspoint the input is sent on — a fader like every
-other crosspoint, `9` and `0` on the focused monitor, with `p` stepping which
-input it acts on. Near unity a little goes a long way: the `external` preset
-sends a seventieth of the bars — 0.014 — onto a monitor whose loop runs at
-0.985 and whose glass is dark, so the trickle goes round seventy times before
-it fades and every photon on that monitor came in from outside. Turn it up
-mid-performance and the room floods in; turn it to zero and the loop keeps
-running on what it has.
+Injection level is the crosspoint the input is sent on — a knob like the
+other crosspoint, on `9` and `0` against the focused monitor, with `p`
+stepping which input it acts on. Near unity a little goes a long way: the
+`external` preset sends a seventieth of the bars — 0.014 — onto a monitor
+whose loop runs at 0.985 and whose glass is dark, so the trickle goes round
+seventy times before it fades and every photon on that monitor came in from
+outside. Turn it up mid-performance and the outside floods in; turn it to
+zero and the loop keeps running on what it has.
 
 ### The keyer
 
@@ -181,15 +181,20 @@ travel the key is off, so grey and the far hues always pass. All four are
 ordinary knobs: on the keys, mappable from a MIDI surface, and saved in
 slots. On the camera because that is the only signal path the instrument has
 — the gain, the framing and the character are all there, and what the
-switcher hands a monitor from outside it hands over whole. Every camera
-watches monitors, so every key is a gate on the feedback itself: the dark of a
-trail, or one hue of it, refused a trip round. That is its own instrument to
-play, and it is not the way a subject is lifted off a room — a webcam's
-backdrop enters the switcher already mixed with its subject, and no key stands
-between the two.
+switcher hands a monitor from outside it hands over whole. A camera watches
+monitors, so a key is a gate between one monitor and the next: on a loop's own
+camera it gates the feedback, refusing the dark of a trail or one hue of it a
+trip round.
 
-The `webcam` preset is `external` with the bars swapped for `/dev/video0`:
-plug a camera in, recall, play.
+Lifting a subject off its room is the same gate, one monitor earlier. The
+`webcam` preset is two: the switcher puts `/dev/video0` whole on the first
+monitor — a **window** on the room, with no camera routed to it and so no
+loop of its own — and a camera watches *that* through its luma key, handing
+the lit subject on and refusing the unlit room behind it. What survives
+drives the second monitor's loop, which is `external`'s. Plug a camera in,
+recall, play. The key has to sit one monitor upstream because a key on the
+loop's own camera would gate the trail it is building, so there would never
+be a trail.
 
 A monitor's **seed** is what lights its loop from outside: either a soft
 white blob on the glass, or nothing of its own — dark glass, holding only
@@ -547,18 +552,20 @@ stepped and presented into a target the size of the display.
 
 | graph | 1920x1080 | 3840x2160 |
 | --- | --- | --- |
-| `single` | 0.16 ms | 0.38 ms |
-| `external` | 0.16 | 0.45 |
-| `analog` | 0.22 | 0.72 |
-| `crossed` (2 monitors) | 0.23 | 0.72 |
-| `insanity` (4 monitors, all-to-all) | 0.64 | 2.14 |
+| `single` | 0.13 ms | 0.39 ms |
+| `external` | 0.16 | 0.50 |
+| `analog` | 0.21 | 0.71 |
+| `webcam` (2 monitors) | 0.21 | 0.66 |
+| `crossed` (2 monitors) | 0.25 | 0.75 |
+| `insanity` (4 monitors, all-to-all) | 0.67 | 2.35 |
 
-A 60 Hz frame is 16.7 ms, so the heaviest graph that ships uses an eighth of one
-at 4K. Measured on an RTX 2080. What the numbers leave out is a frame's edges
-rather than its loop: handing the frame to the compositor, and the upload of a
-live input, which for a video file or a capture device is a conversion and two
-writes of a whole frame every frame. The graphs above have none — a drawn
-pattern is uploaded once.
+A 60 Hz frame is 16.7 ms, so the heaviest graph that ships uses a seventh of
+one at 4K. Measured on an RTX 2080. What the numbers leave out is a frame's
+edges rather than its loop: handing the frame to the compositor, and the
+upload of a live input, which for a video file or a capture device is a
+conversion and two writes of a whole frame every frame. `webcam` is measured
+with none — `--bench` steps the graph, and a device that is not there uploads
+nothing — so its row is the passes and not the wire.
 
 The bank itself is what grows: two copies of every monitor and input at eight
 bytes a texel, half a gigabyte for `insanity` at 4K, and refused past two.

@@ -1906,10 +1906,14 @@ fn an_input_arrives_whole_however_the_cameras_are_set() {
     // There is no camera between the switcher and an input, so nothing a
     // camera does can reach one. The camera here is loaded with every stage
     // that could leak — pulled back by two, scattering, smearing, graining,
-    // keyed above the picture and down to a tenth of the light — and sent
-    // nowhere. The input must arrive framed edge to edge, at full level,
-    // with its quarters still meeting at a hard edge.
+    // keyed above the picture and down to a tenth of the light — and *is* in
+    // the monitor's pass, routed at a weight low enough to leave the input's
+    // levels alone on the first step, so this is a graph where the stages
+    // are live rather than one where they were filtered out. The input must
+    // arrive framed edge to edge, at full level, quarters still meeting at a
+    // hard edge.
     let mut p = one_input_on_one_monitor();
+    p.routing = vec![vec![0.02]];
     p.cameras[0].framing.zoom = 0.5;
     p.cameras[0].gain = [0.1; 3];
     p.cameras[0].character = Character {

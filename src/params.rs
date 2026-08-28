@@ -535,9 +535,10 @@ impl Limit {
     }
 }
 
-/// Which node a knob's value belongs to, and so which half of a [`Focus`] it
-/// reads. Every knob but the switcher's crosspoint lives on one node; that
-/// one is an edge between a camera and a monitor, and reads both.
+/// Which node a knob's value belongs to, and so which of a [`Focus`]'s
+/// indices it reads. Most knobs live on one node and read one; the
+/// switcher's two crosspoints are edges, and read the pair of indices their
+/// own kind of edge joins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     Camera,
@@ -827,9 +828,9 @@ impl Params {
     /// Through [`Params::nudge`] rather than by writing the field, so a
     /// fader is subject to the very same rails, wrap and rigid three-channel
     /// step a key press is — there is nowhere a fader can put a knob that a
-    /// hand could not.
-    pub fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
-        self.nudge(knob, value - self.knob(knob, focus), focus);
+    /// hand could not. Its answer, too: false where there was no field.
+    pub fn set(&mut self, knob: Knob, value: f32, focus: Focus) -> bool {
+        self.nudge(knob, value - self.knob(knob, focus), focus)
     }
 
     /// Put `knob` back where its stage does nothing to the light.
@@ -845,12 +846,14 @@ impl Params {
     ///
     /// Each field goes through [`Params::set`], so the rails, the wrap and
     /// the reachability a key press has are unchanged.
-    pub fn reset(&mut self, knob: Knob, focus: Focus) {
+    pub fn reset(&mut self, knob: Knob, focus: Focus) -> bool {
+        let mut moved = false;
         for field in Knob::ALL {
             if field.owns_a_field() && knob.shares_a_field_with(field) {
-                self.set(field, field.identity(), focus);
+                moved |= self.set(field, field.identity(), focus);
             }
         }
+        moved
     }
 
     /// Where `knob` is standing. The rigid gain reads as the mean of its
@@ -895,9 +898,12 @@ impl Params {
         }
     }
 
-    /// Turn `knob` on the focused camera or monitor — its side of the graph
-    /// decides which of the two indices it follows.
-    pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
+    /// Turn `knob` on the node its side of the graph names, and say whether
+    /// there was one: a send is the one knob a graph can be without, and a
+    /// turn that landed on nothing must not be reported as a move — the
+    /// button that takes back the last knob turned would otherwise be
+    /// holding one that never turned.
+    pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) -> bool {
         // The rigid gain knob is the one that is not a single value: clamp its
         // step once against the tightest channel, so hitting the rail slides
         // all three together instead of flattening the colour offsets.
@@ -906,17 +912,16 @@ impl Params {
             for channel in [Knob::GainR, Knob::GainG, Knob::GainB] {
                 self.nudge(channel, step, focus);
             }
-            return;
+            return true;
         }
-        // A send with no input under it is the one knob a graph can be
-        // without, so this is the one turn that can land on nothing.
         let Some(field) = self.knob_mut(knob, focus) else {
-            return;
+            return false;
         };
         *field = match knob.limit() {
             Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
             Limit::Wrap => wrap_pi(*field + delta),
         };
+        true
     }
 
     /// The value a knob turns, for the knobs that are a single number, or
@@ -1009,7 +1014,8 @@ impl Params {
             match self.inputs.is_empty() {
                 true => String::new(),
                 false => format!(
-                    "\ninput route {:.3}: how much of input {}/{} mon {} shows",
+                    "\n{} {:.3}: how much of input {}/{} mon {} shows",
+                    Knob::Send.name(),
                     self.knob(Knob::Send, focus),
                     focus.input + 1,
                     self.inputs.len(),
@@ -1042,10 +1048,10 @@ mod tests {
     use super::*;
     use core::f32::consts::PI;
 
-    /// The single-loop preset with an input plugged in, which is where one
-    /// of every knob lives. The input is what the send needs: it is the one
-    /// knob a graph can be without, so a walk over `Knob::ALL` on a rig
-    /// without one is a walk with a hole in it.
+    /// The single-loop preset with an input sent onto its monitor, which is
+    /// where one of every knob lives: the send is the one knob a graph can
+    /// be without, so a walk over `Knob::ALL` on a rig without one is a walk
+    /// with a hole in it.
     fn p() -> Params {
         let params = Params {
             inputs: vec![Input::Pattern(crate::input::Pattern::Bars)],

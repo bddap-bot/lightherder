@@ -549,6 +549,22 @@ impl App {
         self.metered = Instant::now();
     }
 
+    /// A turn of `knob`, and what the panel owes it. A knob whose graph has
+    /// no node for it — a send with no input — moved nothing, so it must not
+    /// become the knob backspace takes back: that button would then reset a
+    /// knob the hand never turned, and report a panel it did not change. Said
+    /// out loud rather than passed over, the way a select past the end of the
+    /// graph is.
+    fn turned(&mut self, knob: Knob, turn: impl FnOnce(&mut Params, Focus) -> bool) {
+        match turn(&mut self.params, self.focus) {
+            true => {
+                self.last_knob = Some(knob);
+                log::info!("{}", self.params.describe(self.focus));
+            }
+            false => log::info!("no {}: the graph has no inputs", knob.name()),
+        }
+    }
+
     /// Put the last knob that moved back to its identity, and nothing else.
     ///
     /// Only that knob's own faders let go — [`Midi::release_knob`] rather
@@ -563,7 +579,13 @@ impl App {
             // reports on.
             return log::info!("no knob has been turned yet");
         };
-        self.params.reset(knob, self.focus);
+        // The graph can have changed under the knob since it turned — a
+        // recall onto a rig with no inputs takes the send's field away — so
+        // this asks the same question a turn does rather than assuming a
+        // field that was there once is there still.
+        if !self.params.reset(knob, self.focus) {
+            return log::info!("no {}: the graph has no inputs", knob.name());
+        }
         self.midi.release_knob(knob);
         log::info!(
             "{} reset: {}",
@@ -583,16 +605,8 @@ impl App {
     #[must_use]
     fn act(&mut self, action: Action) -> Flow {
         match action {
-            Action::Nudge(knob, delta) => {
-                self.params.nudge(knob, delta, self.focus);
-                self.last_knob = Some(knob);
-                log::info!("{}", self.params.describe(self.focus));
-            }
-            Action::Set(knob, value) => {
-                self.params.set(knob, value, self.focus);
-                self.last_knob = Some(knob);
-                log::info!("{}", self.params.describe(self.focus));
-            }
+            Action::Nudge(knob, delta) => self.turned(knob, |p, f| p.nudge(knob, delta, f)),
+            Action::Set(knob, value) => self.turned(knob, |p, f| p.set(knob, value, f)),
             Action::NextCamera => {
                 let camera = (self.focus.camera + 1) % self.params.cameras.len();
                 self.refocus(Focus {
@@ -1019,6 +1033,74 @@ mod tests {
         // sliding to the last camera — which would make six buttons one.
         app.focus_camera(7);
         assert_eq!(app.focus.camera, 1);
+    }
+
+    #[test]
+    fn a_send_on_a_graph_with_no_inputs_is_a_knob_that_holds_nothing() {
+        // The send's keys are on the board whatever graph is playing, and
+        // most graphs have no input under them. A turn that moved nothing
+        // must not become the knob backspace takes back — that button would
+        // then put a knob the hand never turned back to its identity, and
+        // report a panel it did not change.
+        let Some(mut app) = playing(config::single(), scratch("send-with-no-input")) else {
+            return;
+        };
+        assert!(app.params.inputs.is_empty());
+
+        play(&mut app, Action::Nudge(Knob::Zoom, 0.1));
+        let zoom = app.params.knob(Knob::Zoom, app.focus);
+        play(&mut app, Action::Nudge(Knob::Send, -0.005));
+        assert_eq!(app.last_knob, Some(Knob::Zoom), "the send took the button");
+        play(&mut app, Action::ResetLastKnob);
+        assert_eq!(
+            app.params.knob(Knob::Zoom, app.focus),
+            Knob::Zoom.identity()
+        );
+        assert_ne!(zoom, Knob::Zoom.identity(), "the zoom was never off it");
+
+        // And on a graph that has one, the send is a knob like any other.
+        let Some(mut app) = playing(config::external(), scratch("send-with-an-input")) else {
+            return;
+        };
+        let sent = app.params.knob(Knob::Send, app.focus);
+        play(&mut app, Action::Nudge(Knob::Send, 0.005));
+        assert!(app.params.knob(Knob::Send, app.focus) > sent);
+        assert_eq!(app.last_knob, Some(Knob::Send));
+        play(&mut app, Action::ResetLastKnob);
+        assert_eq!(
+            app.params.knob(Knob::Send, app.focus),
+            Knob::Send.identity()
+        );
+    }
+
+    #[test]
+    fn the_input_focus_walks_and_lands_inside_a_recalled_graph() {
+        // The third half of the focus: `p` steps it, and a recall onto a rig
+        // with fewer inputs has to bring it back inside or the readout names
+        // a source the graph has not got.
+        let dir = scratch("input-focus");
+        let mut three = config::external();
+        three.inputs = vec![config::external().inputs[0].clone(); 3];
+        three.routing_inputs = vec![vec![0.014], vec![0.0], vec![0.0]];
+        crate::slots::store(&dir, 0, &three).unwrap();
+        crate::slots::store(&dir, 1, &config::external()).unwrap();
+        let Some(mut app) = playing(three.clone(), dir.clone()) else {
+            return;
+        };
+
+        play(&mut app, Action::NextInput);
+        play(&mut app, Action::NextInput);
+        assert_eq!(app.focus.input, 2);
+        assert!(app.params.describe(app.focus).contains("input 3/3"));
+        app.recall(1);
+        assert_eq!(app.focus.input, 0, "the focus stayed off the end");
+        assert!(app.params.describe(app.focus).contains("input 1/1"));
+
+        // And a graph with no inputs at all reads out no send.
+        app.adopt(config::single()).unwrap();
+        assert!(!app.params.describe(app.focus).contains("send"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
