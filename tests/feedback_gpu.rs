@@ -53,7 +53,6 @@ fn graph(s: &Single) -> Params {
             character: s.character,
             key: Key::OFF,
             look: vec![1.0],
-            look_inputs: Vec::new(),
         }],
         monitors: vec![Monitor {
             colour: s.colour,
@@ -62,6 +61,7 @@ fn graph(s: &Single) -> Params {
         }],
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
+        routing_inputs: Vec::new(),
     }
 }
 
@@ -417,7 +417,7 @@ fn tinted(h: &mut Harness) -> [f32; 3] {
         ..still
     });
     h.step(&Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: TINT,
         ..still
     });
@@ -428,7 +428,7 @@ fn tinted(h: &mut Harness) -> [f32; 3] {
 /// thing between the previous frame and this one is the colour stage.
 fn recolour(h: &mut Harness, colour: Colour) -> [f32; 3] {
     h.step(&Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [1.0; 3],
         colour,
         ..frozen(seeded())
@@ -792,7 +792,7 @@ fn the_image_survives_the_seed_being_switched_off() {
     let mut previous = h.read().at(seed[0], seed[1]);
 
     let params = Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [0.9; 3],
         ..frozen(seeded())
     };
@@ -814,7 +814,7 @@ fn zero_gain_ends_the_loop_in_one_pass() {
     assert!(h.read().at(seed[0], seed[1]) > 200.0);
 
     let params = Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [0.0; 3],
         ..frozen(seeded())
     };
@@ -837,7 +837,7 @@ fn panning_moves_the_image_the_way_the_knobs_say() {
         h.step(&seeded());
 
         let params = Single {
-            seed: Seed::Camera,
+            seed: Seed::Dark,
             loop_gain: [1.0; 3],
             colour: Colour::NEUTRAL,
             framing: Framing {
@@ -869,7 +869,7 @@ fn pan_is_applied_in_the_frame_the_camera_moves_in() {
     h.step(&seeded());
 
     let params = Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [1.0; 3],
         colour: Colour::NEUTRAL,
         framing: Framing {
@@ -960,7 +960,7 @@ fn the_gain_is_applied_once_per_pass() {
 
     let gain = 0.8;
     let params = Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [gain; 3],
         ..frozen(seeded())
     };
@@ -989,7 +989,7 @@ fn what_the_camera_sees_past_the_monitor_is_black() {
     // sampler clamped to".
     let still = frozen(seeded());
     let pan = |dx: f32| Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [1.0; 3],
         colour: Colour::NEUTRAL,
         framing: Framing {
@@ -1099,14 +1099,13 @@ fn plain_camera(look: Vec<f32>) -> Camera {
         character: Character::CLEAN,
         key: Key::OFF,
         look,
-        look_inputs: Vec::new(),
     }
 }
 
 fn silent_monitor() -> Monitor {
     Monitor {
         colour: Colour::NEUTRAL,
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         headroom: Monitor::KNEE_AT_WHITE,
     }
 }
@@ -1128,6 +1127,7 @@ fn the_routing_matrix_sends_each_camera_across() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
+        routing_inputs: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1147,7 +1147,7 @@ fn the_routing_matrix_sends_each_camera_across() {
         at(&img, 1)
     );
 
-    p.monitors[0].seed = Seed::Camera;
+    p.monitors[0].seed = Seed::Dark;
     h.step_graph(&p);
     let img = h.read();
     assert!(
@@ -1198,13 +1198,14 @@ fn mix_weights_scale_each_camera_s_contribution() {
         }],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 0.0]],
+        routing_inputs: Vec::new(),
     };
     h.step_graph(&p);
     let seed = h.feedback.blob_uv();
     let base = h.read().at(seed[0], seed[1]);
     assert!(base > 200.0, "the seed never lit: {base}");
 
-    p.monitors[0].seed = Seed::Camera;
+    p.monitors[0].seed = Seed::Dark;
     p.routing[0] = vec![0.5, 0.25];
     h.step_graph(&p);
     let img = h.read();
@@ -1236,6 +1237,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![1.0], vec![0.0]],
+        routing_inputs: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1246,7 +1248,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
     let bright = h.read().at(u, v);
     assert!(bright > 200.0, "the seed never lit: {bright}");
 
-    p.monitors[1].seed = Seed::Camera;
+    p.monitors[1].seed = Seed::Dark;
     h.step_graph(&p);
     let img = h.read();
     let (u, v) = tile(2, 0, seed[0], seed[1]);
@@ -1269,19 +1271,20 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
                 seed: if m == 0 {
                     Seed::WhiteBlob(1.0)
                 } else {
-                    Seed::Camera
+                    Seed::Dark
                 },
                 ..silent_monitor()
             })
             .collect(),
         inputs: Vec::new(),
         routing: vec![vec![0.25; 4]; 4],
+        routing_inputs: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
         return;
     };
     h.step_graph(&p);
-    p.monitors[0].seed = Seed::Camera;
+    p.monitors[0].seed = Seed::Dark;
     h.step_graph(&p);
 
     let seed = h.feedback.blob_uv();
@@ -1351,7 +1354,7 @@ fn the_single_shim_is_the_single_preset() {
 /// mirror of [`recolour`], for the other half of the front panel.
 fn recharacter(h: &mut Harness, character: Character, headroom: f32) -> Image {
     h.step(&Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [1.0; 3],
         character,
         headroom,
@@ -1486,7 +1489,7 @@ fn the_grain_moves_every_frame_and_only_when_it_is_asked_for() {
     // different every frame, or it is a fixed pattern the loop will bake in.
     let Some(mut h) = square() else { return };
     let dark = Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [0.0; 3],
         ..frozen(seeded())
     };
@@ -1596,6 +1599,7 @@ fn each_camera_carries_its_own_character() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        routing_inputs: Vec::new(),
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1613,7 +1617,7 @@ fn each_camera_carries_its_own_character() {
     assert!(left > 200.0, "nothing lit: {left}");
 
     for monitor in &mut p.monitors {
-        monitor.seed = Seed::Camera;
+        monitor.seed = Seed::Dark;
     }
     p.cameras[1].character = Character {
         bloom: 0.9,
@@ -1675,7 +1679,7 @@ fn the_grain_is_monochrome_and_signed() {
     // and inside a loop that lifts every pass until the monitor floods.
     let Some(mut h) = square() else { return };
     h.step(&Single {
-        seed: Seed::Camera,
+        seed: Seed::Dark,
         loop_gain: [0.0; 3],
         character: Character {
             noise: 0.2,
@@ -1704,7 +1708,7 @@ fn the_grain_is_monochrome_and_signed() {
     );
 }
 
-// ---- External inputs: sources the cameras can be aimed at ----------------
+// ---- External inputs: what the switcher has that the graph did not make --
 
 /// Opens a graph's own inputs and puts a frame of each on its layer. The
 /// shipped patterns are still, so one delivery is the whole of it; a moving
@@ -1758,24 +1762,22 @@ fn quartered_frame(size: (u32, u32), quarters: [[u8; 3]; 4]) -> Vec<u8> {
     pixels
 }
 
-/// A graph of one monitor whose only light is one input: a still camera
-/// aimed at the input at unity gain, and nothing looking at the monitor. One
-/// step of it puts the input on the monitor and nothing else does.
-fn one_camera_on_one_input() -> Params {
+/// A graph of one monitor whose only light is one input, patched straight
+/// onto it at full send. The one camera is routed nowhere, so every step
+/// puts the input on the monitor and nothing else does.
+fn one_input_on_one_monitor() -> Params {
     Params {
-        cameras: vec![Camera {
-            look_inputs: vec![1.0],
-            ..plain_camera(vec![0.0])
-        }],
+        cameras: vec![plain_camera(vec![1.0])],
         monitors: vec![silent_monitor()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
-        routing: vec![vec![1.0]],
+        routing: vec![vec![0.0]],
+        routing_inputs: vec![vec![1.0]],
     }
 }
 
 #[test]
-fn a_camera_aimed_at_an_input_shows_what_was_written_to_it() {
-    let p = one_camera_on_one_input();
+fn an_input_shows_on_the_monitor_the_switcher_sends_it_to() {
+    let p = one_input_on_one_monitor();
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1807,7 +1809,7 @@ fn an_input_layer_is_current_in_whichever_bank_is_read() {
     // The monitor bank swaps every step and an input layer is never rendered
     // into, so a frame written to one bank only would show up on every other
     // frame and be black on the rest. Six steps is three of each.
-    let p = one_camera_on_one_input();
+    let p = one_input_on_one_monitor();
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1825,15 +1827,12 @@ fn each_input_lands_on_its_own_layer() {
     // Two monitors and two inputs, so the arithmetic that puts input i on
     // layer monitors + i has four distinct answers to get wrong instead of
     // the one a single monitor and a single input collapse it to.
-    let camera = |on: usize| Camera {
-        look_inputs: one_hot(2, on),
-        ..plain_camera(vec![0.0; 2])
-    };
     let p = Params {
-        cameras: vec![camera(0), camera(1)],
+        cameras: vec![plain_camera(vec![0.0; 2])],
         monitors: vec![silent_monitor(), silent_monitor()],
         inputs: vec![Input::Pattern(Pattern::Bars); 2],
-        routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        routing: vec![vec![0.0], vec![0.0]],
+        routing_inputs: vec![one_hot(2, 0), one_hot(2, 1)],
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1861,7 +1860,7 @@ fn blanking_the_monitors_leaves_the_inputs_alone() {
     // Space is "restart the loops", not "unplug the video player" — and a
     // still pattern that got blanked would never come back, because it is
     // uploaded once.
-    let p = one_camera_on_one_input();
+    let p = one_input_on_one_monitor();
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1877,14 +1876,14 @@ fn blanking_the_monitors_leaves_the_inputs_alone() {
 }
 
 #[test]
-fn a_splitter_blends_an_input_with_a_monitor() {
-    // Half the point of making an input a source layer rather than its own
-    // kind of thing: the beam splitter blends the two without knowing which
-    // is which. Unequal weights, so a pair swapped anywhere between the
-    // config and the tap cannot come out the same.
-    let mut p = one_camera_on_one_input();
-    p.cameras[0].look = vec![0.25];
-    p.cameras[0].look_inputs = vec![0.75];
+fn the_switcher_mixes_an_input_with_a_camera_on_one_monitor() {
+    // The point of an input being a source on the mix side: one row of the
+    // switcher sums outside light and a camera's, and the monitor cannot
+    // tell them apart. Unequal weights, so a pair swapped anywhere between
+    // the config and the tap cannot come out the same.
+    let mut p = one_input_on_one_monitor();
+    p.routing = vec![vec![0.25]];
+    p.routing_inputs = vec![vec![0.75]];
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1896,18 +1895,20 @@ fn a_splitter_blends_an_input_with_a_monitor() {
     let split = h.read().at(0.5, 0.5);
     assert!((split - 191.0).abs() < 4.0, "0.75 of white is {split}");
 
-    // Now the monitor holds that, and a quarter of it comes back on top.
+    // Now the monitor holds that, and the camera brings a quarter of it back.
     h.step_graph(&p);
     let both = h.read().at(0.5, 0.5);
     assert!((both - 239.0).abs() < 6.0, "0.75 + 0.25 x 0.75 is {both}");
 }
 
 #[test]
-fn a_camera_frames_an_input_the_way_it_frames_a_monitor() {
-    // The other half: one lens, so the zoom acts on whatever the camera is
-    // aimed at. Pulled back by two, a white input fills the middle quarter
-    // and the room around it is dark.
-    let mut p = one_camera_on_one_input();
+fn an_input_arrives_square_on_whatever_the_cameras_are_framed_at() {
+    // Nothing frames what the switcher hands over: there is no camera
+    // between the two, so no zoom, pan or turn in the graph can touch it.
+    // The camera here is pulled back by two and sent nowhere — were its
+    // affine the one an input tap sampled through, a white input would fill
+    // the middle quarter and leave the rest of the monitor dark.
+    let mut p = one_input_on_one_monitor();
     p.cameras[0].framing.zoom = 0.5;
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
@@ -1917,29 +1918,45 @@ fn a_camera_frames_an_input_the_way_it_frames_a_monitor() {
     h.step_graph(&p);
 
     let img = h.read();
-    assert!(img.at(0.5, 0.5) > 250.0, "middle {}", img.at(0.5, 0.5));
-    // Just inside the shrunken image, and just outside it.
-    assert!(img.at(0.3, 0.5) > 250.0, "inside {}", img.at(0.3, 0.5));
-    assert!(img.at(0.2, 0.5) < 5.0, "outside {}", img.at(0.2, 0.5));
+    // The middle, and two corners a half zoom would have left unlit.
+    for (u, v) in [(0.5, 0.5), (0.1, 0.1), (0.9, 0.9)] {
+        assert!(img.at(u, v) > 250.0, "({u}, {v}) is {}", img.at(u, v));
+    }
 }
 
 // ---- The keyer: what a camera's path refuses to hand on ------------------
 
+/// A picture on one monitor and a keyed camera watching it, handing what
+/// survives to a second. Two steps: the switcher puts the input on monitor 0,
+/// then the camera carries it through its key onto monitor 1, which is where
+/// a key test reads. The picture is a still upload rather than a loop, so the
+/// second step's light is exactly one pass of the key on the frame written.
+fn keyed_camera_watching_a_picture(key: Key) -> Params {
+    Params {
+        cameras: vec![Camera {
+            key,
+            ..plain_camera(one_hot(2, 0))
+        }],
+        monitors: vec![silent_monitor(), silent_monitor()],
+        inputs: vec![Input::Pattern(Pattern::Bars)],
+        routing: vec![vec![0.0], vec![1.0]],
+        routing_inputs: vec![vec![1.0, 0.0]],
+    }
+}
+
 #[test]
 fn the_luma_key_cuts_the_dark_passes_the_bright_and_blends_the_edge() {
-    // One step of one keyed camera on one input, with quarters below the
-    // key's band, inside it, and above it: the backdrop vanishes, the
-    // subject arrives intact, and the middle lands part-way up — the soft
-    // edge asserted as an effect on the light, not as a shader detail. The
-    // key passes at 0.5 and has finished cutting one softness down at 0.3;
-    // the quarters' lumas are 0.16, 0.39 and 0.86.
-    let mut p = one_camera_on_one_input();
-    p.cameras[0].key = Key {
+    // Quarters below the key's band, inside it, and above it: the dark
+    // vanishes, the bright arrives intact, and the middle lands part-way up
+    // — the soft edge asserted as an effect on the light, not as a shader
+    // detail. The key passes at 0.5 and has finished cutting one softness
+    // down at 0.3; the quarters' lumas are 0.16, 0.39 and 0.86.
+    let p = keyed_camera_watching_a_picture(Key {
         threshold: 0.5,
         softness: 0.2,
         ..Key::OFF
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+    });
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
     };
     h.feedback.write_input(
@@ -1948,15 +1965,20 @@ fn the_luma_key_cuts_the_dark_passes_the_bright_and_blends_the_edge() {
         &quartered_frame((SIZE, SIZE), [[40; 3], [100; 3], [220; 3], [220; 3]]),
     );
     h.step_graph(&p);
+    h.step_graph(&p);
 
     let img = h.read();
-    let below = img.at(0.25, 0.25);
+    let keyed = |u, v| {
+        let (u, v) = tile(2, 1, u, v);
+        img.at(u, v)
+    };
+    let below = keyed(0.25, 0.25);
     assert!(below < 3.0, "below the key, {below} survives");
-    let above = img.at(0.75, 0.75);
+    let above = keyed(0.75, 0.75);
     assert!((above - 220.0).abs() < 4.0, "above the key: {above}");
     // Inside the band: attenuated but alive, which neither a hard cut at
     // the threshold nor no key at all can produce.
-    let edge = img.at(0.75, 0.25);
+    let edge = keyed(0.75, 0.25);
     assert!(
         edge > 25.0 && edge < 70.0,
         "the soft edge should blend 100 part-way down, not {edge}"
@@ -1971,14 +1993,13 @@ fn the_chroma_key_cuts_its_colour_and_spares_grey_and_the_far_hue() {
     // intact. The atan2 spells out green's chroma coordinates — transcribed
     // from the decode axes, so a change of axes fails this loudly rather
     // than following along.
-    let mut p = one_camera_on_one_input();
-    p.cameras[0].key = Key {
+    let p = keyed_camera_watching_a_picture(Key {
         hue: (-0.5227f32).atan2(-0.2746),
         tolerance: 0.2,
         softness: 0.02,
         ..Key::OFF
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+    });
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
     };
     let (green, grey, magenta) = ([0, 200, 0], [200; 3], [200, 0, 200]);
@@ -1988,18 +2009,22 @@ fn the_chroma_key_cuts_its_colour_and_spares_grey_and_the_far_hue() {
         &quartered_frame((SIZE, SIZE), [green, grey, green, magenta]),
     );
     h.step_graph(&p);
+    h.step_graph(&p);
 
     let img = h.read();
     for (u, v) in [(0.25, 0.25), (0.75, 0.75)] {
+        let (u, v) = tile(2, 1, u, v);
         let seen = img.at(u, v);
         assert!(seen < 3.0, "the key colour at ({u}, {v}) survives: {seen}");
     }
-    let grey_seen = img.at(0.75, 0.25);
+    let (u, v) = tile(2, 1, 0.75, 0.25);
+    let grey_seen = img.at(u, v);
     assert!(
         (grey_seen - 200.0).abs() < 4.0,
         "grey was keyed: {grey_seen}"
     );
-    let magenta_seen = img.rgb_at(0.25, 0.75);
+    let (u, v) = tile(2, 1, 0.25, 0.75);
+    let magenta_seen = img.rgb_at(u, v);
     assert!(
         (magenta_seen[0] - 200.0).abs() < 4.0 && (magenta_seen[2] - 200.0).abs() < 4.0,
         "the far hue was keyed: {magenta_seen:?}"

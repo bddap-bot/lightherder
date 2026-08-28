@@ -42,9 +42,9 @@ pub enum Action {
     /// Play a preset slot back.
     Recall(usize),
     /// Swap the focused monitor's seed for the other kind: a white blob on
-    /// the glass, or the cameras the switcher routes onto it. A button and
-    /// not a knob, because the two are not two settings of one thing — and
-    /// a camera seed's level is already played by that camera's gain.
+    /// the glass, or dark glass holding only what the switcher paints on it.
+    /// A button and not a knob, because the two are not two settings of one
+    /// thing — and the dark rig's level is already played on the switcher.
     Seed,
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
@@ -216,7 +216,7 @@ const COMMANDS: &[Command] = &[
         KeyCode::Semicolon,
         ";",
         Action::Seed,
-        "the focused monitor's seed: a white blob or the camera",
+        "the focused monitor's seed: a white blob or dark glass",
         "seed",
     ),
     // Backspace, because what it does to a knob is what it does to a

@@ -152,12 +152,15 @@ impl Default for Character {
 }
 
 /// The keyer on one camera's path: what this camera refuses to hand on. Two
-/// keys that multiply — a luma key that cuts the dark, for a subject against
-/// a black backdrop, and a chroma key that cuts one colour, for a subject
-/// against a sheet. On the camera rather than on the input, because gain,
-/// framing and character already are: a key is one more thing a path does to
-/// the light, and a camera aimed at an input through its key is the webcam
-/// use without any second kind of source appearing anywhere.
+/// keys that multiply — a luma key that cuts the dark, and a chroma key that
+/// cuts one colour. It sits with the gain, the framing and the character
+/// because it is one more thing a signal path does to the light, and the
+/// camera is the only signal path this instrument has: what the switcher
+/// hands a monitor from outside it hands over whole.
+///
+/// Every camera watches monitors, so every key here is a gate on the
+/// feedback itself — the dark of a trail refused a trip round, or one hue of
+/// it — which is its own instrument to play.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Key {
@@ -241,17 +244,13 @@ pub struct Camera {
     /// camera sees. `[1.0]`-style one-hots are a camera aimed straight at one
     /// monitor; two non-zero entries are a camera looking through
     /// beam-splitter glass at a pair.
-    pub look: Vec<f32>,
-    /// The same splitter, over the external inputs. Counted against the
-    /// inputs and not concatenated onto `look`, so the two index spaces stay
-    /// independent: adding a monitor to a graph cannot renumber what a camera
-    /// is aimed at, because a list that no longer matches its own kind is a
-    /// refusal rather than a shift.
     ///
-    /// Defaulted, since most graphs have no inputs at all; a graph that has
-    /// them and leaves this short is refused by `config::validate`.
-    #[serde(default)]
-    pub look_inputs: Vec<f32>,
+    /// Monitors, and nothing else. A camera here is a camera on a stand in a
+    /// room of monitors, so the only things in front of its lens are glass
+    /// and light already going round; light from outside arrives where a
+    /// switcher takes it, on [`Params::routing`]. That is what makes every
+    /// camera recursive by construction rather than by convention.
+    pub look: Vec<f32>,
 }
 
 fn unity_gain() -> [f32; 3] {
@@ -273,10 +272,10 @@ fn identity_graph() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look: vec![1.0],
-            look_inputs: Vec::new(),
         }],
         monitors: vec![Monitor::default()],
         inputs: Vec::new(),
+        routing_inputs: Vec::new(),
         // Zero, where every other identity here is the value that leaves
         // the light alone. A crosspoint has no such value: it is not a stage
         // the light passes through but a weight in a sum, and its row is the
@@ -294,13 +293,13 @@ fn identity_graph() -> Params {
 ///
 /// A sum type and not a level with an off value, because the two are
 /// different rigs rather than two settings of one: a blob on the glass is
-/// light *entering* the graph, and a monitor without one is lit by whatever
-/// the switcher routes onto it. A level can only tell those apart by a magic
-/// zero nothing names — which is why `config::validate` refuses a blob of no
-/// light rather than letting it be the camera rig spelled a second way. And
-/// the second rig's level is already played elsewhere, on the gain of the
-/// camera doing the lighting, which is why this costs the surface a button
-/// and not a fader.
+/// light *entering* the graph, and a monitor without one holds only what the
+/// switcher paints on it. A level can only tell those apart by a magic zero
+/// nothing names — which is why `config::validate` refuses a blob of no
+/// light rather than letting it be the dark rig spelled a second way. And
+/// the dark rig's level is already played elsewhere, on the switcher's
+/// crosspoints and the gains behind them, which is why this costs the
+/// surface a button and not a fader.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Seed {
@@ -310,10 +309,12 @@ pub enum Seed {
     /// wide it is belong to [`crate::feedback`], the only place that draws
     /// it.
     WhiteBlob(f32),
-    /// No light of its own: this monitor's loop is fed by the cameras the
-    /// switcher routes onto it, and their gain is its level. What every
-    /// input-driven graph has always been, said out loud.
-    Camera,
+    /// No light of its own: the glass is dark until the switcher paints
+    /// something on it, and what it paints — cameras, external inputs, or a
+    /// mix — is the crosspoints' business rather than the seed's. Named for
+    /// the glass and not for what lands on it, because a monitor lit by a
+    /// test pattern is as seedless as one lit by a camera.
+    Dark,
 }
 
 impl Seed {
@@ -331,18 +332,18 @@ impl Seed {
     /// The other kind — the whole of what the button does.
     pub const fn toggled(self) -> Seed {
         match self {
-            Seed::WhiteBlob(_) => Seed::Camera,
-            Seed::Camera => Seed::BLOB,
+            Seed::WhiteBlob(_) => Seed::Dark,
+            Seed::Dark => Seed::BLOB,
         }
     }
 
-    /// What the shader adds at the spot. A camera seed adds nothing there:
-    /// its light arrives through the taps, like every other photon going
+    /// What the shader adds at the spot. Dark glass adds nothing there: every
+    /// photon on it arrived through the taps, like every other photon going
     /// round.
     pub const fn brightness(self) -> f32 {
         match self {
             Seed::WhiteBlob(brightness) => brightness,
-            Seed::Camera => 0.0,
+            Seed::Dark => 0.0,
         }
     }
 
@@ -358,7 +359,7 @@ impl fmt::Display for Seed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Seed::WhiteBlob(brightness) => write!(f, "white blob {brightness:.3}"),
-            Seed::Camera => write!(f, "camera"),
+            Seed::Dark => write!(f, "dark"),
         }
     }
 }
@@ -385,7 +386,7 @@ impl Default for Monitor {
     fn default() -> Self {
         Monitor {
             colour: Colour::NEUTRAL,
-            seed: Seed::Camera,
+            seed: Seed::Dark,
             headroom: Monitor::KNEE_AT_WHITE,
         }
     }
@@ -410,17 +411,33 @@ impl Monitor {
 pub struct Params {
     pub cameras: Vec<Camera>,
     pub monitors: Vec<Monitor>,
-    /// External sources the cameras can be aimed at alongside the monitors:
-    /// test patterns, video files, capture devices. A source and nothing
-    /// else — nothing draws to one and no knob turns one — so an input takes
-    /// no routing column and no part in the loop's gain. It is light entering
-    /// the graph, like the seed spot, rather than light going round it.
+    /// The light the switcher has that the graph did not make: test
+    /// patterns, video files, capture devices. Plugged into the switcher and
+    /// nothing else — nothing draws to one and no camera may watch one — so
+    /// it is light entering the graph, like the seed spot, rather than light
+    /// going round it. `routing_inputs` is where each one lands.
     #[serde(default)]
     pub inputs: Vec<Input>,
     /// The routing matrix: `routing[m][c]` is how much of camera `c`'s output
     /// monitor `m` displays. A permutation matrix is a plain switcher; rows
     /// with several non-zero entries mix cameras on one monitor.
     pub routing: Vec<Vec<f32>>,
+    /// The other half of the same switcher: `routing_inputs[i][m]` is how
+    /// much of input `i` monitor `m` shows. This is the whole of how outside
+    /// light reaches the graph, and the level it enters at.
+    ///
+    /// Counted against its own kind rather than added as columns of
+    /// `routing`, for the reason a camera's `look` is: a list that no longer
+    /// matches its own kind is a refusal, where one shared index space would
+    /// let a camera added to a graph quietly take over an input's weight.
+    ///
+    /// A row per *input* over the monitors, where `routing` is a row per
+    /// monitor over the cameras. The count that disappears when a graph has
+    /// no inputs is the one that had better be the row count: a graph
+    /// without them writes `[]` rather than a rack of empty rows, and there
+    /// is no empty-means-nothing case for a loader to get wrong.
+    #[serde(default)]
+    pub routing_inputs: Vec<Vec<f32>>,
 }
 
 impl Default for Params {
@@ -760,11 +777,16 @@ impl<'de> Deserialize<'de> for Knob {
 }
 
 impl Params {
-    /// Everything a camera can look at: the monitors, then the inputs. The
-    /// layer count of the source bank, and the layer an input sits on is its
-    /// index past the monitors — which is why `Feedback::new` takes the graph
-    /// rather than a count it could be handed the wrong one of.
-    pub fn sources(&self) -> usize {
+    /// The layers of the source bank: the monitors, then the inputs. An
+    /// input's layer is its index past the monitors — which is why
+    /// `Feedback::new` takes the graph rather than a count it could be handed
+    /// the wrong one of.
+    ///
+    /// Not the switcher's source count, which is the cameras and the inputs:
+    /// a monitor is a layer because something samples it, and a camera is a
+    /// switcher source because something routes it, and no graph has both
+    /// counts equal by anything but coincidence.
+    pub fn layers(&self) -> usize {
         self.monitors.len() + self.inputs.len()
     }
 
@@ -1119,18 +1141,18 @@ mod tests {
 
     #[test]
     fn a_seed_is_one_of_two_rigs_and_the_button_swaps_them() {
-        assert_eq!(Seed::Camera.toggled(), Seed::BLOB);
-        assert_eq!(Seed::BLOB.toggled(), Seed::Camera);
+        assert_eq!(Seed::Dark.toggled(), Seed::BLOB);
+        assert_eq!(Seed::BLOB.toggled(), Seed::Dark);
         // A level a config named is not what comes back. There is nowhere to
         // remember it that is not a third state, and a state the instrument
         // holds without showing is the thing this type exists to stop.
-        assert_eq!(Seed::WhiteBlob(0.42).toggled(), Seed::Camera);
+        assert_eq!(Seed::WhiteBlob(0.42).toggled(), Seed::Dark);
         assert_eq!(Seed::WhiteBlob(0.42).toggled().toggled(), Seed::BLOB);
         // Only a blob puts light on the glass, and it is the light it says —
         // which is what the surface's lamp reads, rather than the variant.
         assert_eq!(Seed::WhiteBlob(0.42).brightness(), 0.42);
-        assert_eq!(Seed::Camera.brightness(), 0.0);
-        assert!(Seed::WhiteBlob(0.42).lit() && !Seed::Camera.lit());
+        assert_eq!(Seed::Dark.brightness(), 0.0);
+        assert!(Seed::WhiteBlob(0.42).lit() && !Seed::Dark.lit());
         assert!(!Seed::WhiteBlob(0.0).lit(), "a blob of nothing is not lit");
     }
 
@@ -1139,7 +1161,7 @@ mod tests {
         // A preset slot is a config file, so the two variants have to
         // survive the round trip apart — a union that serialised to one
         // shape would recall the wrong rig.
-        for seed in [Seed::Camera, Seed::BLOB, Seed::WhiteBlob(0.42)] {
+        for seed in [Seed::Dark, Seed::BLOB, Seed::WhiteBlob(0.42)] {
             let mut params = Params::default();
             params.monitors[0].seed = seed;
             let text = toml::to_string(&params).unwrap();
@@ -1160,9 +1182,9 @@ mod tests {
             "{}",
             params.describe(Focus::default())
         );
-        params.monitors[0].seed = Seed::Camera;
+        params.monitors[0].seed = Seed::Dark;
         assert!(
-            params.describe(Focus::default()).contains("seed camera"),
+            params.describe(Focus::default()).contains("seed dark"),
             "{}",
             params.describe(Focus::default())
         );
@@ -1526,7 +1548,17 @@ mod tests {
         // A graph with different counts on the two sides, from a focus with
         // different indices: symmetric cases cannot tell the two apart, and
         // this is the shape a recall actually lands on.
-        let lopsided = crate::config::external(); // two cameras, one monitor
+        let lopsided = {
+            // `crossed` with a monitor taken away: two cameras, one monitor.
+            let mut params = crate::config::crossed();
+            params.monitors.truncate(1);
+            params.routing.truncate(1);
+            for camera in &mut params.cameras {
+                camera.look.truncate(1);
+            }
+            crate::config::validate(&params).unwrap();
+            params
+        };
         assert_eq!(
             Focus {
                 camera: 1,

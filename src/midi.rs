@@ -1307,7 +1307,7 @@ mod tests {
         // splits down the middle: the left four are the cameras the rotaries
         // turn, the right four the monitors the faders turn.
         let midi = Midi::new(Map::nano_kontrol2()).unwrap();
-        let lit = |camera, monitor| midi.wanted(at(camera, monitor), Seed::Camera, false);
+        let lit = |camera, monitor| midi.wanted(at(camera, monitor), Seed::Dark, false);
         for node in 0..4 {
             assert_eq!(
                 lit(node, node),
@@ -1324,28 +1324,28 @@ mod tests {
         map.button.push(button(91, "shift num3"));
         let midi = Midi::new(map).unwrap();
         assert_eq!(
-            midi.wanted(at(1, 2), Seed::Camera, false),
+            midi.wanted(at(1, 2), Seed::Dark, false),
             crate::lamps::lamp(90) | crate::lamps::lamp(91)
         );
         // A node no button of the map names has no lamp rather than the
         // nearest one: a graph may run deeper than the surface, and the same
         // `None` answers both.
         assert_eq!(
-            midi.wanted(at(0, 2), Seed::Camera, false),
+            midi.wanted(at(0, 2), Seed::Dark, false),
             crate::lamps::lamp(91)
         );
         assert_eq!(
-            midi.wanted(at(1, 0), Seed::Camera, false),
+            midi.wanted(at(1, 0), Seed::Dark, false),
             crate::lamps::lamp(90)
         );
-        assert_eq!(midi.wanted(at(7, 7), Seed::Camera, false), 0);
+        assert_eq!(midi.wanted(at(7, 7), Seed::Dark, false), 0);
 
         // The first button that names a node wins, rather than the last.
         let mut map = Map::nano_kontrol2();
         map.button.push(button(90, "num1"));
         let midi = Midi::new(map).unwrap();
         assert_eq!(
-            midi.wanted(at(0, 0), Seed::Camera, false),
+            midi.wanted(at(0, 0), Seed::Dark, false),
             crate::lamps::lamp(32) | crate::lamps::lamp(36)
         );
     }
@@ -1359,29 +1359,29 @@ mod tests {
         // Camera 3 is S3 and monitor 2 is S6: one lamp per hand, both lit.
         let focus = at(2, 1);
         let pair = crate::lamps::lamp(34) | crate::lamps::lamp(37);
-        assert_eq!(midi.wanted(focus, Seed::Camera, false), pair);
+        assert_eq!(midi.wanted(focus, Seed::Dark, false), pair);
         // M3 goes down: recall slot 3, whose light nothing else would give
         // back. All three lamps, not one.
         assert_eq!(feed(&mut midi, &params, &cc(50, 127)), [Action::Recall(2)]);
         assert_eq!(
-            midi.wanted(focus, Seed::Camera, false),
+            midi.wanted(focus, Seed::Dark, false),
             pair | crate::lamps::lamp(50)
         );
         // And out again when the finger comes off, which is a message that
         // does nothing else at all.
         assert_eq!(feed(&mut midi, &params, &cc(50, 0)), []);
-        assert_eq!(midi.wanted(focus, Seed::Camera, false), pair);
+        assert_eq!(midi.wanted(focus, Seed::Dark, false), pair);
         // A node the select row does not reach lights nothing of its own,
         // one side at a time so neither can cover for the other.
         assert_eq!(
-            midi.wanted(at(99, 1), Seed::Camera, false),
+            midi.wanted(at(99, 1), Seed::Dark, false),
             crate::lamps::lamp(37)
         );
         assert_eq!(
-            midi.wanted(at(2, 99), Seed::Camera, false),
+            midi.wanted(at(2, 99), Seed::Dark, false),
             crate::lamps::lamp(34)
         );
-        assert_eq!(midi.wanted(at(99, 99), Seed::Camera, false), 0);
+        assert_eq!(midi.wanted(at(99, 99), Seed::Dark, false), 0);
     }
 
     #[test]
@@ -1391,29 +1391,29 @@ mod tests {
         // that moves fine mode moves its lamp with it.
         let mut midi = Midi::new(Map::nano_kontrol2()).unwrap();
         let focus = at(0, 0);
-        let dark = midi.wanted(focus, Seed::Camera, false);
+        let dark = midi.wanted(focus, Seed::Dark, false);
         assert_eq!(
-            midi.wanted(focus, Seed::Camera, true) & !dark,
+            midi.wanted(focus, Seed::Dark, true) & !dark,
             crate::lamps::lamp(46),
             "the overlay is cycle"
         );
         assert!(midi.toggle_fine());
         assert_eq!(
-            midi.wanted(focus, Seed::Camera, false) & !dark,
+            midi.wanted(focus, Seed::Dark, false) & !dark,
             crate::lamps::lamp(58),
             "fine mode is track-prev on the factory map"
         );
         assert!(!midi.toggle_fine());
-        assert_eq!(midi.wanted(focus, Seed::Camera, false), dark);
+        assert_eq!(midi.wanted(focus, Seed::Dark, false), dark);
 
         // A map that binds the mode's key nowhere lights nothing extra,
         // rather than the button that number used to be.
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| b.cc != 58);
         let mut midi = Midi::new(map).unwrap();
-        let dark = midi.wanted(focus, Seed::Camera, false);
+        let dark = midi.wanted(focus, Seed::Dark, false);
         assert!(midi.toggle_fine());
-        assert_eq!(midi.wanted(focus, Seed::Camera, false), dark);
+        assert_eq!(midi.wanted(focus, Seed::Dark, false), dark);
     }
 
     #[test]
@@ -1424,7 +1424,7 @@ mod tests {
         // it only by changing the picture answers it too late.
         let midi = Midi::new(Map::nano_kontrol2()).unwrap();
         let focus = at(0, 0);
-        let dark = midi.wanted(focus, Seed::Camera, false);
+        let dark = midi.wanted(focus, Seed::Dark, false);
         assert_eq!(
             midi.wanted(focus, Seed::BLOB, false) & !dark,
             crate::lamps::lamp(41),
@@ -1445,7 +1445,7 @@ mod tests {
         let mut map = Map::nano_kontrol2();
         map.button.retain(|b| b.cc != 41);
         let midi = Midi::new(map).unwrap();
-        let dark = midi.wanted(focus, Seed::Camera, false);
+        let dark = midi.wanted(focus, Seed::Dark, false);
         assert_eq!(midi.wanted(focus, Seed::BLOB, false), dark);
     }
 

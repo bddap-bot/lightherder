@@ -1,13 +1,15 @@
-//! What the graph looks at besides its own monitors.
+//! The light the switcher has that the graph did not make.
 //!
-//! A monitor and an external input are the same kind of thing to a camera: a
-//! layer of the source bank, addressed by a camera's splitter — the
-//! monitors by [`crate::params::Camera::look`], the inputs by
-//! [`crate::params::Camera::look_inputs`].
-//! That is the whole of this stage's model — an input is a source the
-//! cameras can be aimed at, so everything the switcher and the splitters
-//! already do to monitors works on it unchanged, and nothing new appears in
-//! the shader.
+//! A monitor and an external input are the same kind of thing to the pass
+//! that samples one: a layer of the source bank. Which layer a monitor is
+//! shown comes off the switcher — the cameras by
+//! [`crate::params::Params::routing`], the inputs by
+//! [`crate::params::Params::routing_inputs`].
+//! That is the whole of this stage's model — an input is a source plugged
+//! into the switcher, so everything the switcher already does to a camera it
+//! does to this unchanged, and nothing new appears in the shader. No camera
+//! watches one: a camera watches monitors, which is what makes every loop in
+//! the graph a loop.
 //!
 //! Where the pixels come from is three cases and two implementations.
 //! [`Input::File`] and [`Input::Capture`] are both an `ffmpeg` reading

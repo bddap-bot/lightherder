@@ -13,10 +13,10 @@ use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Params, Seed, 
 /// [`MAX_TAPS`] already bounds those.
 pub const MAX_MONITORS: usize = 8;
 
-/// Inputs get their own cap because nothing else bounds them: a camera aimed
-/// at one is one tap however many there are, so [`MAX_TAPS`] does not, and
-/// each costs a bank layer plus — for a file or a device — a process and a
-/// thread of its own. Four is what a switcher has spare inputs for.
+/// Inputs get their own cap because [`MAX_TAPS`] barely bounds them — one
+/// tap each, however many there are — while each costs a bank layer plus,
+/// for a file or a device, a process and a thread of its own. Four is what a
+/// switcher has spare inputs for.
 pub const MAX_INPUTS: usize = 4;
 
 /// The classic rig: one camera aimed straight at the one monitor it draws to.
@@ -36,7 +36,6 @@ pub fn single() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look: vec![1.0],
-            look_inputs: Vec::new(),
         }],
         monitors: vec![Monitor {
             seed: Seed::BLOB,
@@ -44,6 +43,7 @@ pub fn single() -> Params {
         }],
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
+        routing_inputs: Vec::new(),
     }
 }
 
@@ -87,7 +87,6 @@ pub fn crossed() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look,
-            look_inputs: Vec::new(),
         }
     };
     Params {
@@ -107,6 +106,7 @@ pub fn crossed() -> Params {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
+        routing_inputs: Vec::new(),
     }
 }
 
@@ -134,7 +134,6 @@ pub fn insanity() -> Params {
                 character: Character::CLEAN,
                 key: Key::OFF,
                 look,
-                look_inputs: Vec::new(),
             }
         })
         .collect();
@@ -148,69 +147,57 @@ pub fn insanity() -> Params {
             .collect(),
         inputs: Vec::new(),
         routing: vec![vec![1.0 / N as f32; N]; N],
+        routing_inputs: Vec::new(),
     }
 }
 
-/// A test pattern driving the loop instead of the seed spot. One camera is
-/// the classic rig, turning and pulling back on its own monitor; the other is
-/// pointed at the bars and hands over almost nothing — a seventieth of what
-/// it sees. That is the whole point of a loop this close to unity: what
-/// settles is the trickle divided by how far the gain is from 1, so 0.014 of
-/// the bars over a loop 0.015 short of unity settles at almost the bars'
-/// own brightness. The seed is off, so every photon here
-/// came in from outside, and the gain is flat across the channels because an
-/// input supplies its own colour — there is nothing for a per-channel decay
-/// to add.
+/// A test pattern driving the loop instead of the seed spot. One camera, the
+/// classic rig turning and pulling back on its own monitor, and the bars
+/// plugged into the switcher beside it on a crosspoint that hands over
+/// almost nothing — a seventieth of the picture, 0.014. That is the whole
+/// point of a loop this close to unity: what settles is the trickle divided
+/// by how far the gain is from 1, so 0.014 of the bars over a loop 0.015
+/// short of unity settles at almost the bars' own brightness. The glass is
+/// dark, so every photon here came in from outside, and the gain is flat
+/// across the channels because an input supplies its own colour — there is
+/// nothing for a per-channel decay to add.
 pub fn external() -> Params {
-    let looking_at_the_loop = Camera {
-        framing: Framing {
-            zoom: 0.994,
-            rotation: 0.05,
-            translate: [0.0, 0.0],
-        },
-        gain: [0.985; 3],
-        character: Character::CLEAN,
-        key: Key::OFF,
-        look: vec![1.0],
-        look_inputs: vec![0.0],
-    };
-    let looking_at_the_bars = Camera {
-        // Square on, so the pattern arrives as itself and everything that
-        // happens to it afterwards is the loop's doing.
-        framing: Framing::identity(),
-        gain: [0.014; 3],
-        character: Character::CLEAN,
-        key: Key::OFF,
-        look: vec![0.0],
-        look_inputs: vec![1.0],
-    };
     Params {
-        cameras: vec![looking_at_the_loop, looking_at_the_bars],
+        cameras: vec![Camera {
+            framing: Framing {
+                zoom: 0.994,
+                rotation: 0.05,
+                translate: [0.0, 0.0],
+            },
+            gain: [0.985; 3],
+            character: Character::CLEAN,
+            key: Key::OFF,
+            look: vec![1.0],
+        }],
         monitors: vec![Monitor::default()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
-        routing: vec![vec![1.0, 1.0]],
+        // The loop camera at a full send.
+        routing: vec![vec![1.0]],
+        // The bars at a trickle. The pattern arrives square on and whole,
+        // since nothing frames what the switcher hands over — everything
+        // that happens to it afterwards is the loop's doing.
+        routing_inputs: vec![vec![0.014]],
     }
 }
 
 /// A webcam driving the loop: [`external`] with the bars swapped for
-/// `/dev/video0` and the luma key switched on, so a subject against a dark
-/// room feeds the spiral and the backdrop feeds nothing — plug in, recall,
-/// play. The injection sits a touch above the bars': what settles is the
-/// injection divided by the loop's distance from unity, and at 0.015 a
-/// subject settles at its own brightness — full scale in, white trail out,
-/// with the amplifier's rail above it for the moments a light swings past.
+/// `/dev/video0` — plug in, recall, play. The injection sits a touch above
+/// the bars': what settles is the injection divided by the loop's distance
+/// from unity, and at 0.015 into a loop 0.015 short of unity a subject
+/// settles at its own brightness — full scale in, white trail out, with the
+/// amplifier's rail above it for the moments a light swings past.
 pub fn webcam() -> Params {
     let mut params = external();
     params.inputs = vec![Input::Capture {
         format: "v4l2".into(),
         device: "/dev/video0".into(),
     }];
-    params.cameras[1].gain = [0.015; 3];
-    params.cameras[1].key = Key {
-        threshold: 0.35,
-        softness: 0.08,
-        ..Key::OFF
-    };
+    params.routing_inputs[0][0] = 0.015;
     params
 }
 
@@ -284,15 +271,21 @@ pub fn validate(params: &Params) -> Result<(), String> {
         return Err(format!("{m} monitors; needs between 1 and {MAX_MONITORS}"));
     }
     if c == 0 {
-        return Err("no cameras; nothing would ever reach a monitor".into());
+        return Err(
+            "no cameras; a rig with none has no loop to be a feedback rig, and the \
+             panel's camera knobs would have nothing to point at"
+                .into(),
+        );
     }
     if n > MAX_INPUTS {
         return Err(format!("{n} inputs; at most {MAX_INPUTS}"));
     }
-    // The routing matrix's shape, before anything reads a crosspoint out of
-    // it: `Params::knob` indexes `routing[monitor][camera]` directly, so a
-    // short row would panic rather than fail. What the crosspoints *hold* is
-    // the `Knob::Route` rail, checked with every other knob below.
+    // The switcher's shape, before anything reads a crosspoint out of it:
+    // `Params::knob` indexes `routing[monitor][camera]` directly, so a short
+    // row would panic rather than fail. Its two halves are counted against
+    // their own kinds and transposed from each other — a row per monitor
+    // over the cameras, a row per input over the monitors — which is why
+    // this is two shape checks and not one.
     if params.routing.len() != m {
         return Err(format!(
             "routing has {} rows; needs one per monitor, {m}",
@@ -307,38 +300,64 @@ pub fn validate(params: &Params) -> Result<(), String> {
             ));
         }
     }
+    if params.routing_inputs.len() != n {
+        return Err(format!(
+            "routing_inputs has {} rows; needs one per input, {n}",
+            params.routing_inputs.len()
+        ));
+    }
+    for (i, row) in params.routing_inputs.iter().enumerate() {
+        if row.len() != m {
+            return Err(format!(
+                "routing_inputs row {i} has {} entries; needs one per monitor, {m}",
+                row.len()
+            ));
+        }
+    }
+    // What the input half's crosspoints hold. `Knob::Route` walks the camera
+    // half with every other knob below, and no focus names an input — but a
+    // crosspoint is a crosspoint, so this reads that knob's own rail rather
+    // than spelling a second one for it to differ from. It is also the
+    // finiteness check, as every range check here is.
+    let (low, high) = Knob::Route.limit().ends();
+    for (i, row) in params.routing_inputs.iter().enumerate() {
+        for (monitor, weight) in row.iter().enumerate() {
+            if !(low..=high).contains(weight) {
+                return Err(format!(
+                    "input {i}'s {} to monitor {monitor} is {weight}; it runs {low} to {high}",
+                    Knob::Route.name()
+                ));
+            }
+        }
+    }
     // A splitter is not a knob — nothing on the panel turns one — so this is
     // the only place its weights are decided, and they are checked as
-    // written rather than against a rail no key could hit.
+    // written rather than against a rail no key could hit. Monitors only:
+    // a camera watches the light going round and never the light coming in.
     for (i, camera) in params.cameras.iter().enumerate() {
-        for (weights, what, noun, wanted) in [
-            (&camera.look, "look", "monitor", m),
-            (&camera.look_inputs, "look_inputs", "input", n),
-        ] {
-            if weights.len() != wanted {
-                return Err(format!(
-                    "camera {i}'s {what} has {} entries; needs one per {noun}, {wanted}",
-                    weights.len(),
-                ));
-            }
-            if let Some(w) = weights.iter().find(|w| !w.is_finite() || **w < 0.0) {
-                return Err(format!(
-                    "camera {i}'s {what} contains {w}; weights are finite and >= 0"
-                ));
-            }
+        if camera.look.len() != m {
+            return Err(format!(
+                "camera {i}'s look has {} entries; needs one per monitor, {m}",
+                camera.look.len(),
+            ));
+        }
+        if let Some(w) = camera.look.iter().find(|w| !w.is_finite() || **w < 0.0) {
+            return Err(format!(
+                "camera {i}'s look contains {w}; weights are finite and >= 0"
+            ));
         }
     }
     // A blob's brightness is not a knob either — nothing on the panel turns
     // one — so this is the only place its level is decided. Zero is refused
     // rather than loaded: a blob putting no light on the glass is what
-    // `camera` says, and two spellings of one rig is the ambiguity the union
+    // `dark` says, and two spellings of one rig is the ambiguity the union
     // exists to delete — one the surface's lamp would then get wrong.
     for (i, monitor) in params.monitors.iter().enumerate() {
         if let Seed::WhiteBlob(brightness) = monitor.seed {
             if !(brightness > 0.0 && brightness <= Seed::BRIGHTEST) {
                 return Err(format!(
                     "monitor {i}'s white blob is {brightness}; it runs above 0 \
-                     to {}, and a blob of no light is \"camera\"",
+                     to {}, and a blob of no light is \"dark\"",
                     Seed::BRIGHTEST
                 ));
             }
@@ -381,11 +400,11 @@ pub fn validate(params: &Params) -> Result<(), String> {
         }
     }
     // The flattened routing-times-look products are what the shader iterates,
-    // and its uniform array is a fixed size. Bounded against what a *knob*
-    // can reach, not what the file happens to say: `Knob::Route` sweeps a
-    // crosspoint mid-performance, so a row of zeroes at load is no promise
-    // about the tap count a second later. The look weights are not a knob, so
-    // they still count as written.
+    // and its uniform array is a fixed size. Bounded against every crosspoint
+    // turned up, not against what the file happens to say: `Knob::Route`
+    // sweeps one mid-performance, so a row of zeroes at load is no promise
+    // about the tap count a second later. The look weights are not a
+    // crosspoint, so they still count as written.
     let reachable = crate::feedback::reachable_taps(params);
     if reachable > MAX_TAPS {
         return Err(format!(
@@ -425,11 +444,12 @@ mod tests {
         // preset settles instead of blooming to white. Near 1, or the trail
         // is not worth seeing.
         //
-        // `look` and not `look_inputs`: an input is light entering the graph,
-        // so it belongs to what the loop is driven *by*, not to what it
-        // multiplies — the seed is left out of this sum for exactly the same
-        // reason. Reading the loop's own gain is naming one of the two
-        // fields, which is the whole of the argument for their being two.
+        // `routing` and not `routing_inputs`: an input is light entering the
+        // graph, so it belongs to what the loop is driven *by*, not to what
+        // it multiplies — the seed is left out of this sum for exactly the
+        // same reason. Reading the loop's own gain is naming one of the two
+        // halves of the switcher, which is the whole of the argument for
+        // their being two.
         for (name, params) in presets() {
             for (i, row) in params.routing.iter().enumerate() {
                 let sum: f32 = (0..3)
@@ -474,10 +494,22 @@ mod tests {
     fn a_config_file_round_trips() {
         let dir = std::env::temp_dir().join(format!("lightherder-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // Between them these carry a non-default value in every field
-        // the format has: the routing and splitter weights, the character and
-        // the rail, the keyer, and the inputs.
-        for params in [crossed(), analog(), external(), webcam()] {
+        // Between them these carry a non-default value in every field the
+        // format has: the routing and splitter weights, the input patch, the
+        // character and the rail, and the inputs. The keyer is on none of
+        // them — no preset keys anything now that no camera faces a room —
+        // so it is turned up here by hand rather than left untested.
+        let keyed = {
+            let mut params = analog();
+            params.cameras[0].key = Key {
+                threshold: 0.35,
+                softness: 0.08,
+                hue: 1.2,
+                tolerance: 0.3,
+            };
+            params
+        };
+        for params in [crossed(), analog(), external(), webcam(), keyed] {
             let path = dir.join("preset.toml");
             std::fs::write(&path, toml::to_string(&params).unwrap()).unwrap();
             assert_eq!(load(path.to_str().unwrap()).unwrap(), params);
@@ -491,12 +523,12 @@ mod tests {
         // thing a serde round trip of the crate's own output cannot check.
         let params: Params = toml::from_str(
             "cameras = [{ look = [1.0] }]\n\
-             monitors = [{ seed = { white_blob = 0.1 } }, { seed = \"camera\" }]\n\
+             monitors = [{ seed = { white_blob = 0.1 } }, { seed = \"dark\" }]\n\
              routing = [[1.0], [1.0]]\n",
         )
         .unwrap();
         assert_eq!(params.monitors[0].seed, Seed::WhiteBlob(0.1));
-        assert_eq!(params.monitors[1].seed, Seed::Camera);
+        assert_eq!(params.monitors[1].seed, Seed::Dark);
     }
 
     #[test]
@@ -514,7 +546,7 @@ mod tests {
         assert_eq!(params.cameras[0].gain, [1.0; 3]);
         assert_eq!(params.cameras[0].character, Character::CLEAN);
         assert_eq!(params.monitors[0].colour, Colour::NEUTRAL);
-        assert_eq!(params.monitors[0].seed, Seed::Camera);
+        assert_eq!(params.monitors[0].seed, Seed::Dark);
         assert_eq!(params.monitors[0].headroom, Monitor::KNEE_AT_WHITE);
     }
 
@@ -591,8 +623,8 @@ mod tests {
         }
     }
 
-    /// A graph carrying one of every kind of input, every camera's
-    /// `look_inputs` widened to match: `external` plus a file and a device.
+    /// A graph carrying one of every kind of input, the switcher's input
+    /// half widened to match: `external` plus a file and a device.
     fn one_of_every_input() -> Params {
         let mut params = external();
         params.inputs = vec![
@@ -603,9 +635,7 @@ mod tests {
                 device: "/dev/video0".into(),
             },
         ];
-        for camera in &mut params.cameras {
-            camera.look_inputs.resize(3, 0.0);
-        }
+        params.routing_inputs.resize(3, vec![0.0]);
         params
     }
 
@@ -616,9 +646,10 @@ mod tests {
         // every line of the README that mentions an input depends on the
         // names rather than on the agreement.
         let params: Params = toml::from_str(
-            "cameras = [{ look = [1.0], look_inputs = [0.0, 0.0, 0.0] }]\n\
+            "cameras = [{ look = [1.0] }]\n\
              monitors = [{}]\n\
              routing = [[1.0]]\n\
+             routing_inputs = [[0.0], [0.0], [0.0]]\n\
              inputs = [\n\
              \x20 { pattern = \"bars\" },\n\
              \x20 { file = \"clip.mp4\" },\n\
@@ -634,27 +665,42 @@ mod tests {
     }
 
     #[test]
-    fn a_splitter_is_counted_against_its_own_kind_of_source() {
-        // A monitor added to a working graph, and nothing else touched. Under
-        // one list over both kinds this validated on length alone — the
-        // camera that was aimed at the input came out aimed at the new
-        // monitor, silently. Two lists make the graph short of a monitor
-        // weight instead, which is a refusal.
+    fn a_weight_is_counted_against_its_own_kind_of_thing() {
+        // A camera added to a working graph, and nothing else touched. Were
+        // the inputs columns of `routing` past the cameras', this would
+        // validate on length alone and the new camera would come out holding
+        // the bars' 0.014 while the bars went dark — a silent shift. Counted
+        // against their own kinds it is a short routing row instead, which is
+        // a refusal.
         let mut params = external();
-        params.monitors.push(params.monitors[0].clone());
-        params.routing = vec![vec![1.0, 1.0]; 2];
+        params.cameras.push(params.cameras[0].clone());
         let why = validate(&params).unwrap_err();
         assert!(
-            why.contains("look has") && why.contains("monitor"),
+            why.contains("routing row 0") && why.contains("per camera"),
             "refused for the wrong reason: {why}"
         );
 
-        // And the other way: inputs a camera has no weights for.
+        // And a monitor added, which is the same story on the other axis: the
+        // input patch is a row per input over the monitors, so it comes out
+        // one monitor short rather than sending the new monitor whatever the
+        // old one had.
         let mut params = external();
-        params.cameras[1].look_inputs.clear();
+        params.monitors.push(params.monitors[0].clone());
+        params.routing = vec![vec![1.0]; 2];
+        params.cameras[0].look = vec![1.0, 0.0];
         let why = validate(&params).unwrap_err();
         assert!(
-            why.contains("look_inputs"),
+            why.contains("routing_inputs row 0") && why.contains("per monitor"),
+            "refused for the wrong reason: {why}"
+        );
+
+        // And a splitter short of a monitor, the check the two above are the
+        // switcher's half of.
+        let mut params = external();
+        params.cameras[0].look.clear();
+        let why = validate(&params).unwrap_err();
+        assert!(
+            why.contains("look has") && why.contains("monitor"),
             "refused for the wrong reason: {why}"
         );
     }
@@ -663,9 +709,7 @@ mod tests {
     fn more_inputs_than_the_switcher_has_are_refused() {
         let mut params = one_of_every_input();
         params.inputs = vec![Input::Pattern(Pattern::Bars); MAX_INPUTS + 1];
-        for camera in &mut params.cameras {
-            camera.look_inputs.resize(MAX_INPUTS + 1, 0.0);
-        }
+        params.routing_inputs = vec![vec![0.0]; MAX_INPUTS + 1];
         let why = validate(&params).unwrap_err();
         assert!(
             why.contains("at most"),
@@ -674,23 +718,37 @@ mod tests {
     }
 
     #[test]
-    fn the_external_preset_is_lit_by_its_input_and_nothing_else() {
-        let p = external();
-        assert_eq!(p.inputs.len(), 1);
-        assert_eq!(p.monitors[0].seed, Seed::Camera, "a blob is still lit");
-        // One camera in the loop, one on the input, and no camera doing both:
-        // the injection level is that camera's gain, which is only true while
-        // it sees nothing else.
-        let on_input: Vec<usize> = (0..p.cameras.len())
-            .filter(|c| p.cameras[*c].look_inputs[0] > 0.0)
-            .collect();
-        assert_eq!(on_input, vec![1]);
-        assert_eq!(p.cameras[1].look, [0.0]);
-        assert_eq!(p.cameras[0].look_inputs, [0.0]);
+    fn an_input_patched_past_the_crosspoint_rail_is_refused() {
+        // No focus names an input, so the rail walk over the knobs never
+        // reaches this half of the switcher: it is checked on its own, off
+        // the very same knob's travel.
+        let (_, high) = Knob::Route.limit().ends();
+        for level in [high + 0.1, -0.1, f32::NAN] {
+            let mut params = external();
+            params.routing_inputs[0][0] = level;
+            let why = validate(&params).unwrap_err();
+            assert!(
+                why.contains("input 0's route to monitor 0"),
+                "refused for the wrong reason: {why}"
+            );
+        }
     }
 
     #[test]
-    fn the_webcam_preset_keys_its_device_into_the_loop() {
+    fn the_external_preset_is_lit_by_its_input_and_nothing_else() {
+        let p = external();
+        assert_eq!(p.inputs.len(), 1);
+        assert_eq!(p.monitors[0].seed, Seed::Dark, "a blob is still lit");
+        // One camera, and it is in the loop: the bars reach the monitor over
+        // the switcher, not down a lens, which is the whole shape of the
+        // rig. The injection level is the crosspoint the bars are patched on.
+        assert_eq!(p.cameras.len(), 1);
+        assert_eq!(p.cameras[0].look, [1.0]);
+        assert_eq!(p.routing_inputs, vec![vec![0.014]]);
+    }
+
+    #[test]
+    fn the_webcam_preset_is_the_external_rig_with_a_device_on_it() {
         let p = webcam();
         assert_eq!(
             p.inputs,
@@ -699,20 +757,25 @@ mod tests {
                 device: "/dev/video0".into(),
             }]
         );
-        // The key sits on the camera aimed at the device, luma half only —
-        // a dark room, not a coloured sheet, is what a bare webcam faces —
-        // and the loop camera hands on everything, or the trail would gate
-        // itself.
-        let key = p.cameras[1].key;
-        assert!(key.threshold > 0.0 && key.softness > 0.0);
-        assert_eq!(key.tolerance, Key::TOLERANT);
-        assert_eq!(p.cameras[0].key, Key::OFF);
-        // No blob: every photon on the monitor walked in the lens.
-        assert_eq!(p.monitors[0].seed, Seed::Camera);
-        // And no other preset keys anything, so the stage is additive.
+        // Everything but the device and its level is `external`'s, so what
+        // the two presets differ by is what plugs into the switcher.
+        let mut same = external();
+        same.inputs = p.inputs.clone();
+        same.routing_inputs = p.routing_inputs.clone();
+        assert_eq!(p, same);
+        // A subject settles at its own brightness: the injection divided by
+        // the loop's distance from unity, which is what the doc claims.
+        let settled = p.routing_inputs[0][0] / (1.0 - p.cameras[0].gain[0]);
+        assert!((settled - 1.0).abs() < 0.02, "settles at {settled}");
+        // No blob: every photon on the monitor came in over the switcher.
+        assert_eq!(p.monitors[0].seed, Seed::Dark);
+        // And no preset keys anything: every camera watches monitors now, so
+        // a key here would gate a feedback trail rather than a room.
         for (name, params) in presets() {
-            let keyed = params.cameras.iter().any(|c| c.key != Key::OFF);
-            assert_eq!(keyed, name == "webcam", "{name}");
+            assert!(
+                params.cameras.iter().all(|c| c.key == Key::OFF),
+                "{name} keys a loop camera"
+            );
         }
     }
 
@@ -737,15 +800,15 @@ mod tests {
         blob(&mut params, f32::NAN);
         assert!(validate(&params).is_err());
         // The other end, and the whole point of the union: a blob of no
-        // light is the camera rig, and a file gets one spelling of it —
-        // the magic zero a level could not do without.
+        // light is dark glass, and a file gets one spelling of it — the
+        // magic zero a level could not do without.
         blob(&mut params, 0.0);
         let why = validate(&params).unwrap_err();
-        assert!(why.contains("camera"), "{why}");
+        assert!(why.contains("dark"), "{why}");
         // And both rigs, said properly, load.
         blob(&mut params, Seed::BRIGHTEST);
         validate(&params).unwrap();
-        params.monitors[1].seed = Seed::Camera;
+        params.monitors[1].seed = Seed::Dark;
         validate(&params).unwrap();
     }
 
@@ -806,11 +869,11 @@ mod tests {
                     character: Character::CLEAN,
                     key: Key::OFF,
                     look: vec![1.0; MAX_MONITORS],
-                    look_inputs: Vec::new(),
                 })
                 .collect(),
             monitors: (0..MAX_MONITORS).map(|_| Monitor::default()).collect(),
             inputs: Vec::new(),
+            routing_inputs: Vec::new(),
             // One camera per monitor switched on: well under the bound as it
             // stands, and over it the moment a crosspoint is swept.
             routing: (0..MAX_MONITORS)

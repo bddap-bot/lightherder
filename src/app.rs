@@ -905,20 +905,24 @@ mod tests {
     #[test]
     fn a_recall_rebuilds_the_rig_across_graph_shapes() {
         // The couch flow of issue #10: the Play button launches the default
-        // rig, and a slot holds the webcam rig — one more input, one more
-        // camera. `external` is that rig with the capture device swapped
+        // rig, and a slot holds the webcam rig — one more input on the
+        // switcher. `external` is that rig with the capture device swapped
         // for the bars, so the test runs on machines with no webcam.
         let dir = scratch("cross-shape");
         let stored = config::external();
         crate::slots::store(&dir, 0, &stored).unwrap();
         crate::slots::store(&dir, 1, &config::single()).unwrap();
-        // The same graph with a second monitor, for the sideways recall below.
+        // The same graph with a second monitor and a second camera, for the
+        // sideways recall below and the focus that has to land after it.
         let mut wider = stored.clone();
         wider.monitors.push(wider.monitors[0].clone());
-        wider.routing = vec![vec![1.0, 1.0]; 2];
+        wider.cameras.push(wider.cameras[0].clone());
+        wider.routing = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        wider.routing_inputs = vec![vec![0.014, 0.0]];
         for camera in &mut wider.cameras {
             camera.look.push(0.0);
         }
+        config::validate(&wider).unwrap();
         crate::slots::store(&dir, 2, &wider).unwrap();
         let Some(mut app) = playing(config::single(), dir.clone()) else {
             return;
@@ -968,11 +972,11 @@ mod tests {
         assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
 
         play(&mut app, Action::Seed);
-        assert_eq!(app.params.monitors[1].seed, Seed::Camera);
+        assert_eq!(app.params.monitors[1].seed, Seed::Dark);
         assert_eq!(app.params.monitors[0].seed, Seed::BLOB, "both went");
         // What the panel reads, which is the focused monitor's and follows
         // the focus rather than the press.
-        assert_eq!(app.seed(), Seed::Camera);
+        assert_eq!(app.seed(), Seed::Dark);
         app.focus_monitor(0);
         assert_eq!(app.seed(), Seed::BLOB);
 

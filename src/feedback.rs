@@ -3,19 +3,21 @@
 //! The monitors are the layers of one texture array, double-buffered so a
 //! pass can read every monitor's previous frame while writing one's next.
 //! The external inputs are further layers of the same array, written rather
-//! than rendered — so "what a camera is looking at" is one layer index and
+//! than rendered — so what a monitor's pass samples is one layer index and
 //! the shader never learns which kind it got.
-//! Everything between a monitor and the cameras feeding it — the routing
-//! matrix, each camera's beam splitter, each camera's gain — flattens on the
-//! CPU into a list of *taps*: (source layer, sampling affine, weight).
+//! Everything between a monitor and what feeds it — the routing matrix, each
+//! camera's beam splitter, each camera's gain — flattens on the CPU into a
+//! list of *taps*: (source layer, sampling affine, weight).
 //! Sampling is linear, so a camera looking through a splitter at a blend of
 //! monitors is exactly the weighted sum of its per-monitor samples; no
-//! intermediate blend texture exists because none is needed.
+//! intermediate blend texture exists because none is needed. An input is one
+//! tap of its own: the switcher hands its layer straight to the monitor,
+//! there being no camera between the two to frame or colour it.
 
 use bytemuck::Zeroable;
 
-use crate::affine::sample_transform;
-use crate::params::Params;
+use crate::affine::{sample_transform, Framing};
+use crate::params::{Character, Key, Params};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
@@ -55,7 +57,7 @@ fn monitor_texel_bytes() -> u32 {
 
 /// What the two banks cost `params` at monitors of `size`.
 pub fn bank_bytes(params: &Params, size: (u32, u32)) -> u64 {
-    2 * params.sources() as u64 * size.0 as u64 * size.1 as u64 * monitor_texel_bytes() as u64
+    2 * params.layers() as u64 * size.0 as u64 * size.1 as u64 * monitor_texel_bytes() as u64
 }
 
 /// Whether that fits in [`MAX_BANK_BYTES`], with the figure in the refusal:
@@ -65,8 +67,8 @@ pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
     let bytes = bank_bytes(params, size);
     if bytes > MAX_BANK_BYTES {
         return Err(format!(
-            "{} sources at {}x{} is {:.1} GiB of bank, past the {:.1} GiB cap",
-            params.sources(),
+            "{} bank layers at {}x{} is {:.1} GiB of bank, past the {:.1} GiB cap",
+            params.layers(),
             size.0,
             size.1,
             bytes as f64 / (1u64 << 30) as f64,
@@ -76,18 +78,26 @@ pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
     Ok(())
 }
 
-/// The edges of monitor `m`'s pass: (camera, source layer, routing weight
-/// times splitter weight). This is where a camera's two splitter lists become
-/// the one index space the bank is laid out in — the monitors, then the
-/// inputs offset past them, the same layout [`Feedback::write_input`] writes
-/// an input's frame to.
+/// The edges of monitor `m`'s pass: (the camera the light came through if it
+/// came through one, source layer, routing weight times splitter weight).
+/// This is where the switcher's two kinds of column meet the one index space
+/// the bank is laid out in — the monitors, then the inputs offset past them,
+/// the same layout [`Feedback::write_input`] writes an input's frame to.
+///
+/// A routed camera fans out over its beam splitter, since a camera watching
+/// two monitors is two taps. A patched input is exactly one tap and carries
+/// no camera: nothing stands between the switcher and the outside light it
+/// was handed.
 ///
 /// The one definition of which edges become taps, so that what
 /// [`Feedback::step`] writes and what [`reachable_taps`] bounds cannot drift
 /// apart on the zero-weight rule.
-pub(crate) fn taps_of(params: &Params, m: usize) -> impl Iterator<Item = (usize, usize, f32)> + '_ {
+pub(crate) fn taps_of(
+    params: &Params,
+    m: usize,
+) -> impl Iterator<Item = (Option<usize>, usize, f32)> + '_ {
     let monitors = params.monitors.len();
-    params.routing[m]
+    let through_cameras = params.routing[m]
         .iter()
         .zip(&params.cameras)
         .enumerate()
@@ -97,39 +107,40 @@ pub(crate) fn taps_of(params: &Params, m: usize) -> impl Iterator<Item = (usize,
                 .look
                 .iter()
                 .enumerate()
-                .chain(
-                    camera
-                        .look_inputs
-                        .iter()
-                        .enumerate()
-                        .map(move |(i, look)| (monitors + i, look)),
-                )
                 .filter(|(_, look)| **look > 0.0)
-                .map(move |(src, look)| (c, src, route * look))
-        })
+                .map(move |(src, look)| (Some(c), src, route * look))
+        });
+    let straight_in = params
+        .routing_inputs
+        .iter()
+        .enumerate()
+        .map(move |(i, into)| (i, into[m]))
+        .filter(|(_, route)| *route > 0.0)
+        .map(move |(i, route)| (None, monitors + i, route));
+    through_cameras.chain(straight_in)
 }
 
 /// The most taps any one monitor's pass can ever be given.
 ///
-/// [`taps_of`] drops a camera whose routing weight is zero, and `Knob::Route`
-/// can raise one of those mid-performance — so the count a file loads with is
-/// not a bound on the count the shader will be handed. This is that count with
+/// [`taps_of`] drops a column whose routing weight is zero, and a crosspoint
+/// can be raised mid-performance — so the count a file loads with is not a
+/// bound on the count the shader will be handed. This is that count with
 /// every crosspoint treated as live, which is what [`config::validate`] holds
-/// against [`MAX_TAPS`]. The look weights are not a knob, so a source a camera
-/// cannot see stays uncounted.
+/// against [`MAX_TAPS`]: each camera contributes the monitors its splitter
+/// can see, and each patched input the one tap it is. Neither a splitter's
+/// weights nor an input's patch is a crosspoint the panel turns, so both
+/// still count as written — a monitor a camera cannot see, and an input
+/// plugged in but sent nowhere, stay uncounted.
 pub(crate) fn reachable_taps(params: &Params) -> usize {
-    params
+    let through_cameras = params
         .cameras
         .iter()
-        .map(|camera| {
-            camera
-                .look
-                .iter()
-                .chain(&camera.look_inputs)
-                .filter(|look| **look > 0.0)
-                .count()
-        })
-        .sum()
+        .map(|camera| camera.look.iter().filter(|look| **look > 0.0).count());
+    let patched_in = params
+        .routing_inputs
+        .iter()
+        .map(|into| usize::from(into.iter().any(|w| *w > 0.0)));
+    through_cameras.chain(patched_in).sum()
 }
 
 /// One flattened edge of the graph, mirrored in `shaders/feedback.wgsl`.
@@ -229,7 +240,7 @@ impl Feedback {
         assert!(width > 0 && height > 0, "monitors must have a size");
         let (monitors, inputs) = (params.monitors.len(), params.inputs.len());
         assert!(monitors > 0, "a graph with no monitors draws nothing");
-        let layers = params.sources();
+        let layers = params.layers();
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/feedback.wgsl"));
 
@@ -537,13 +548,30 @@ impl Feedback {
             .iter()
             .map(|camera| sample_transform(&camera.framing, aspect).rows())
             .collect();
+        // What a tap with no camera samples through. An input is plugged
+        // into the switcher, so nothing frames it: it arrives square on and
+        // fills the monitor, which is the identity framing carried through
+        // the same transform every camera's is.
+        let square_on = sample_transform(&Framing::identity(), aspect).rows();
 
         for (m, monitor) in params.monitors.iter().enumerate() {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
             for (c, src, w) in taps_of(params, m) {
-                let camera = &params.cameras[c];
-                let (rows, gain) = (&framings[c], camera.gain);
+                // A camera is a whole signal path — a lens that frames and
+                // scatters, a gain, a cable that smears and grains, a keyer.
+                // An input has none of it, because there is no camera between
+                // the switcher and the light it was handed: the neutral of
+                // every stage is what such a tap carries, so the layer
+                // arrives as itself and the monitor's own front panel is the
+                // first thing it meets.
+                let (rows, gain, character, key) = match c {
+                    Some(c) => {
+                        let camera = &params.cameras[c];
+                        (&framings[c], camera.gain, camera.character, camera.key)
+                    }
+                    None => (&square_on, [1.0; 3], Character::CLEAN, Key::OFF),
+                };
                 // A step of `r` screen units across and up the camera's
                 // image, carried through the tap's affine into the source
                 // it samples. Screen units are height-normalised, so the
@@ -561,29 +589,24 @@ impl Feedback {
                 // Only the scanline direction is kept for the bleed:
                 // composite band-limits chroma in time, and time along a
                 // scanline is across the camera's image.
-                let halo = step(camera.character.bloom_radius);
-                let bleed = step(camera.character.chroma_bleed);
+                let halo = step(character.bloom_radius);
+                let bleed = step(character.chroma_bleed);
                 // The chroma key is disarmed outright at its rail rather
                 // than out-thresholded: the smoothstep alone would hold off
                 // frames, but a loop signal can run past white and project
                 // past any finite tolerance.
-                let keyvec = if camera.key.tolerance >= crate::params::Key::TOLERANT {
+                let keyvec = if key.tolerance >= Key::TOLERANT {
                     [0.0; 3]
                 } else {
-                    crate::params::key_weights(camera.key.hue)
+                    crate::params::key_weights(key.hue)
                 };
                 taps[count] = Tap {
                     row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
                     row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
                     weight: [w * gain[0], w * gain[1], w * gain[2], src as f32],
                     halo,
-                    bleed: [bleed[0], bleed[1], camera.character.bloom, 0.0],
-                    key: [
-                        camera.key.threshold,
-                        camera.key.softness,
-                        camera.key.tolerance,
-                        0.0,
-                    ],
+                    bleed: [bleed[0], bleed[1], character.bloom, 0.0],
+                    key: [key.threshold, key.softness, key.tolerance, 0.0],
                     keyvec: [keyvec[0], keyvec[1], keyvec[2], 0.0],
                 };
                 count += 1;
@@ -594,7 +617,10 @@ impl Feedback {
             // splitter does not come into it: the grain is the sensor's and
             // the cable's, added after the glass. Summed in quadrature,
             // because two sensors are two independent noise sources and
-            // adding their amplitudes would overstate the pair by 40%.
+            // adding their amplitudes would overstate the pair by 40%. The
+            // zip stops where the cameras do, which is the whole of the
+            // routing row with a sensor behind it — an input arrives already
+            // a signal and grains nothing.
             let grain: f32 = params.routing[m]
                 .iter()
                 .zip(&params.cameras)
@@ -716,11 +742,11 @@ mod tests {
         // 1920x1080 layer of Rgba16Float is 8 bytes a texel, and there are
         // two banks so a pass can read every layer while writing one.
         let single = crate::config::single();
-        assert_eq!(single.sources(), 1);
+        assert_eq!(single.layers(), 1);
         assert_eq!(bank_bytes(&single, (1920, 1080)), 2 * 1920 * 1080 * 8);
         // Four monitors, and the layers are what multiply.
         let insanity = crate::config::insanity();
-        assert_eq!(insanity.sources(), 4);
+        assert_eq!(insanity.layers(), 4);
         assert_eq!(bank_bytes(&insanity, (3840, 2160)), 4 * 2 * 3840 * 2160 * 8);
     }
 
@@ -738,14 +764,14 @@ mod tests {
             crate::input::Input::Pattern(crate::input::Pattern::Bars);
             crate::config::MAX_INPUTS
         ];
-        assert_eq!(most.sources(), 12);
+        assert_eq!(most.layers(), 12);
         assert!(bank_fits(&most, (3840, 2160)).is_ok());
         // Four times the texels each, on eight of them, is past it — and the
         // refusal says both halves of why, since neither the graph nor the
         // resolution alone is what went wrong.
         let why = bank_fits(&most, (7680, 4320)).unwrap_err();
         assert!(
-            why.contains("12 sources") && why.contains("7680x4320"),
+            why.contains("12 bank layers") && why.contains("7680x4320"),
             "{why}"
         );
         assert!(
