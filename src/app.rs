@@ -96,6 +96,10 @@ pub struct App {
     /// the swapchain's blank is the clock, and only when they stop is the
     /// tempo's deadline armed to keep the piece going without one.
     paced: bool,
+    /// Whether the compositor says nothing can see the window. Nothing is
+    /// drawn while it does — see the redraw, where the piece goes on being
+    /// played and only the picture waits.
+    covered: bool,
     live: Option<Live>,
     /// Where [`App::give_up`] parks a refusal, since nothing may return out
     /// of `resumed`. Not on the web, which has no `start` left waiting.
@@ -200,6 +204,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             metered: Instant::now(),
             tempo: Tempo::new(cli.rate),
             paced: false,
+            covered: false,
             live: None,
             #[cfg(not(target_arch = "wasm32"))]
             failed: None,
@@ -788,15 +793,11 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            // A covered window is handed frames that wait on nothing, so the
-            // redraw chain would spin as fast as the loop can draw what
-            // nobody is looking at — and on the compositors that block
-            // instead, it would spend a second per frame inside the acquire
-            // and play the piece at the rate those timeouts came back at.
-            // Neither is a picture, so the tempo's deadline takes over until
-            // the window is uncovered and a frame can pace the loop again.
             WindowEvent::Occluded(covered) => {
+                self.covered = covered;
                 self.paced = false;
+                // Uncovered, nothing is left to ask for the frame that shows
+                // where the piece got to while it was hidden.
                 if let (false, Some(live)) = (covered, self.live.as_ref()) {
                     live.window.request_redraw();
                 }
@@ -822,7 +823,12 @@ impl ApplicationHandler for App {
                 for _ in 0..passes {
                     live.pass(&self.gpu, &self.params, &mut self.sources);
                 }
-                let shown = live.show(&self.gpu, self.overlay_shown);
+                // Nothing is drawn to a window nothing can see. The
+                // compositor either hands out frames that wait on no blank at
+                // all, which the chain below would spin on, or stops handing
+                // them out and leaves a second per frame inside the acquire.
+                // The piece plays on through either; only the picture waits.
+                let shown = !self.covered && live.show(&self.gpu, self.overlay_shown);
                 // Under Fifo the present waits for the blank, so a frame that
                 // went out is the one thing that can ask for the next at the
                 // display's rate. One that did not paces nothing.
@@ -913,6 +919,7 @@ mod tests {
             metered: Instant::now(),
             tempo: Tempo::new(crate::tempo::DEFAULT_RATE),
             paced: false,
+            covered: false,
             live: None,
             failed: None,
         })
