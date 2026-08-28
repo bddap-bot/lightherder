@@ -274,13 +274,12 @@ got left the *monitor* — the node under all eight faders — with no outright
 address at all. Mute plays slot n back and Record writes over it, the two
 lower rows in order of how much they commit. A select past the end of the
 graph says so on the log rather than going quiet, since the button really is
-dead on that graph. Nothing on the surface is guarded: it has no shift, so a single
-press on the Mute row walks over the live panel and one on the Record row
-walks over a slot. Nothing is bound to quit, and two buttons are bound to
-nothing at all — Record above all, because a button a blind slip can find is
-not where another irreversible press belongs. Eight of the twenty-four knobs
-are not on the surface, which
-has sixteen controls and no more: the three per-channel gain offsets, which
+dead on that graph. Nothing on the surface is guarded: it has no shift, so a
+single press on the Mute row walks over the live panel and one on the Record
+row walks over a slot. Nothing is bound to quit, and four buttons are bound
+to nothing at all — Record above all, because a button a blind slip can find
+is not where another irreversible press belongs. Eight of the twenty-four
+knobs are not on the surface, which has sixteen controls and no more: the three per-channel gain offsets, which
 colour a rigid gain that is itself on a rotary; the bloom radius, which sizes
 a halo whose amount is; and the keyer's four, which wait for a hand that keys
 more than it bleeds and swaps this map for its own. They all stay on the keys.
@@ -646,9 +645,8 @@ below assumes a US layout.
 The knobs act on the focused camera (framing, gain and character) and the
 focused monitor (colour and headroom); `num1`…`num8` pick a node of either
 side outright, and the log line names them. Those eight are keypad keys and
-they are the only way to the nodes, so a board with no keypad cannot move the
-focus. A third focus, `p`, names
-the input the send acts on — a step and no outright key, since a switcher has
+they are the only way to the nodes, so a board with no keypad plays whatever
+node the config focused. A third focus, `p`, names the input the send acts on — a step and no outright key, since a switcher has
 four spare inputs at most, and it is a focus of its own rather than a widening
 of the camera's so that riding a send costs you none of the lens.
 

@@ -22,7 +22,6 @@ pub enum Action {
     /// the graph. A select rather than a step: a hand that means "that one"
     /// should not have to walk past the ones it does not mean.
     FocusCamera(usize),
-    /// The same for the monitor half of the focus.
     FocusMonitor(usize),
     Reset,
     /// Put the last knob that moved back to its identity, and nothing else.
@@ -77,8 +76,9 @@ pub(crate) const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
 
 /// How many nodes of each side of the focus have a key of their own. Eight
 /// because that is the keypad, and because it is a control surface's channel
-/// strips. The outright select is the only way to the focus, so this is also
-/// as deep a graph as a hand can reach into.
+/// strips. It is also how far into a graph the focus reaches, the select
+/// being the only way to move it — a node past the eighth still plays, it
+/// just plays at whatever the config left its knobs on.
 pub(crate) const KEYED_NODES: usize = 8;
 
 /// The nodes a key reaches outright: a camera bare, and the monitor of the

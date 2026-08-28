@@ -398,9 +398,7 @@ fn button(cc: u8, key: impl Into<String>) -> Button {
 /// hands, so each half is four. The graph is why the split is affordable —
 /// nothing anyone plays has more than four cameras or four monitors, while
 /// eight buttons spent on the camera half left the *monitor* half, the node
-/// under all eight faders, with no outright address at all. A graph deeper
-/// than four is reached from the keyboard's node keys, which the surface's
-/// half-row is a subset of.
+/// under all eight faders, with no outright address at all.
 const NODES_PER_HALF: usize = 4;
 
 /// The row is written out of the key table, so a half wider than the table
@@ -2193,13 +2191,13 @@ mod tests {
     #[test]
     fn a_button_acts_when_it_goes_down_and_not_when_it_comes_up() {
         let (mut midi, params) = surface();
-        // CC 62 is "marker next", bound to "space".
-        assert_eq!(feed(&mut midi, &params, &cc(62, 127)), [Action::Clear]);
-        // Held: a surface that repeats while a finger is on it must not act
-        // again until the finger comes off.
-        assert_eq!(feed(&mut midi, &params, &cc(62, 127)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(62, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(62, 127)), [Action::Clear]);
+        // CC 41 is "play", bound to ";" — a toggle, so a surface that
+        // repeats while a finger rests on it would flip the seed back and
+        // forth under a hand that pressed once.
+        assert_eq!(feed(&mut midi, &params, &cc(41, 127)), [Action::Seed]);
+        assert_eq!(feed(&mut midi, &params, &cc(41, 127)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(41, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(41, 127)), [Action::Seed]);
     }
 
     #[test]
