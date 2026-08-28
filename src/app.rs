@@ -834,10 +834,13 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
-            // A window that loses focus is a window whose keys all come up,
-            // and on Wayland it is told so in no other way: winit sends no
-            // release for a key held when focus goes, so a recording started
-            // from the keyboard would run until the instrument was closed.
+            // A window that loses focus is a window whose held controls all
+            // come up. On Wayland it is told so in no other way — winit
+            // sends no release for a key held when focus goes — so without
+            // this a recording started from the keyboard runs until the
+            // instrument is closed. A surface button still physically down
+            // is stopped with it, and starts a new recording on its next
+            // press: the alternative is a recording nobody can end.
             WindowEvent::Focused(false) => self.stop_recording(),
             WindowEvent::Resized(size) => {
                 if let Some(live) = self.live.as_mut() {
@@ -889,10 +892,17 @@ impl ApplicationHandler for App {
                 let Some(action) = action_for(code, self.shift) else {
                     return;
                 };
-                // A held key repeats, and a repeat sweeps a knob — it is not
-                // a second press. Everything else on the keyboard acts once
-                // per press, the way the surface's buttons already do.
-                if event.repeat && !matches!(action, Action::Nudge(..)) {
+                // A held key repeats, and a repeat sweeps the controls that
+                // move by steps — it is not a second press. Everything else
+                // acts once per press, the way the surface's buttons already
+                // do: a repeated toggle is a control strobing at the
+                // keyboard's rate, and a repeated capture is a directory of
+                // them.
+                let sweeps = matches!(
+                    action,
+                    Action::Nudge(..) | Action::Tempo(_) | Action::NextInput
+                );
+                if event.repeat && !sweeps {
                     return;
                 }
                 let action = match event.state {

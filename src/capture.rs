@@ -196,7 +196,10 @@ impl Capture {
         }
         present.draw(device, queue, &self.target, monitors, solo, overlay);
         self.read(device, queue)?;
-        let stdin = self.stdin.as_mut().ok_or("the pipe is closed")?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .expect("the pipe is open until the capture ends");
         for _ in 0..due {
             stdin
                 .write_all(&self.frame)
@@ -235,7 +238,11 @@ impl Capture {
         );
         queue.submit([encoder.finish()]);
         let slice = self.readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
+        slice.map_async(wgpu::MapMode::Read, |r| {
+            if let Err(e) = r {
+                log::error!("the capture could not be read back: {e}");
+            }
+        });
         // A refusal and not a panic, the way every other failure a capture
         // can meet is: the instrument goes on playing without one.
         device
