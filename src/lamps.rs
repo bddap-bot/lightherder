@@ -591,11 +591,16 @@ pub(crate) struct Wire {
 
 #[cfg(test)]
 impl Wire {
-    /// The next `n` bytes the instrument wrote.
+    /// The next `n` bytes the instrument wrote. Out of `pending` first: a
+    /// read that went straight to the socket would skip whatever
+    /// [`Wire::panel_becomes`] had read but not yet made a message of, and
+    /// then compare every byte after it against the wrong one.
     pub(crate) fn read(&mut self, n: usize) -> Vec<u8> {
-        let mut got = vec![0u8; n];
+        let held = self.pending.len().min(n);
+        let mut got: Vec<u8> = self.pending.drain(..held).collect();
+        got.resize(n, 0);
         self.wire
-            .read_exact(&mut got)
+            .read_exact(&mut got[held..])
             .unwrap_or_else(|e| panic!("the instrument wrote nothing: {e}"));
         got
     }
@@ -627,16 +632,29 @@ impl Wire {
     /// `want`, and say whether it got there. A deadline rather than one
     /// read: the lights are on a thread of their own, so a panel that has
     /// not arrived yet is not a panel that is wrong.
+    ///
+    /// Everything past the handshake is a control change and nothing else,
+    /// which is what makes three bytes a message here — asserted rather than
+    /// assumed, because a stream that had slipped by a byte would otherwise
+    /// be read as lamps at control numbers no button has.
     pub(crate) fn panel_becomes(&mut self, want: Lamplight) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut buf = [0u8; 64];
         while self.panel != want && Instant::now() < deadline {
             match self.wire.read(&mut buf) {
+                // The one error that is not the wire going: a signal landed
+                // in the wait, and what it interrupted is still coming.
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Ok(0) | Err(_) => break,
                 Ok(read) => self.pending.extend(&buf[..read]),
             }
             while self.pending.len() >= 3 {
                 let message: Vec<u8> = self.pending.drain(..3).collect();
+                assert_eq!(
+                    message[0] & 0xF0,
+                    CONTROL,
+                    "not a control change: {message:02X?}"
+                );
                 match message[2] {
                     DARK => self.panel &= !lamp(message[1]),
                     _ => self.panel |= lamp(message[1]),

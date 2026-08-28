@@ -713,10 +713,18 @@ struct Port {
 #[cfg(test)]
 pub(crate) struct TestSurface {
     pub(crate) wire: crate::lamps::Wire,
-    /// The surface's keys, which this test says nothing on — held rather
-    /// than dropped, because a dropped sender is exactly what [`Midi::poll`]
-    /// reads as the cable coming out.
-    _keys: std::sync::mpsc::Sender<ControlChange>,
+    /// The surface's keys. Held rather than dropped even by a test that says
+    /// nothing on them, because a dropped sender is exactly what
+    /// [`Midi::poll`] reads as the cable coming out.
+    keys: std::sync::mpsc::Sender<ControlChange>,
+}
+
+#[cfg(test)]
+impl TestSurface {
+    /// A button pushed, the way the reader thread reports one.
+    pub(crate) fn press(&self, control: u8) {
+        self.keys.send(change(control, 127)).unwrap();
+    }
 }
 
 impl Midi {
@@ -776,7 +784,7 @@ impl Midi {
             rx,
             lamps: Some(lamps),
         });
-        TestSurface { wire, _keys: keys }
+        TestSurface { wire, keys }
     }
 
     /// Every message the surface has sent since the last call, and the
@@ -2340,6 +2348,34 @@ mod tests {
         assert!(drain(&mut midi, &params).is_empty(), "the grip survived");
         drop(pipe);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_focused_node_s_lamp_reaches_the_wire() {
+        // The app test that this lamp survives a redraw needs a GPU, because
+        // an `App` holds one — and it skips where there is no adapter. This
+        // is the half of that claim which needs nothing but a descriptor, so
+        // a machine with no display still fails a lamp that never leaves the
+        // instrument.
+        let mut midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        let mut surface = midi.plug_in_a_test_surface();
+        surface.wire.handshake(0);
+        // The Solo row splits down the middle, four nodes to a hand: camera
+        // 1 is Solo 1 and monitor 1 is Solo 5, which are controls 32 and 36.
+        midi.show(Focus::default(), Seed::Dark, false);
+        assert!(
+            surface.wire.panel_becomes(lamp(32) | lamp(36)),
+            "the panel the instrument started on never reached the wire"
+        );
+        let moved = Focus {
+            camera: 1,
+            ..Focus::default()
+        };
+        midi.show(moved, Seed::Dark, false);
+        assert!(
+            surface.wire.panel_becomes(lamp(33) | lamp(36)),
+            "the lamp did not follow the focus onto camera 2"
+        );
     }
 
     /// A fifo standing in for the device node, opened read *and* write so

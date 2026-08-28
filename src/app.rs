@@ -1172,20 +1172,31 @@ mod tests {
     }
 
     #[test]
-    fn the_panel_a_redraw_writes_reaches_the_surface() {
-        // [`App::surface_frame`] holds the whole instrument's only call to
-        // [`Midi::show`], so nothing else can put a lamp on the wire and
-        // this is what stands between the lights and being deleted without
-        // a test noticing. Real lamps on a real file descriptor: the device
-        // node is the only thing stood in for.
+    fn a_frame_plays_what_the_surface_said_and_lights_what_it_left() {
+        // [`App::surface_frame`] is the whole surface's part in a frame, and
+        // the instrument's only call to [`Midi::show`] — so this is what
+        // stands between either half and being deleted without a test
+        // noticing. Both halves in one frame, because they are one: the
+        // panel written is the panel that frame's own messages left, so a
+        // lamp and the press it answers land together rather than a frame
+        // apart. Real lamps on a real file descriptor; the device node is
+        // the only thing stood in for.
         use crate::lamps::lamp;
-        let Some(mut app) = playing(config::crossed(), scratch("lamps-reach-the-wire")) else {
+        let Some(mut app) = playing(config::crossed(), scratch("a-frame-of-the-surface")) else {
             return;
         };
         // The seed carries a lamp of its own, and which monitors are seeded
         // is the graph's business rather than this test's — said outright,
-        // so the panel below is exactly the two lamps the focus is.
+        // so the panels below are exactly the lamps the focus is.
         app.params.monitors[0].seed = Seed::Dark;
+        // The factory layout binds nothing to quit; a performer's map may,
+        // and whether the run loop goes on is what a frame's answer *is*.
+        let mut map = Map::nano_kontrol2();
+        map.button.push(crate::midi::Button {
+            cc: 45,
+            key: "esc".into(),
+        });
+        app.midi = Midi::new(map).unwrap();
         let mut surface = app.midi.plug_in_a_test_surface();
         surface.wire.handshake(0);
 
@@ -1196,13 +1207,19 @@ mod tests {
             surface.wire.panel_becomes(lamp(32) | lamp(36)),
             "the focus the instrument started on never reached the surface"
         );
-        // And the panel follows the focus, which is the whole feature.
-        play(&mut app, Action::FocusCamera(1));
+        // Solo 2 selects camera 2 — pressed on the surface rather than acted
+        // on directly, so what is asserted is that the frame read it at all.
+        surface.press(33);
         assert_eq!(app.surface_frame(), Flow::Play);
+        assert_eq!(app.focus.camera, 1, "the press was never played");
         assert!(
             surface.wire.panel_becomes(lamp(33) | lamp(36)),
-            "the lamp did not follow the focus onto camera 2"
+            "the lamp did not follow the focus its own frame moved"
         );
+        // And the press that ends the run loop ends it, which only the
+        // frame's answer carries.
+        surface.press(45);
+        assert_eq!(app.surface_frame(), Flow::Stop);
     }
 
     /// One action, asserting the instrument plays on. Nothing these tests do
