@@ -684,6 +684,35 @@ impl App {
         }
         Flow::Play
     }
+
+    /// The surface's whole part in one frame, and the only place the lamps
+    /// are written from.
+    ///
+    /// The surface is read once a frame, and each message is turned into an
+    /// action against the panel the message before it left — not against a
+    /// snapshot of the whole batch. A slot button and a fader inside one
+    /// frame is a real two-handed gesture, and resolved against a snapshot
+    /// the fader would be dragging a knob back out of the preset the button
+    /// just recalled. Every message is played even after one has asked to
+    /// stop: the run loop ends after this frame, not inside it.
+    ///
+    /// Then the panel is written — see [`Midi::show`] for why every redraw
+    /// and not each of the several places the focus moves. A method of its
+    /// own rather than the body of the redraw arm, because this half of a
+    /// frame needs no window, and so can be played by a test.
+    fn surface_frame(&mut self) -> Flow {
+        let mut flow = Flow::Play;
+        for message in self.midi.poll() {
+            let Some(action) = self.midi.action_for(message, &self.params, self.focus) else {
+                continue;
+            };
+            if self.act(action) == Flow::Stop {
+                flow = Flow::Stop;
+            }
+        }
+        self.midi.show(self.focus, self.seed(), self.overlay_shown);
+        flow
+    }
 }
 
 impl ApplicationHandler for App {
@@ -752,25 +781,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // The surface is read once a frame, and each message is
-                // turned into an action against the panel the message
-                // before it left — not against a snapshot of the whole
-                // batch. A slot button and a fader inside one frame is a
-                // real two-handed gesture, and resolved against a
-                // snapshot the fader would be dragging a knob back out
-                // of the preset the button just recalled.
-                for message in self.midi.poll() {
-                    let Some(action) = self.midi.action_for(message, &self.params, self.focus)
-                    else {
-                        continue;
-                    };
-                    if self.act(action) == Flow::Stop {
-                        event_loop.exit();
-                    }
+                if self.surface_frame() == Flow::Stop {
+                    event_loop.exit();
                 }
-                // And the panel is written every redraw — see [`Midi::show`]
-                // for why every redraw and not each place the focus moves.
-                self.midi.show(self.focus, self.seed(), self.overlay_shown);
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
@@ -1155,6 +1168,40 @@ mod tests {
         assert_eq!(
             app.params.knob(Knob::Gamma, app.focus),
             Knob::Gamma.identity()
+        );
+    }
+
+    #[test]
+    fn the_panel_a_redraw_writes_reaches_the_surface() {
+        // [`App::surface_frame`] holds the whole instrument's only call to
+        // [`Midi::show`], so nothing else can put a lamp on the wire and
+        // this is what stands between the lights and being deleted without
+        // a test noticing. Real lamps on a real file descriptor: the device
+        // node is the only thing stood in for.
+        use crate::lamps::lamp;
+        let Some(mut app) = playing(config::crossed(), scratch("lamps-reach-the-wire")) else {
+            return;
+        };
+        // The seed carries a lamp of its own, and which monitors are seeded
+        // is the graph's business rather than this test's — said outright,
+        // so the panel below is exactly the two lamps the focus is.
+        app.params.monitors[0].seed = Seed::Dark;
+        let mut surface = app.midi.plug_in_a_test_surface();
+        surface.wire.handshake(0);
+
+        // The Solo row splits down the middle, four nodes to a hand: camera
+        // 1 is Solo 1 and monitor 1 is Solo 5, which are controls 32 and 36.
+        assert_eq!(app.surface_frame(), Flow::Play);
+        assert!(
+            surface.wire.panel_becomes(lamp(32) | lamp(36)),
+            "the focus the instrument started on never reached the surface"
+        );
+        // And the panel follows the focus, which is the whole feature.
+        play(&mut app, Action::FocusCamera(1));
+        assert_eq!(app.surface_frame(), Flow::Play);
+        assert!(
+            surface.wire.panel_becomes(lamp(33) | lamp(36)),
+            "the lamp did not follow the focus onto camera 2"
         );
     }
 

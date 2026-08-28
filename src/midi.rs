@@ -709,6 +709,16 @@ struct Port {
     lamps: Option<Lamps>,
 }
 
+/// The device end of the surface [`Midi::plug_in_a_test_surface`] plugs in.
+#[cfg(test)]
+pub(crate) struct TestSurface {
+    pub(crate) wire: crate::lamps::Wire,
+    /// The surface's keys, which this test says nothing on — held rather
+    /// than dropped, because a dropped sender is exactly what [`Midi::poll`]
+    /// reads as the cable coming out.
+    _keys: std::sync::mpsc::Sender<ControlChange>,
+}
+
 impl Midi {
     /// The one door: a `Midi` cannot exist over a map the instrument would
     /// refuse, so nothing downstream has to handle one.
@@ -746,6 +756,27 @@ impl Midi {
         self.snd = snd;
         self.cards = cards;
         self
+    }
+
+    /// Plug in a surface a test drives, and hand back the device end of its
+    /// wire. Real lights on a real file descriptor: the only stand-in is the
+    /// socket where the device node would be, so what a redraw asks the
+    /// panel for is observable as the bytes it puts on it.
+    ///
+    /// A port and not just lamps, because the call site under test — the
+    /// redraw's [`Midi::show`] — writes nothing unless there is a surface,
+    /// and the port is what says there is one.
+    #[cfg(test)]
+    pub(crate) fn plug_in_a_test_surface(&mut self) -> TestSurface {
+        let buttons = self.map.button.iter().fold(0, |mask, b| mask | lamp(b.cc));
+        let (lamps, wire) = crate::lamps::over_a_socket(buttons);
+        let (keys, rx) = std::sync::mpsc::channel();
+        self.port = Some(Port {
+            path: PathBuf::from("a test's surface"),
+            rx,
+            lamps: Some(lamps),
+        });
+        TestSurface { wire, _keys: keys }
     }
 
     /// Every message the surface has sent since the last call, and the

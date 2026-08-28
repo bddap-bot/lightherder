@@ -35,6 +35,13 @@ use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+#[cfg(test)]
+use std::io::Read;
+#[cfg(test)]
+use std::os::fd::OwnedFd;
+#[cfg(test)]
+use std::os::unix::net::UnixStream;
+
 use web_time::Instant;
 
 /// How long the surface has to answer each step of the handshake. Generous
@@ -229,9 +236,22 @@ impl Panel {
         // instrument: a lamp left burning claims a focus that is gone, and a
         // panel left in external mode has no lights at all for whatever is
         // played next. Both are attempted whatever the other did.
-        let _ = self.light(channel, 0);
+        // Both are the last thing that will ever reach this surface, so a
+        // failure here has nothing downstream left to notice it: the frame
+        // loop is going and the read that reports an unplug has already
+        // reported one or is about to. Said, therefore, rather than dropped
+        // — each naming what the performer is left holding.
+        if let Err(Lost::Surface(why)) = self.light(channel, 0) {
+            log::warn!("surface: {why}; the lamps it is holding are left lit");
+        }
         if let Some(scene) = restore {
-            let _ = self.write(&dump(channel, &scene));
+            let scene = dump(channel, &scene);
+            if let Err(Lost::Surface(why)) = self.write(&scene) {
+                log::warn!(
+                    "surface: {why}; its LED Mode is left External, so every button on it \
+                     is dark for everything else on the machine until it is replugged"
+                );
+            }
         }
     }
 
@@ -532,16 +552,221 @@ fn unpack(wire: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The lights over a socket pair standing in for the device node: what the
+/// instrument writes really leaves a file descriptor and is really read back
+/// at the other end, which is the boundary a lamp is observable at. Replies
+/// go back the way the reader thread puts them in — down the channel —
+/// because on a real surface they arrive on the other direction of a wire
+/// this end never reads.
+///
+/// Here rather than in this module's own tests because the modules above
+/// have to reach it: [`crate::midi`] holds these lamps behind a port and
+/// [`crate::app`] is the only thing that ever asks for one, so a test that
+/// the panel a redraw writes reaches the wire has to start at this end of it.
+#[cfg(test)]
+pub(crate) fn over_a_socket(buttons: Lamplight) -> (Lamps, Wire) {
+    let (ours, theirs) = UnixStream::pair().unwrap();
+    ours.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let lamps = Lamps::spawn(File::from(OwnedFd::from(theirs)), buttons).unwrap();
+    let frames = lamps.frames();
+    let wire = Wire {
+        wire: ours,
+        frames,
+        pending: Vec::new(),
+        panel: 0,
+    };
+    (lamps, wire)
+}
+
+/// The device's end of [`over_a_socket`].
+#[cfg(test)]
+pub(crate) struct Wire {
+    wire: UnixStream,
+    frames: Frames,
+    /// Bytes read but not yet a whole message, for [`Wire::panel_becomes`].
+    pending: Vec<u8>,
+    /// What the control changes read so far have made of the panel.
+    panel: Lamplight,
+}
+
+#[cfg(test)]
+impl Wire {
+    /// The next `n` bytes the instrument wrote.
+    pub(crate) fn read(&mut self, n: usize) -> Vec<u8> {
+        let mut got = vec![0u8; n];
+        self.wire
+            .read_exact(&mut got)
+            .unwrap_or_else(|e| panic!("the instrument wrote nothing: {e}"));
+        got
+    }
+
+    /// Everything left, once the instrument has let go of the lights.
+    pub(crate) fn rest(&mut self) -> Vec<u8> {
+        let mut rest = std::mem::take(&mut self.pending);
+        self.wire.read_to_end(&mut rest).unwrap();
+        rest
+    }
+
+    /// A system-exclusive frame from the surface, the way the reader thread
+    /// hands one over.
+    pub(crate) fn say(&self, frame: Vec<u8>) {
+        self.frames.say(frame);
+    }
+
+    /// Answer the handshake as a nanoKONTROL2 on `channel` whose LED Mode is
+    /// already External — the one path that writes no scene, so what follows
+    /// on the wire is the blanking pass and then lamps and nothing else.
+    pub(crate) fn handshake(&mut self, channel: u8) {
+        assert_eq!(self.read(INQUIRY.len()), INQUIRY);
+        self.say(inquiry_reply(channel));
+        assert_eq!(self.read(request(channel).len()), request(channel));
+        self.say(dumped(channel, EXTERNAL));
+    }
+
+    /// Read until the panel the instrument has put on the wire is exactly
+    /// `want`, and say whether it got there. A deadline rather than one
+    /// read: the lights are on a thread of their own, so a panel that has
+    /// not arrived yet is not a panel that is wrong.
+    pub(crate) fn panel_becomes(&mut self, want: Lamplight) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut buf = [0u8; 64];
+        while self.panel != want && Instant::now() < deadline {
+            match self.wire.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => self.pending.extend(&buf[..read]),
+            }
+            while self.pending.len() >= 3 {
+                let message: Vec<u8> = self.pending.drain(..3).collect();
+                match message[2] {
+                    DARK => self.panel &= !lamp(message[1]),
+                    _ => self.panel |= lamp(message[1]),
+                }
+            }
+        }
+        self.panel == want
+    }
+}
+
+/// A scene as the surface would send it: `led` mode, on `channel`.
+#[cfg(test)]
+pub(crate) fn scene_of(channel: u8, led: u8) -> [u8; SCENE_BYTES] {
+    let mut scene = [0u8; SCENE_BYTES];
+    scene[GLOBAL_CHANNEL] = channel;
+    scene[LED_MODE] = led;
+    // Something in the tail with its top bit set, so a dump that lost the
+    // packing on the way through cannot pass.
+    scene[SCENE_BYTES - 1] = 0xFF;
+    scene
+}
+
+#[cfg(test)]
+pub(crate) fn dumped(channel: u8, led: u8) -> Vec<u8> {
+    dump(channel, &scene_of(channel, led))
+}
+
+/// The surface naming itself, on `channel`.
+#[cfg(test)]
+pub(crate) fn inquiry_reply(channel: u8) -> Vec<u8> {
+    let mut reply = vec![0xF0, 0x7E, channel, 0x06, 0x02, KORG];
+    reply.extend(NANO_KONTROL2);
+    reply.extend([0x00, 0x00, 0, 0, 0, 0, 0xF7]);
+    reply
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
-    use std::os::fd::OwnedFd;
-    use std::os::unix::net::UnixStream;
 
     /// The eight control numbers these tests let the instrument light. Which
     /// buttons those are is the map's business; nothing here knows.
     const BUTTONS: Lamplight = 0xFF << 32;
+
+    #[test]
+    fn every_byte_taken_on_faith_is_written_out_again_from_korg_s_own_table() {
+        // The one test here whose expectations come from outside this file.
+        // Everything else builds its own out of these same names — a device
+        // stand-in that packs a scene with `dump` and reads it back with
+        // `scene_in` agrees with any offset at all, including a wrong one —
+        // so this is what a transcription error fails against rather than
+        // being carried through by. Every number below is off Korg's
+        // nanoKONTROL2 MIDI implementation, and the ones a nanoKONTROL2 on
+        // this machine also said out loud are noted where it said them.
+        //
+        // Global data, the head of a scene: byte 0 the global MIDI channel,
+        // byte 1 the control mode, byte 2 the LED mode — 0 Internal, 1
+        // External. The hardware agreed: a factory scene decoded to channel
+        // 0, control mode 0, LED mode 0, and the inquiry named channel 0.
+        assert_eq!(GLOBAL_CHANNEL, 0);
+        assert_eq!(LED_MODE, 2);
+        assert_eq!(INTERNAL, 0);
+        assert_eq!(EXTERNAL, 1);
+        // A scene is 339 bytes: 3 global, 8 groups of 31, and 88 of common.
+        assert_eq!(SCENE_BYTES, 339);
+        // Korg's manufacturer id, and the two bytes naming the nanoKONTROL2
+        // family inside an inquiry reply — the hardware answered `42 13 01`.
+        assert_eq!(KORG, 0x42);
+        assert_eq!(NANO_KONTROL2, [0x13, 0x01]);
+        // MIDI 1.0's universal non-realtime device inquiry, `7F` being every
+        // channel: F0 7E <ch> 06 01 F7.
+        assert_eq!(INQUIRY, [0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7]);
+        // A control change, and the Solo row's On and Off values as the
+        // factory sets them — the hardware's own scene read `off=0 on=127`.
+        assert_eq!(CONTROL, 0xB0);
+        assert_eq!(LIT, 127);
+        assert_eq!(DARK, 0);
+        // The messages, by hand, on global channel 3 — so that the nibble
+        // byte 2 carries is not the zero it would be on channel 0, and an
+        // address written to the wrong byte fails here.
+        assert_eq!(
+            request(3),
+            [0xF0, 0x42, 0x43, 0x00, 0x01, 0x13, 0x00, 0x1F, 0x10, 0x00, 0xF7],
+            "the current scene data dump request"
+        );
+        assert_eq!(
+            head(3),
+            [0xF0, 0x42, 0x43, 0x00, 0x01, 0x13, 0x00, 0x7F, 0x7F, 0x02, 0x03, 0x05, 0x40],
+            "the head of a current scene data dump"
+        );
+        // And the surface's two answers to a scene, which differ in byte 8.
+        let mut answer = [
+            0xF0, 0x42, 0x43, 0x00, 0x01, 0x13, 0x00, 0x5F, 0x23, 0x00, 0xF7,
+        ];
+        assert_eq!(ack(3, &answer), Some(true), "data load completed");
+        answer[8] = 0x24;
+        assert_eq!(ack(3, &answer), Some(false), "data load error");
+    }
+
+    #[test]
+    fn the_flip_lands_on_the_third_byte_of_the_scene_and_moves_nothing_else() {
+        // The scene that goes back, read at wire offsets worked out by hand
+        // rather than compared against what `dump` would have made of it:
+        // thirteen bytes of head, then Korg's packing, whose first group is a
+        // byte of top bits and then seven bodies. So decoded byte `i` of that
+        // first group is wire byte `13 + 1 + i`, and the LED mode is at 16.
+        //
+        // The scene coming *in* is laid out by literal index for the same
+        // reason — built with `scene_of` it would put the mode wherever
+        // `LED_MODE` said, and agree with itself.
+        let mut scene = [0u8; SCENE_BYTES];
+        scene[0] = 3; // global channel, which the inquiry names too
+        scene[1] = 0; // control mode: CC
+        scene[2] = 0; // LED mode: Internal, so there is a flip to make
+        let mut device = Device::new();
+        assert_eq!(device.read(INQUIRY.len()), INQUIRY);
+        device.say(inquiry_reply(3));
+        assert_eq!(device.read(11), request(3));
+        device.say(dump(3, &scene));
+
+        let wire = device.read(402);
+        assert_eq!(wire[13], 0x00, "no byte of the first group has bit 7 set");
+        assert_eq!(wire[14], 3, "scene byte 0 is the global MIDI channel");
+        assert_eq!(wire[15], 0, "scene byte 1 is the control mode, untouched");
+        assert_eq!(wire[16], 1, "scene byte 2 is the LED mode, taken External");
+        assert!(
+            wire[17..21].iter().all(|byte| *byte == 0),
+            "the bytes after it are the performer's and are not this file's to move"
+        );
+    }
 
     #[test]
     fn seven_bit_packing_is_korg_s_own() {
@@ -594,29 +819,6 @@ mod tests {
         assert_eq!(channel_of(&[]), None);
     }
 
-    /// A scene as the surface would send it: `led` mode, on `channel`.
-    fn scene_of(channel: u8, led: u8) -> [u8; SCENE_BYTES] {
-        let mut scene = [0u8; SCENE_BYTES];
-        scene[GLOBAL_CHANNEL] = channel;
-        scene[LED_MODE] = led;
-        // Something in the tail with its top bit set, so a dump that lost the
-        // packing on the way through cannot pass.
-        scene[SCENE_BYTES - 1] = 0xFF;
-        scene
-    }
-
-    fn dumped(channel: u8, led: u8) -> Vec<u8> {
-        dump(channel, &scene_of(channel, led))
-    }
-
-    /// The surface naming itself, on `channel`.
-    fn inquiry_reply(channel: u8) -> Vec<u8> {
-        let mut reply = vec![0xF0, 0x7E, channel, 0x06, 0x02, KORG];
-        reply.extend(NANO_KONTROL2);
-        reply.extend([0x00, 0x00, 0, 0, 0, 0, 0xF7]);
-        reply
-    }
-
     fn answered(channel: u8, func: u8) -> Vec<u8> {
         vec![
             0xF0,
@@ -665,14 +867,9 @@ mod tests {
         assert_eq!(ack(3, &answered(0, 0x23)), None);
     }
 
-    /// The surface's side of a socket pair, standing in for the device node:
-    /// what the instrument writes really leaves a file descriptor and is
-    /// really read back here, which is the boundary these tests are about.
-    /// Replies go in the way the reader thread puts them in — down the
-    /// channel — because on a real surface they arrive on the other direction
-    /// of a wire this end never reads.
+    /// One surface's lights, and the device end of the wire they are on.
     struct Device {
-        wire: UnixStream,
+        wire: Wire,
         /// `None` once the instrument has let go, which is the exit and the
         /// unplug both.
         lamps: Option<Lamps>,
@@ -680,21 +877,16 @@ mod tests {
 
     impl Device {
         fn new() -> Device {
-            let (ours, theirs) = UnixStream::pair().unwrap();
-            ours.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let (lamps, wire) = over_a_socket(BUTTONS);
             Device {
-                wire: ours,
-                lamps: Some(Lamps::spawn(File::from(OwnedFd::from(theirs)), BUTTONS).unwrap()),
+                wire,
+                lamps: Some(lamps),
             }
         }
 
         /// The next `n` bytes the instrument wrote.
         fn read(&mut self, n: usize) -> Vec<u8> {
-            let mut got = vec![0u8; n];
-            self.wire
-                .read_exact(&mut got)
-                .unwrap_or_else(|e| panic!("the instrument wrote nothing: {e}"));
-            got
+            self.wire.read(n)
         }
 
         /// Let go, and assert that `tail` is the whole of what follows. Every
@@ -703,13 +895,11 @@ mod tests {
         /// assertion — a flash commit, a second scene, a stray lamp.
         fn done(mut self, tail: &[u8]) {
             self.lamps = None;
-            let mut rest = Vec::new();
-            self.wire.read_to_end(&mut rest).unwrap();
-            assert_eq!(rest, tail, "wrote more than it should have");
+            assert_eq!(self.wire.rest(), tail, "wrote more than it should have");
         }
 
         fn say(&self, frame: Vec<u8>) {
-            self.plugged().frames().say(frame);
+            self.wire.say(frame);
         }
 
         fn show(&self, want: Lamplight) {
@@ -892,8 +1082,12 @@ mod tests {
         assert_eq!(device.read(INQUIRY.len()), INQUIRY);
         device.say(inquiry_reply(0));
         assert_eq!(device.read(11), request(0));
-        // Answered on channel 1, but the scene says channel 4.
-        device.say(dump(0, &scene_of(3, INTERNAL)));
+        // Answered on channel 1, but the scene says channel 4 — written at
+        // the literal byte 0 rather than through `GLOBAL_CHANNEL`, so the
+        // guard is read at the offset Korg names and not at its own.
+        let mut disagrees = [0u8; SCENE_BYTES];
+        disagrees[0] = 3;
+        device.say(dump(0, &disagrees));
         // No scene back — straight to the panel, which is still blanked and
         // still lit, because the lamps are harmless on an internal surface.
         device.blanked(0);
