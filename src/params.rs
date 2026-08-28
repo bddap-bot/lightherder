@@ -274,8 +274,10 @@ fn identity_graph() -> Params {
             look: vec![1.0],
         }],
         monitors: vec![Monitor::default()],
-        inputs: Vec::new(),
-        routing_inputs: Vec::new(),
+        // An input, so the send has a crosspoint to read its identity out of
+        // rather than agreeing with the absent-crosspoint reading by
+        // coincidence. Its kind does not matter — nothing opens this graph.
+        inputs: vec![Input::Pattern(crate::input::Pattern::Bars)],
         // Zero, where every other identity here is the value that leaves
         // the light alone. A crosspoint has no such value: it is not a stage
         // the light passes through but a weight in a sum, and its row is the
@@ -284,8 +286,10 @@ fn identity_graph() -> Params {
         // loads at 0, it puts a second camera on that monitor at full and
         // takes the row to 2.0, straight into the rail. So: the connection
         // not made. The monitor visibly loses that camera and the fader puts
-        // it back, which is the error that corrects itself.
+        // it back, which is the error that corrects itself. The send is the
+        // same weight and gets the same reading.
         routing: vec![vec![0.0]],
+        routing_inputs: vec![vec![0.0]],
     }
 }
 
@@ -446,23 +450,34 @@ impl Default for Params {
     }
 }
 
-/// Which camera and which monitor the knobs act on. Named fields on purpose:
-/// two bare `usize`s in a row would let a swapped pair compile and silently
-/// edit the wrong node.
+/// Which camera, which monitor and which input the knobs act on. Named
+/// fields on purpose: bare `usize`s in a row would let a swapped pair compile
+/// and silently edit the wrong node.
+///
+/// Three because the switcher has two kinds of column and a hand plays both:
+/// the camera and the monitor name a crosspoint between them, and the input
+/// and the monitor name the crosspoint outside light enters on. The camera
+/// half stays a camera rather than widening into "a source", so focusing an
+/// input costs the sixteen camera knobs nothing — a performer rides a send
+/// with one hand while the other is still on the lens.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Focus {
     pub camera: usize,
     pub monitor: usize,
+    pub input: usize,
 }
 
 impl Focus {
     /// Back inside `params`, which may have fewer nodes than the graph this
     /// focus was walked on — a recalled preset can bring fewer cameras.
-    /// `config::validate` is what guarantees there is a node to land on.
+    /// `config::validate` is what guarantees there is a camera and a monitor
+    /// to land on. Inputs it does not: most graphs have none, and that is the
+    /// one half of a focus that can name nothing — see [`Params::knob`].
     pub fn clamped(self, params: &Params) -> Focus {
         Focus {
             camera: self.camera.min(params.cameras.len().saturating_sub(1)),
             monitor: self.monitor.min(params.monitors.len().saturating_sub(1)),
+            input: self.input.min(params.inputs.len().saturating_sub(1)),
         }
     }
 }
@@ -495,9 +510,15 @@ pub enum Knob {
     Contrast,
     Gamma,
     Headroom,
-    /// The switcher crosspoint the two halves of the focus name between
-    /// them: how much of the focused camera the focused monitor shows.
+    /// The switcher crosspoint the camera and monitor halves of the focus
+    /// name between them: how much of the focused camera the focused monitor
+    /// shows.
     Route,
+    /// The same, on the switcher's other kind of column: how much of the
+    /// focused input the focused monitor shows. This is the level outside
+    /// light enters the graph at, and the only knob that is not there on
+    /// every graph — a rig with no inputs has no send to turn.
+    Send,
 }
 
 impl Limit {
@@ -521,7 +542,12 @@ impl Limit {
 pub enum Side {
     Camera,
     Monitor,
+    /// A crosspoint between a camera and a monitor.
     Edge,
+    /// A crosspoint between an input and a monitor. Its own side and not
+    /// `Edge`'s second reading, because the pair it names is a different
+    /// pair: a walk over the focuses would otherwise index cameras for it.
+    InputEdge,
 }
 
 /// What a knob does when it runs out of room.
@@ -534,7 +560,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 23] = [
+    pub const ALL: [Knob; 24] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -558,6 +584,7 @@ impl Knob {
         Knob::Gamma,
         Knob::Headroom,
         Knob::Route,
+        Knob::Send,
     ];
 
     /// The one name a knob has: in the printed help, in an error, and in a
@@ -588,6 +615,7 @@ impl Knob {
             Knob::Gamma => "gamma",
             Knob::Headroom => "headroom",
             Knob::Route => "route",
+            Knob::Send => "send",
         }
     }
 
@@ -653,6 +681,7 @@ impl Knob {
             | Knob::Gamma
             | Knob::Headroom => Side::Monitor,
             Knob::Route => Side::Edge,
+            Knob::Send => Side::InputEdge,
         }
     }
 
@@ -674,6 +703,7 @@ impl Knob {
             // A crosspoint runs 0 to 1 and gets swept end to end, so it wants
             // the coarse step rather than the trim one.
             | Knob::Route
+            | Knob::Send
             // Both are swept end to end hunting the backdrop's level, and
             // the soft edge is what forgives a coarse landing.
             | Knob::KeyThreshold
@@ -750,9 +780,10 @@ impl Knob {
             // whole picture into the darkest eighth, which is a sound worth
             // having; the top is well clear of anything a monitor displays.
             Knob::Headroom => Limit::Clamp(0.125, 8.0),
-            // A crosspoint is a fraction of a camera. Above 1.0 it would be
-            // an amplifier, which is what the loop gain already is.
-            Knob::Route => Limit::Clamp(0.0, 1.0),
+            // A crosspoint is a fraction of what it is switching. Above 1.0
+            // it would be an amplifier, which is what the loop gain already
+            // is — and on a send it would be an input brighter than itself.
+            Knob::Route | Knob::Send => Limit::Clamp(0.0, 1.0),
         }
     }
 }
@@ -825,6 +856,11 @@ impl Params {
     /// Where `knob` is standing. The rigid gain reads as the mean of its
     /// three channels, which is the number its step slides: setting it to
     /// that mean is what leaves the colour offsets alone.
+    ///
+    /// A send on a graph with no inputs reads as the connection not made,
+    /// which is what it is: there is no crosspoint, so no light comes over
+    /// one. That is the only reading here that is not a field — every other
+    /// knob's node is one `Focus::clamped` guarantees exists.
     pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
@@ -852,6 +888,10 @@ impl Params {
             Knob::Gamma => mon.colour.gamma,
             Knob::Headroom => mon.headroom,
             Knob::Route => self.routing[focus.monitor][focus.camera],
+            Knob::Send => self
+                .routing_inputs
+                .get(focus.input)
+                .map_or(0.0, |into| into[focus.monitor]),
         }
     }
 
@@ -868,20 +908,26 @@ impl Params {
             }
             return;
         }
-        let field = self.knob_mut(knob, focus);
+        // A send with no input under it is the one knob a graph can be
+        // without, so this is the one turn that can land on nothing.
+        let Some(field) = self.knob_mut(knob, focus) else {
+            return;
+        };
         *field = match knob.limit() {
             Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
             Limit::Wrap => wrap_pi(*field + delta),
         };
     }
 
-    /// The value a knob turns, for the knobs that are a single number.
-    fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
+    /// The value a knob turns, for the knobs that are a single number, or
+    /// `None` where the graph has no such node — a send on a graph with no
+    /// inputs, and nothing else.
+    fn knob_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut f32> {
         // One match rather than a branch on the side and a match inside each:
         // the crosspoint reads both indices, so there is no side to branch on
         // first, and the two `unreachable!` arms that split cost bought are
         // gone with it.
-        match knob {
+        Some(match knob {
             Knob::Zoom => &mut self.cameras[focus.camera].framing.zoom,
             Knob::Rotation => &mut self.cameras[focus.camera].framing.rotation,
             Knob::TranslateX => &mut self.cameras[focus.camera].framing.translate[0],
@@ -904,9 +950,13 @@ impl Params {
             Knob::Gamma => &mut self.monitors[focus.monitor].colour.gamma,
             Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
             Knob::Route => &mut self.routing[focus.monitor][focus.camera],
+            Knob::Send => match self.routing_inputs.get_mut(focus.input) {
+                Some(into) => &mut into[focus.monitor],
+                None => return None,
+            },
             // `owns_a_field` is the same fact, said where a walk can read it.
             Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
-        }
+        })
     }
 
     /// The focused camera and monitor, and every knob's value: the only
@@ -924,7 +974,7 @@ impl Params {
              key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
              gamma {:.3}  headroom {:.3}  seed {}\n\
-             route {:.3}: how much of cam {} mon {} shows",
+             route {:.3}: how much of cam {} mon {} shows{}",
             focus.camera + 1,
             self.cameras.len(),
             cam.framing.zoom,
@@ -954,6 +1004,18 @@ impl Params {
             self.routing[focus.monitor][focus.camera],
             focus.camera + 1,
             focus.monitor + 1,
+            // Only where the switcher has an input half. A rig without one
+            // would otherwise read out a level for a source it has not got.
+            match self.inputs.is_empty() {
+                true => String::new(),
+                false => format!(
+                    "\ninput route {:.3}: how much of input {}/{} mon {} shows",
+                    self.knob(Knob::Send, focus),
+                    focus.input + 1,
+                    self.inputs.len(),
+                    focus.monitor + 1,
+                ),
+            },
         )
     }
 }
@@ -980,9 +1042,18 @@ mod tests {
     use super::*;
     use core::f32::consts::PI;
 
-    /// The single-loop preset, which is where one of every knob lives.
+    /// The single-loop preset with an input plugged in, which is where one
+    /// of every knob lives. The input is what the send needs: it is the one
+    /// knob a graph can be without, so a walk over `Knob::ALL` on a rig
+    /// without one is a walk with a hole in it.
     fn p() -> Params {
-        Params::default()
+        let params = Params {
+            inputs: vec![Input::Pattern(crate::input::Pattern::Bars)],
+            routing_inputs: vec![vec![0.5]],
+            ..Params::default()
+        };
+        crate::config::validate(&params).unwrap();
+        params
     }
 
     fn nudge(p: &mut Params, knob: Knob, delta: f32) {
@@ -1092,6 +1163,7 @@ mod tests {
             Focus {
                 camera: 1,
                 monitor: 0,
+                input: 0,
             },
         );
         params.nudge(
@@ -1100,6 +1172,7 @@ mod tests {
             Focus {
                 camera: 1,
                 monitor: 0,
+                input: 0,
             },
         );
         assert_eq!(params.cameras[0], before.cameras[0]);
@@ -1219,13 +1292,15 @@ mod tests {
         assert!(params
             .describe(Focus {
                 camera: 1,
-                monitor: 0
+                monitor: 0,
+                input: 0,
             })
             .contains("cam 2/2"));
         assert!(params
             .describe(Focus {
                 camera: 1,
-                monitor: 0
+                monitor: 0,
+                input: 0,
             })
             .contains("mon 1/2"));
     }
@@ -1272,7 +1347,7 @@ mod tests {
     /// the constant [`identity_graph`] is built from. Read off the same
     /// constant the code reads and a knob wired to the wrong field would
     /// agree with itself: this table is the independent word.
-    const IDENTITIES: [(Knob, f32); 23] = [
+    const IDENTITIES: [(Knob, f32); 24] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
         (Knob::TranslateX, 0.0),
@@ -1304,8 +1379,10 @@ mod tests {
         (Knob::Headroom, 2.0),
         // Unity, like the loop gain — the switcher handing the camera on
         // whole. Zero is the switcher turned off, which blanks the monitor's
-        // feed: a choice about the graph, not a stage doing nothing.
+        // feed: a choice about the graph, not a stage doing nothing. The
+        // send is the same weight and reads the same way.
         (Knob::Route, 0.0),
+        (Knob::Send, 0.0),
     ];
 
     #[test]
@@ -1542,6 +1619,7 @@ mod tests {
         let focus = Focus {
             camera: 3,
             monitor: 3,
+            input: 0,
         };
         assert_eq!(focus.clamped(&crate::config::insanity()), focus);
         assert_eq!(focus.clamped(&Params::default()), Focus::default());
@@ -1562,23 +1640,27 @@ mod tests {
         assert_eq!(
             Focus {
                 camera: 1,
-                monitor: 3
+                monitor: 3,
+                input: 0,
             }
             .clamped(&lopsided),
             Focus {
                 camera: 1,
-                monitor: 0
+                monitor: 0,
+                input: 0,
             }
         );
         assert_eq!(
             Focus {
                 camera: 5,
-                monitor: 0
+                monitor: 0,
+                input: 0,
             }
             .clamped(&lopsided),
             Focus {
                 camera: 1,
-                monitor: 0
+                monitor: 0,
+                input: 0,
             }
         );
     }
@@ -1600,10 +1682,16 @@ mod tests {
         // at the wrong number: a nudge that the reader does not see, or sees
         // on another knob, is the whole failure.
         for knob in Knob::ALL {
+            // `crossed` with an input plugged in: the send is a field only
+            // where there is one, and a knob with no field is a knob this
+            // walk cannot tell a mis-wired reader from.
             let mut params = crate::config::crossed();
+            params.inputs = vec![Input::Pattern(crate::input::Pattern::Bars)];
+            params.routing_inputs = vec![vec![0.0, 0.5]];
             let focus = Focus {
                 camera: 1,
                 monitor: 1,
+                input: 0,
             };
             let before: Vec<f32> = Knob::ALL
                 .iter()
@@ -1696,6 +1784,7 @@ mod tests {
         let focus = Focus {
             camera: 0,
             monitor: 1,
+            input: 0,
         };
         assert_eq!(params.routing[1][0], 1.0);
         assert_eq!(params.routing[0][1], 1.0);
@@ -1707,6 +1796,7 @@ mod tests {
         let other = Focus {
             camera: 1,
             monitor: 0,
+            input: 0,
         };
         assert!((params.knob(Knob::Route, other) - 1.0).abs() < 1e-6);
     }
@@ -1730,6 +1820,7 @@ mod tests {
             let focus = Focus {
                 camera: 1,
                 monitor: 2,
+                input: 0,
             };
             let name = knob.name();
             let node = match knob.side() {
@@ -1739,11 +1830,22 @@ mod tests {
                     "camera {}'s {name} to monitor {}",
                     focus.camera, focus.monitor
                 ),
+                Side::InputEdge => format!(
+                    "input {}'s {name} to monitor {}",
+                    focus.input, focus.monitor
+                ),
             };
             let (low, high) = knob.limit().ends();
             for past in [low - 1.0, high + 1.0] {
+                // `insanity` with an input plugged in, so the send has a
+                // field on this walk like every other knob; without one it
+                // would be the one knob whose refusal nothing here reads.
                 let mut params = crate::config::insanity();
-                *params.knob_mut(knob, focus) = past;
+                params.inputs = vec![Input::Pattern(crate::input::Pattern::Bars)];
+                params.routing_inputs = vec![vec![0.0; params.monitors.len()]];
+                *params
+                    .knob_mut(knob, focus)
+                    .expect("every field-owning knob has a field on this graph") = past;
                 let why = crate::config::validate(&params)
                     .expect_err(&format!("{name} loaded at {past}"));
                 assert_eq!(why, format!("{node} is {past}; it runs {low} to {high}"));

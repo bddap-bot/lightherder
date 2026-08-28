@@ -127,20 +127,18 @@ pub(crate) fn taps_of(
 /// bound on the count the shader will be handed. This is that count with
 /// every crosspoint treated as live, which is what [`config::validate`] holds
 /// against [`MAX_TAPS`]: each camera contributes the monitors its splitter
-/// can see, and each patched input the one tap it is. Neither a splitter's
-/// weights nor an input's patch is a crosspoint the panel turns, so both
-/// still count as written — a monitor a camera cannot see, and an input
-/// plugged in but sent nowhere, stay uncounted.
+/// can see, and each input the one tap it is. Every input, not the ones sent
+/// somewhere on disk — a send is a crosspoint the panel turns, so a row of
+/// zeroes at load is no promise about the tap count a second later. The look
+/// weights are the other way about: no knob turns one, so a monitor a camera
+/// cannot see stays uncounted.
 pub(crate) fn reachable_taps(params: &Params) -> usize {
-    let through_cameras = params
+    let through_cameras: usize = params
         .cameras
         .iter()
-        .map(|camera| camera.look.iter().filter(|look| **look > 0.0).count());
-    let patched_in = params
-        .routing_inputs
-        .iter()
-        .map(|into| usize::from(into.iter().any(|w| *w > 0.0)));
-    through_cameras.chain(patched_in).sum()
+        .map(|camera| camera.look.iter().filter(|look| **look > 0.0).count())
+        .sum();
+    through_cameras + params.inputs.len()
 }
 
 /// One flattened edge of the graph, mirrored in `shaders/feedback.wgsl`.
@@ -558,13 +556,10 @@ impl Feedback {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
             for (c, src, w) in taps_of(params, m) {
-                // A camera is a whole signal path — a lens that frames and
-                // scatters, a gain, a cable that smears and grains, a keyer.
-                // An input has none of it, because there is no camera between
-                // the switcher and the light it was handed: the neutral of
-                // every stage is what such a tap carries, so the layer
-                // arrives as itself and the monitor's own front panel is the
-                // first thing it meets.
+                // There is no camera between the switcher and an input, so
+                // every stage a camera would have takes its identity and the
+                // layer arrives as itself — the monitor's own front panel is
+                // the first thing it meets.
                 let (rows, gain, character, key) = match c {
                     Some(c) => {
                         let camera = &params.cameras[c];
@@ -618,9 +613,8 @@ impl Feedback {
             // the cable's, added after the glass. Summed in quadrature,
             // because two sensors are two independent noise sources and
             // adding their amplitudes would overstate the pair by 40%. The
-            // zip stops where the cameras do, which is the whole of the
-            // routing row with a sensor behind it — an input arrives already
-            // a signal and grains nothing.
+            // sends are not in the sum: an input arrives already a signal,
+            // down no cable of this graph's, and grains nothing.
             let grain: f32 = params.routing[m]
                 .iter()
                 .zip(&params.cameras)

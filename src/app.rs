@@ -600,6 +600,17 @@ impl App {
                     ..self.focus
                 });
             }
+            Action::NextInput => {
+                // Nothing to step through on a graph with no inputs, and the
+                // focus is already the only place it could be.
+                if !self.params.inputs.is_empty() {
+                    let input = (self.focus.input + 1) % self.params.inputs.len();
+                    self.refocus(Focus {
+                        input,
+                        ..self.focus
+                    });
+                }
+            }
             Action::FocusCamera(camera) => self.focus_camera(camera),
             Action::FocusMonitor(monitor) => self.focus_monitor(monitor),
             Action::NextMonitor => {
@@ -952,6 +963,7 @@ mod tests {
         app.focus = Focus {
             camera: 1,
             monitor: 0,
+            input: 0,
         };
         app.recall(1);
         assert_eq!(app.params, config::single());
@@ -1020,6 +1032,7 @@ mod tests {
         app.focus = Focus {
             camera: 1,
             monitor: 1,
+            input: 0,
         };
         let before = app.params.clone();
         // Zoom, because the preset loads it at 0.994 rather than at 1.0: a

@@ -119,11 +119,13 @@ impl Map {
     /// it: an unbound fader is a control a `midi.toml` can claim, and one
     /// nobody's hand throws by accident.
     ///
-    /// Eight knobs are deliberately not here — the surface has fifteen
+    /// Nine knobs are deliberately not here — the surface has fifteen
     /// bound controls and they are taken. The three per-channel gain offsets
     /// and the bloom radius are trims of knobs that are on the surface; the
     /// keyer's four wait for a hand that keys more than it bleeds and swaps
-    /// this map for its own. They all stay on the keys.
+    /// this map for its own; and the switcher's send is on a graph only when
+    /// that graph has an input, which is not what a fixed fader is for. They
+    /// all stay on the keys.
     pub(crate) fn nano_kontrol2() -> Map {
         Map {
             device: "nanoKONTROL".into(),
@@ -1297,7 +1299,11 @@ mod tests {
     /// The focus a test means, spelled out — `Focus::default()` says nothing
     /// about which index is which, and a swapped pair would still compile.
     fn at(camera: usize, monitor: usize) -> Focus {
-        Focus { camera, monitor }
+        Focus {
+            camera,
+            monitor,
+            input: 0,
+        }
     }
 
     #[test]
@@ -1652,6 +1658,7 @@ mod tests {
                 "key softness",
                 "key hue",
                 "key tolerance",
+                "send",
             ]
         );
         // Nothing is bound to quit: a slipped finger on a control surface
@@ -2127,6 +2134,7 @@ mod tests {
         let second = Focus {
             camera: 0,
             monitor: 1,
+            input: 0,
         };
         let mut midi = Midi::new(Map::nano_kontrol2()).unwrap();
         assert_eq!(feed_at(&mut midi, &params, first, &cc(4, 0)).len(), 0);
@@ -2217,6 +2225,7 @@ mod tests {
         let far = Focus {
             camera: 0,
             monitor: 1,
+            input: 0,
         };
         // Fader 3 is saturation. At the top it is monitor 2's value, so it
         // catches there...

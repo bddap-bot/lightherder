@@ -13,10 +13,10 @@ use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Params, Seed, 
 /// [`MAX_TAPS`] already bounds those.
 pub const MAX_MONITORS: usize = 8;
 
-/// Inputs get their own cap because [`MAX_TAPS`] barely bounds them — one
-/// tap each, however many there are — while each costs a bank layer plus,
-/// for a file or a device, a process and a thread of its own. Four is what a
-/// switcher has spare inputs for.
+/// Inputs get their own cap because what [`MAX_TAPS`] bounds is not what
+/// they cost: one tap each, against a bank layer each plus — for a file or a
+/// device — a process and a thread of its own. Four is what a switcher has
+/// spare inputs for.
 pub const MAX_INPUTS: usize = 4;
 
 /// The classic rig: one camera aimed straight at the one monitor it draws to.
@@ -314,18 +314,18 @@ pub fn validate(params: &Params) -> Result<(), String> {
             ));
         }
     }
-    // What the input half's crosspoints hold. `Knob::Route` walks the camera
-    // half with every other knob below, and no focus names an input — but a
-    // crosspoint is a crosspoint, so this reads that knob's own rail rather
-    // than spelling a second one for it to differ from. It is also the
+    // What the input half's crosspoints hold. The knob walk below is over
+    // camera-and-monitor focuses, which is the wrong shape for a row per
+    // input — so the sends are checked here instead, against their own
+    // knob's rail rather than a second spelling of it. It is also the
     // finiteness check, as every range check here is.
-    let (low, high) = Knob::Route.limit().ends();
+    let (low, high) = Knob::Send.limit().ends();
     for (i, row) in params.routing_inputs.iter().enumerate() {
         for (monitor, weight) in row.iter().enumerate() {
             if !(low..=high).contains(weight) {
                 return Err(format!(
                     "input {i}'s {} to monitor {monitor} is {weight}; it runs {low} to {high}",
-                    Knob::Route.name()
+                    Knob::Send.name()
                 ));
             }
         }
@@ -379,10 +379,18 @@ pub fn validate(params: &Params) -> Result<(), String> {
             Side::Camera => (c, 1),
             Side::Monitor => (1, m),
             Side::Edge => (c, m),
+            // Walked as a matrix above instead: it is a row per input over
+            // the monitors, so a walk over camera-and-monitor focuses is the
+            // wrong shape for it entirely.
+            Side::InputEdge => continue,
         };
         for camera in 0..cameras {
             for monitor in 0..monitors {
-                let focus = Focus { camera, monitor };
+                let focus = Focus {
+                    camera,
+                    monitor,
+                    input: 0,
+                };
                 let value = params.knob(knob, focus);
                 if !(low..=high).contains(&value) {
                     // Built only on the way out, so the frame-by-frame
@@ -393,6 +401,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
                         Side::Edge => {
                             format!("camera {camera}'s {} to monitor {monitor}", knob.name())
                         }
+                        Side::InputEdge => unreachable!("the sends are walked as a matrix"),
                     };
                     return Err(format!("{what} is {value}; it runs {low} to {high}"));
                 }
@@ -706,6 +715,28 @@ mod tests {
     }
 
     #[test]
+    fn a_switcher_with_the_wrong_number_of_sends_is_refused() {
+        // The row count, which is the check that keeps a send addressing a
+        // bank layer the graph has not got. An input plugged in and the
+        // patch left alone is a source nothing can reach; a row left behind
+        // by an input taken away is a tap on a layer past the end of the
+        // bank, which the sampler would quietly clamp onto a neighbour
+        // rather than fail.
+        for wrong in [
+            (|p: &mut Params| p.inputs.push(Input::Pattern(Pattern::Bars))) as fn(&mut Params),
+            |p: &mut Params| p.routing_inputs.push(vec![0.0]),
+        ] {
+            let mut params = external();
+            wrong(&mut params);
+            let why = validate(&params).unwrap_err();
+            assert!(
+                why.contains("routing_inputs has") && why.contains("per input"),
+                "refused for the wrong reason: {why}"
+            );
+        }
+    }
+
+    #[test]
     fn more_inputs_than_the_switcher_has_are_refused() {
         let mut params = one_of_every_input();
         params.inputs = vec![Input::Pattern(Pattern::Bars); MAX_INPUTS + 1];
@@ -728,7 +759,7 @@ mod tests {
             params.routing_inputs[0][0] = level;
             let why = validate(&params).unwrap_err();
             assert!(
-                why.contains("input 0's route to monitor 0"),
+                why.contains("input 0's send to monitor 0"),
                 "refused for the wrong reason: {why}"
             );
         }
@@ -744,7 +775,13 @@ mod tests {
         // rig. The injection level is the crosspoint the bars are patched on.
         assert_eq!(p.cameras.len(), 1);
         assert_eq!(p.cameras[0].look, [1.0]);
-        assert_eq!(p.routing_inputs, vec![vec![0.014]]);
+        // The send is the injection level, and what it is *for* is where the
+        // loop settles: the trickle divided by the loop's distance from
+        // unity, which the doc claims lands just under the bars' own
+        // brightness. A number asserted as a number would pass at ten times
+        // this and paint a monitor the bars could not.
+        let settled = p.routing_inputs[0][0] / (1.0 - p.cameras[0].gain[0]);
+        assert!((0.9..1.0).contains(&settled), "settles at {settled}");
     }
 
     #[test]
@@ -840,7 +877,14 @@ mod tests {
                 );
             }
             let mut all_on = params.clone();
-            all_on.routing.iter_mut().flatten().for_each(|w| *w = 1.0);
+            for weight in all_on
+                .routing
+                .iter_mut()
+                .chain(&mut all_on.routing_inputs)
+                .flatten()
+            {
+                *weight = 1.0;
+            }
             for m in 0..all_on.monitors.len() {
                 assert_eq!(
                     crate::feedback::taps_of(&all_on, m).count(),
@@ -854,6 +898,15 @@ mod tests {
         let crossed = crossed();
         assert_eq!(crate::feedback::taps_of(&crossed, 0).count(), 2);
         assert_eq!(crate::feedback::reachable_taps(&crossed), 4);
+
+        // The zero-weight rule on the switcher's input half, which the sweep
+        // above cannot show: an input sent nowhere is no tap, while the bound
+        // counts it all the same — the send is a knob, so a zero on disk is
+        // no promise about a second later.
+        let mut sent_nowhere = external();
+        sent_nowhere.routing_inputs[0][0] = 0.0;
+        assert_eq!(crate::feedback::taps_of(&sent_nowhere, 0).count(), 1);
+        assert_eq!(crate::feedback::reachable_taps(&sent_nowhere), 2);
     }
 
     #[test]

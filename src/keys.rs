@@ -16,6 +16,10 @@ pub enum Action {
     Nudge(Knob, f32),
     /// Move the camera knobs' focus to the next camera in the graph.
     NextCamera,
+    /// Move the send's focus to the next input the switcher has. A step and
+    /// no outright key: nothing has more than [`crate::config::MAX_INPUTS`]
+    /// of them, so a step reaches every one inside four presses.
+    NextInput,
     /// Move the monitor knobs' focus to the next monitor.
     NextMonitor,
     /// Put the camera knobs' focus on one camera outright, by its place in
@@ -160,11 +164,14 @@ const AXES: &[Axis] = &[
     axis(Knob::Gamma, KeyCode::KeyQ, "q", KeyCode::KeyW, "w"),
     // The amplifier's rail, beside the phosphor curve it feeds.
     axis(Knob::Headroom, KeyCode::KeyE, "e", KeyCode::KeyT, "t"),
-    // The switcher's crosspoint: how much of the focused camera the focused
-    // monitor shows. On the two spare keys at the right edge, away from the
-    // knobs, because it is the one control that acts on the pair of nodes
-    // rather than on either of them.
+    // The switcher's crosspoints: how much of the focused camera, and how
+    // much of the focused input, the focused monitor shows. On the spare
+    // keys at the right edge, away from the knobs, because they are the two
+    // controls that act on a pair of nodes rather than on either of them.
     axis(Knob::Route, KeyCode::Slash, "/", KeyCode::Backslash, "\\"),
+    // The send on the digits the gain channels stop short of, which is where
+    // an input's level used to be played from before it was the switcher's.
+    axis(Knob::Send, KeyCode::Digit9, "9", KeyCode::Digit0, "0"),
 ];
 
 /// A key that does one thing, and the two ways the instrument writes it
@@ -194,6 +201,15 @@ const COMMANDS: &[Command] = &[
         Action::NextMonitor,
         "focus the next monitor",
         "mon >",
+    ),
+    // "p" for the patch: the last free letter on the board, and the switcher's
+    // input strip is what a nearly full board had left to spend it on.
+    cmd(
+        KeyCode::KeyP,
+        "p",
+        Action::NextInput,
+        "focus the next input",
+        "in >",
     ),
     cmd(
         KeyCode::Space,

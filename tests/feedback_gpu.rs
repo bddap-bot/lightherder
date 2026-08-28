@@ -1902,25 +1902,49 @@ fn the_switcher_mixes_an_input_with_a_camera_on_one_monitor() {
 }
 
 #[test]
-fn an_input_arrives_square_on_whatever_the_cameras_are_framed_at() {
-    // Nothing frames what the switcher hands over: there is no camera
-    // between the two, so no zoom, pan or turn in the graph can touch it.
-    // The camera here is pulled back by two and sent nowhere — were its
-    // affine the one an input tap sampled through, a white input would fill
-    // the middle quarter and leave the rest of the monitor dark.
+fn an_input_arrives_whole_however_the_cameras_are_set() {
+    // There is no camera between the switcher and an input, so nothing a
+    // camera does can reach one. The camera here is loaded with every stage
+    // that could leak — pulled back by two, scattering, smearing, graining,
+    // keyed above the picture and down to a tenth of the light — and sent
+    // nowhere. The input must arrive framed edge to edge, at full level,
+    // with its quarters still meeting at a hard edge.
     let mut p = one_input_on_one_monitor();
     p.cameras[0].framing.zoom = 0.5;
+    p.cameras[0].gain = [0.1; 3];
+    p.cameras[0].character = Character {
+        bloom: 0.9,
+        bloom_radius: 0.1,
+        chroma_bleed: 0.2,
+        noise: 0.2,
+    };
+    p.cameras[0].key = Key {
+        threshold: 0.9,
+        softness: 0.1,
+        ..Key::OFF
+    };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
+    let quarters = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
     h.feedback
-        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [255; 3]));
+        .write_input(h.queue, 0, &quartered_frame((SIZE, SIZE), quarters));
     h.step_graph(&p);
 
     let img = h.read();
-    // The middle, and two corners a half zoom would have left unlit.
-    for (u, v) in [(0.5, 0.5), (0.1, 0.1), (0.9, 0.9)] {
-        assert!(img.at(u, v) > 250.0, "({u}, {v}) is {}", img.at(u, v));
+    // Corners a half zoom would have left unlit, and either side of the
+    // quarters' seam — a hard edge is what no halo, smear or key survives.
+    for (quarter, (u, v)) in [(0.05, 0.05), (0.95, 0.05), (0.95, 0.95), (0.05, 0.95)]
+        .into_iter()
+        .enumerate()
+        .chain([(0, (0.47, 0.25)), (1, (0.53, 0.25))])
+    {
+        let seen = img.rgb_at(u, v);
+        let want = quarters[quarter].map(f32::from);
+        assert!(
+            seen.iter().zip(want).all(|(a, b)| (a - b).abs() < 3.0),
+            "({u}, {v}): {seen:?}, wanted {want:?}"
+        );
     }
 }
 
