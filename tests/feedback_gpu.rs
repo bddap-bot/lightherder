@@ -10,6 +10,7 @@ use std::io::Write;
 use std::sync::OnceLock;
 
 use lightherder::affine::Framing;
+use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params, Seed};
@@ -2105,4 +2106,92 @@ fn the_chroma_key_cuts_its_colour_and_spares_grey_and_the_far_hue() {
         (magenta_seen[0] - 200.0).abs() < 4.0 && (magenta_seen[2] - 200.0).abs() < 4.0,
         "the far hue was keyed: {magenta_seen:?}"
     );
+}
+
+/// The pixels a file holds, decoded by the same ffmpeg that wrote it — the
+/// one oracle here that does not ask the capture what it captured.
+fn decoded(path: &std::path::Path, size: (u32, u32)) -> Vec<u8> {
+    let out = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+        .output()
+        .expect("ffmpeg to read a capture back");
+    assert!(
+        out.status.success(),
+        "{}: {}",
+        path.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        (out.stdout.len() as u32).is_multiple_of(size.0 * size.1 * 4),
+        "{}: {} bytes is not whole frames of {size:?}",
+        path.display(),
+        out.stdout.len()
+    );
+    out.stdout
+}
+
+/// The brightest channel anywhere in a decoded capture, 0..=255.
+fn peak(pixels: &[u8]) -> u8 {
+    pixels
+        .chunks_exact(4)
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .max()
+        .expect("a non-empty capture")
+}
+
+#[test]
+fn a_capture_writes_the_lit_picture_to_a_file() {
+    let Some(mut h) = harness((SIZE, SIZE), (SIZE, SIZE)) else {
+        return;
+    };
+    // Light on the glass first, so a working capture and a black one are
+    // different files rather than the same file passing either way.
+    let params = graph(&frozen(seeded()));
+    for _ in 0..4 {
+        h.step_graph(&params);
+    }
+
+    let size = (320, 180);
+    let dir = std::env::temp_dir().join(format!("lightherder-capture-{}", std::process::id()));
+    let still = {
+        let mut capture = Capture::still(h.device, &dir, size, TARGET_FORMAT)
+            .expect("ffmpeg, and somewhere to write");
+        capture
+            .frame(h.device, h.queue, &h.present, &h.feedback, None, None)
+            .expect("a frame down the pipe");
+        capture.finish().expect("a still")
+    };
+    assert_eq!(still.extension().and_then(|e| e.to_str()), Some("png"));
+    let pixels = decoded(&still, size);
+    assert_eq!(pixels.len() as u32, size.0 * size.1 * 4, "one frame");
+    assert!(peak(&pixels) > 32, "the still is black");
+
+    // And the recording: frames fall due on the wall clock rather than on
+    // calls, so a fifth of a second is a fifth of a second of video however
+    // often the display asks for one.
+    let mut video = Capture::video(h.device, &dir, size, TARGET_FORMAT).expect("ffmpeg");
+    let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    while std::time::Instant::now() < until {
+        video
+            .frame(h.device, h.queue, &h.present, &h.feedback, None, None)
+            .expect("a frame down the pipe");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let frames = video.frames();
+    let recording = video.finish().expect("a recording");
+    assert!(
+        (4..=8).contains(&frames),
+        "{frames} frames in a fifth of a second at 30"
+    );
+    let pixels = decoded(&recording, size);
+    assert_eq!(
+        pixels.len() as u64,
+        u64::from(size.0 * size.1 * 4) * frames,
+        "the file holds a different number of frames than went into it"
+    );
+    assert!(peak(&pixels) > 32, "the recording is black");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

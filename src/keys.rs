@@ -52,7 +52,32 @@ pub enum Action {
     Solo,
     /// Show or hide the controls overlay drawn over the picture.
     Overlay,
+    /// Write what the display is showing to a file.
+    Screencap,
+    /// Record the display for as long as the control is held down.
+    Record(Edge),
     Quit,
+}
+
+/// Which way a control is moving. Only the ones a hand *holds* have two
+/// edges — every other binding on the panel is a press and nothing else,
+/// which is why this rides on the one action that reads it rather than
+/// beside every action that does not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edge {
+    Down,
+    Up,
+}
+
+/// What letting go of the control that pressed `action` does, and `None` for
+/// a binding that is a press and nothing else. The one place a release means
+/// anything, so a key and a button cannot disagree about which controls are
+/// held.
+pub fn released(action: Action) -> Option<Action> {
+    match action {
+        Action::Record(Edge::Down) => Some(Action::Record(Edge::Up)),
+        _ => None,
+    }
 }
 
 /// How many nodes of each side of the focus have a key of their own. Eight
@@ -265,6 +290,23 @@ const COMMANDS: &[Command] = &[
         Action::Overlay,
         "the controls overlay, on or off",
         "help",
+    ),
+    // The capture pair, on two function keys clear of the ones a browser
+    // takes for itself: this table is printed as the web build's own legend,
+    // and reload, the address bar and the debugger are the neighbours.
+    cmd(
+        KeyCode::F7,
+        "f7",
+        Action::Screencap,
+        "write what the display is showing to a file",
+        "snap",
+    ),
+    cmd(
+        KeyCode::F8,
+        "f8",
+        Action::Record(Edge::Down),
+        "record the display for as long as this is held down",
+        "record",
     ),
     cmd(KeyCode::Escape, "esc", Action::Quit, "quit", "quit"),
 ];
@@ -574,6 +616,32 @@ mod tests {
             action_for(KeyCode::Numpad1, true),
             Some(Action::FocusMonitor(0))
         );
+    }
+
+    #[test]
+    fn the_capture_controls_are_a_press_and_a_hold() {
+        assert_eq!(action_for(KeyCode::F7, false), Some(Action::Screencap));
+        assert_eq!(
+            action_for(KeyCode::F8, false),
+            Some(Action::Record(Edge::Down))
+        );
+        assert_eq!(action_for_label("f7"), Some(Action::Screencap));
+        assert_eq!(action_for_label("f8"), Some(Action::Record(Edge::Down)));
+        assert_eq!(
+            released(Action::Record(Edge::Down)),
+            Some(Action::Record(Edge::Up))
+        );
+        // And letting go is the recording's alone: every other binding is a
+        // press, so a release of one must reach nothing rather than firing
+        // it a second time.
+        for label in labels() {
+            let action = action_for_label(label).expect("every label resolves");
+            assert_eq!(
+                released(action).is_some(),
+                action == Action::Record(Edge::Down),
+                "{label}"
+            );
+        }
     }
 
     #[test]

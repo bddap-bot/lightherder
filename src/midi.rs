@@ -452,9 +452,12 @@ fn nano_buttons() -> Vec<Button> {
         // left on by a slip is worse than one that takes a reach to find,
         // and this is the only button on the surface a hand has to *mean*.
         button(58, "tab"),
+        // The capture pair, on the two buttons whose silkscreen already says
+        // what they do: marker set takes a still of the display, and record
+        // records it for as long as a hand stays on it.
+        button(60, "f7"),
+        button(45, "f8"),
     ]);
-    // Record stays unbound: it is the one button a blind slip should not
-    // find.
     out
 }
 
@@ -714,6 +717,11 @@ impl TestSurface {
     /// A button pushed, the way the reader thread reports one.
     pub(crate) fn press(&self, control: u8) {
         self.keys.send(change(control, 127)).unwrap();
+    }
+
+    /// And let go of.
+    pub(crate) fn release(&self, control: u8) {
+        self.keys.send(change(control, 0)).unwrap();
     }
 }
 
@@ -1007,9 +1015,15 @@ impl Midi {
             .iter()
             .position(|b| b.cc == message.control)?;
         let down = message.value >= PUSHED;
-        let pressed = down && !self.held[i];
-        self.held[i] = down;
-        pressed.then_some(self.action[i])
+        let was = std::mem::replace(&mut self.held[i], down);
+        match (down, was) {
+            (true, false) => Some(self.action[i]),
+            // A release speaks only for the controls that are held rather
+            // than pressed, which is [`crate::keys::released`]'s answer and
+            // nobody else's — the keyboard reads a release the same way.
+            (false, true) => crate::keys::released(self.action[i]),
+            _ => None,
+        }
     }
 }
 
@@ -1644,6 +1658,8 @@ mod tests {
                 button(44, "enter"),
                 button(41, ";"),
                 button(58, "tab"),
+                button(60, "f7"),
+                button(45, "f8"),
             ]
         );
         // The one fader the map leaves alone. A knob quietly wired onto it
@@ -1651,10 +1667,7 @@ mod tests {
         assert!(!map.fader.iter().any(|f| f.cc == 0));
         // And the buttons it leaves alone: one bound here is one a blind
         // slip can find.
-        for cc in (M_ROW..M_ROW + 8)
-            .chain(R_ROW..R_ROW + 8)
-            .chain([45, 59, 60, 61])
-        {
+        for cc in (M_ROW..M_ROW + 8).chain(R_ROW..R_ROW + 8).chain([59, 61]) {
             assert!(
                 !map.button.iter().any(|b| b.cc == cc),
                 "{} is bound",
@@ -2174,6 +2187,28 @@ mod tests {
         assert_eq!(feed(&mut midi, &params, &cc(41, 127)), []);
         assert_eq!(feed(&mut midi, &params, &cc(41, 0)), []);
         assert_eq!(feed(&mut midi, &params, &cc(41, 127)), [Action::Seed]);
+    }
+
+    #[test]
+    fn the_capture_buttons_are_a_press_and_a_hold() {
+        use crate::keys::Edge;
+        let (mut midi, params) = surface();
+        // Marker set is a press like every other button: a still, and
+        // nothing at all on the way up.
+        assert_eq!(feed(&mut midi, &params, &cc(60, 127)), [Action::Screencap]);
+        assert_eq!(feed(&mut midi, &params, &cc(60, 0)), []);
+        // Record is the one button both edges of which reach the
+        // instrument, so a recording lasts exactly as long as the finger.
+        assert_eq!(
+            feed(&mut midi, &params, &cc(45, 127)),
+            [Action::Record(Edge::Down)]
+        );
+        assert_eq!(feed(&mut midi, &params, &cc(45, 127)), []);
+        assert_eq!(
+            feed(&mut midi, &params, &cc(45, 0)),
+            [Action::Record(Edge::Up)]
+        );
+        assert_eq!(feed(&mut midi, &params, &cc(45, 0)), []);
     }
 
     #[test]

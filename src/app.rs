@@ -10,11 +10,12 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
+use crate::capture::Capture;
 use crate::cli::Cli;
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
-use crate::keys::{action_for, Action};
+use crate::keys::{action_for, Action, Edge};
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
 use crate::params::{Focus, Knob, Params, Seed};
@@ -26,6 +27,15 @@ use crate::tempo::Tempo;
 /// display would buy nothing and cost a mode switch on every toggle.
 fn borderless(fullscreen: bool) -> Option<winit::window::Fullscreen> {
     fullscreen.then_some(winit::window::Fullscreen::Borderless(None))
+}
+
+/// Close a capture and say where it went, which is the only report a
+/// performer on a fullscreen display gets of one.
+fn finished(capture: Capture) {
+    match capture.finish() {
+        Ok(path) => log::info!("recorded {}", path.display()),
+        Err(why) => log::error!("capture: {why}"),
+    }
 }
 
 /// Whether the instrument goes on after an action. Named rather than a
@@ -99,6 +109,10 @@ pub struct App {
     /// drawn while it does — see the redraw, where the piece goes on being
     /// played and only the picture waits.
     covered: bool,
+    /// The recording, while a hand is on the button that started it. A still
+    /// is taken and finished inside the press that asked for it, so nothing
+    /// of it is kept here.
+    capture: Option<Capture>,
     live: Option<Live>,
     /// Where [`App::give_up`] parks a refusal, since nothing may return out
     /// of `resumed`. Not on the web, which has no `start` left waiting.
@@ -204,6 +218,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             tempo: Tempo::new(cli.rate),
             paced: false,
             covered: false,
+            capture: None,
             live: None,
             #[cfg(not(target_arch = "wasm32"))]
             failed: None,
@@ -619,9 +634,104 @@ impl App {
                     }
                 );
             }
+            Action::Screencap => self.screencap(),
+            Action::Record(Edge::Down) => self.record(),
+            Action::Record(Edge::Up) => self.stop_recording(),
             Action::Quit => return Flow::Stop,
         }
         Flow::Play
+    }
+
+    /// Draw the display into `capture` and hand it whatever falls due.
+    ///
+    /// The capture's own pass rather than the surface's: what the glass gets
+    /// is a swapchain texture, which is not a copy source on every backend
+    /// and is a different size on every window. Solo and the overlay are the
+    /// display's, so a capture is framed the way the display is.
+    fn grab(&self, capture: &mut Capture) -> Result<(), String> {
+        let solo = self.soloed();
+        let live = self
+            .live
+            .as_ref()
+            .ok_or_else(|| "there is no picture yet".to_string())?;
+        capture.frame(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &live.present,
+            &live.feedback,
+            solo,
+            self.overlay_shown.then_some(&live.overlay),
+        )
+    }
+
+    /// What the display is showing, in a file.
+    fn screencap(&mut self) {
+        let Some(live) = self.live.as_ref() else {
+            return log::info!("nothing on the glass to capture yet");
+        };
+        let size = (live.config.width, live.config.height);
+        let shot = Capture::still(
+            &self.gpu.device,
+            &crate::capture::dir(),
+            size,
+            live.config.format,
+        )
+        .and_then(|mut capture| self.grab(&mut capture).map(|()| capture))
+        .and_then(Capture::finish);
+        match shot {
+            Ok(path) => log::info!("captured {}", path.display()),
+            Err(why) => log::error!("capture: {why}"),
+        }
+    }
+
+    /// Start recording the display. Nothing on a press that repeats — a held
+    /// key sends one — since the recording running is what the press asked
+    /// for and starting a second would drop the first mid-file.
+    fn record(&mut self) {
+        if self.capture.is_some() {
+            return;
+        }
+        let Some(live) = self.live.as_ref() else {
+            return log::info!("nothing on the glass to record yet");
+        };
+        let size = (live.config.width, live.config.height);
+        match Capture::video(
+            &self.gpu.device,
+            &crate::capture::dir(),
+            size,
+            live.config.format,
+        ) {
+            Ok(capture) => {
+                log::info!("recording");
+                self.capture = Some(capture);
+            }
+            Err(why) => log::error!("capture: {why}"),
+        }
+    }
+
+    /// Close the recording, if there is one. A release with nothing running
+    /// is quiet: the press that would have started it has already said why
+    /// it did not.
+    fn stop_recording(&mut self) {
+        if let Some(capture) = self.capture.take() {
+            finished(capture);
+        }
+    }
+
+    /// The recording's share of a frame. Taken out and put back rather than
+    /// borrowed in place, so the one that fails can be closed here and said
+    /// out loud instead of going quiet with the file half written.
+    fn record_frame(&mut self) {
+        let Some(mut capture) = self.capture.take() else {
+            return;
+        };
+        match self.grab(&mut capture) {
+            Ok(()) => self.capture = Some(capture),
+            Err(why) => {
+                log::error!("recording: {why}");
+                finished(capture);
+            }
+        }
     }
 
     /// The surface's whole part in one frame, and the only place the lamps
@@ -767,19 +877,31 @@ impl ApplicationHandler for App {
                     live.window.request_redraw();
                 }
                 self.meter(passes, shown);
+                // After the picture and off the same frame: a recording is
+                // the display, and it goes on through a window nothing can
+                // see — the piece is not the picture.
+                self.record_frame();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state != ElementState::Pressed {
-                    return;
-                }
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
                 // Repeats are wanted: holding a key sweeps its knob.
-                if let Some(action) = action_for(code, self.shift) {
-                    if self.act(action) == Flow::Stop {
-                        event_loop.exit();
-                    }
+                let Some(action) = action_for(code, self.shift) else {
+                    return;
+                };
+                let action = match event.state {
+                    ElementState::Pressed => action,
+                    // A release reaches only the controls that are held
+                    // rather than pressed, which is the surface's answer
+                    // too — see [`crate::keys::released`].
+                    ElementState::Released => match crate::keys::released(action) {
+                        Some(action) => action,
+                        None => return,
+                    },
+                };
+                if self.act(action) == Flow::Stop {
+                    event_loop.exit();
                 }
             }
             _ => {}
@@ -841,6 +963,7 @@ mod tests {
             tempo: Tempo::new(crate::tempo::DEFAULT_RATE),
             paced: false,
             covered: false,
+            capture: None,
             live: None,
             failed: None,
         })
@@ -1056,7 +1179,7 @@ mod tests {
         // and whether the run loop goes on is what a frame's answer *is*.
         let mut map = Map::nano_kontrol2();
         map.button.push(crate::midi::Button {
-            cc: 45,
+            cc: 61,
             key: "esc".into(),
         });
         app.midi = Midi::new(map).unwrap();
@@ -1079,9 +1202,24 @@ mod tests {
             surface.wire.panel_becomes(lamp(33) | lamp(36)),
             "the lamp did not follow the focus its own frame moved"
         );
+        // Record is held rather than pressed, and its lamp is lit for as
+        // long as the finger is — on a fullscreen display that light is the
+        // whole of what says a recording is running.
+        surface.press(45);
+        assert_eq!(app.surface_frame(), Flow::Play);
+        assert!(
+            surface.wire.panel_becomes(lamp(33) | lamp(36) | lamp(45)),
+            "the record button never lit under the finger"
+        );
+        surface.release(45);
+        assert_eq!(app.surface_frame(), Flow::Play);
+        assert!(
+            surface.wire.panel_becomes(lamp(33) | lamp(36)),
+            "the record button stayed lit after the finger left"
+        );
         // And the press that ends the run loop ends it, which only the
         // frame's answer carries.
-        surface.press(45);
+        surface.press(61);
         assert_eq!(app.surface_frame(), Flow::Stop);
     }
 
