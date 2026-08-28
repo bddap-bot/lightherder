@@ -73,7 +73,8 @@ pub fn usage() -> String {
          \x20 --windowed          open a window instead of covering the display\n\
          \x20 --resolution WxH    how big every monitor is (default {}x{})\n\
          \x20 --rate HZ           passes a second, the speed the piece plays at\n\
-         \x20                     (default {}, {} to {}, and the 7 and 8 keys move it)\n\
+         \x20                     (default {}, {} to {}; the 7 and 8 keys and the\n\
+         \x20                     surface's track pair move it from there)\n\
          \x20 --cheatsheet        print the controls and exit\n\
          \x20 --bench             time {} frames off screen and exit\n\
          \x20 --help              this\n",
