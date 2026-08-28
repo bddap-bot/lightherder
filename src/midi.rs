@@ -450,11 +450,12 @@ fn nano_buttons() -> Vec<Button> {
         // Cycle shows and hides the overlay that explains all of the above —
         // the one button whose job survives not knowing what any button does.
         button(46, "`"),
-        // Solo: the focused monitor on the whole display. On forward, the
-        // one free button in easy reach, and the press on the surface that
-        // takes back the least — it changes what is *looked* at and nothing
-        // the graph is doing, and the same button puts the bank back.
-        button(44, "f12"),
+        // Solo: the focused monitor on the whole display. On forward, which
+        // record's reason for staying unbound never covered — this is the
+        // press on the surface that takes back the least, changing what is
+        // *looked* at and nothing the graph is doing, and the same button
+        // puts the bank back.
+        button(44, "enter"),
         // The seed, on play: what a monitor's loop starts from, on the
         // button whose silkscreen says start. It lights while the focused
         // monitor has a blob on the glass, so the panel says which of the
@@ -841,8 +842,8 @@ impl Midi {
     /// change follows to light it. Saying the same panel again costs nothing
     /// on the wire.
     ///
-    /// `overlay`, `solo` and `seed` are what the caller owns — two latched
-    /// modes and one fact about the focused monitor. Fine mode is this
+    /// `seed`, `overlay` and `solo` are what the caller owns — one fact
+    /// about the focused monitor and two latched modes. Fine mode is this
     /// type's own, and asking for it back to hand it straight in would be
     /// the answer taking a trip through the question.
     pub fn show(&self, focus: Focus, seed: Seed, overlay: bool, solo: bool) {
@@ -1451,7 +1452,7 @@ mod tests {
         assert_eq!(
             midi.wanted(focus, Seed::Dark, false, true) & !base,
             crate::lamps::lamp(44),
-            "solo is forward"
+            "the display's solo is forward"
         );
         assert!(midi.toggle_fine());
         assert_eq!(
@@ -1669,7 +1670,7 @@ mod tests {
                 button(43, "backspace"),
                 button(42, "r"),
                 button(46, "`"),
-                button(44, "f12"),
+                button(44, "enter"),
                 button(41, ";"),
                 button(58, "tab"),
             ]

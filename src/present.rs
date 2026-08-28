@@ -8,18 +8,6 @@ pub struct Present {
     pipeline: wgpu::RenderPipeline,
 }
 
-/// What the display is doing with the bank, as against what the bank is:
-/// which monitors are on the glass, and whether the help is over them.
-/// Together because they are one question — what a watcher sees — and
-/// because the instrument answers it in one place.
-#[derive(Default)]
-pub struct View<'a> {
-    /// The one monitor to show, or the whole bank tiled.
-    pub solo: Option<usize>,
-    /// The controls overlay, when it is showing.
-    pub overlay: Option<&'a crate::overlay::Overlay>,
-}
-
 /// The tile grid for `monitors` tiles: `(columns, rows)`, as square as it
 /// can be while every monitor gets a cell.
 pub fn grid(monitors: usize) -> (u32, u32) {
@@ -48,22 +36,29 @@ impl Present {
     /// stays black. Stretching instead would undo the aspect correction the
     /// sampling transform and the seed spot both go to trouble to maintain.
     ///
-    /// A soloed monitor is [`tiles`]'s whole story: the same tiling with one
-    /// tile in it. The overlay, when shown, rides the same pass after the
-    /// monitors — it is a caption over the picture, not a second way of
-    /// drawing one.
+    /// `solo` is one monitor on the whole target rather than the bank tiled
+    /// across it, which is that same tiling with one tile in it — the range
+    /// below is the whole of the difference. The overlay, when shown, rides
+    /// the same pass after the monitors: it is a caption over the picture,
+    /// not a second way of drawing one.
+    ///
+    /// The target is the texture rather than a view and a size, because a
+    /// size that is not that texture's puts every viewport somewhere else
+    /// and nothing here could tell.
     pub fn draw(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        target: &wgpu::TextureView,
-        target_size: (u32, u32),
+        target: &wgpu::Texture,
         monitors: &Feedback,
-        view: View,
+        solo: Option<usize>,
+        overlay: Option<&crate::overlay::Overlay>,
     ) {
-        let tiles = tiles(monitors.monitors(), view.solo);
+        let tiles = solo.map_or(0..monitors.monitors(), |m| m..m + 1);
         let (cols, rows) = grid(tiles.len());
+        let target_size = (target.width(), target.height());
         let cell = (target_size.0 / cols, target_size.1 / rows);
+        let target = &target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("present"),
         });
@@ -106,29 +101,11 @@ impl Present {
                 pass.set_bind_group(0, monitors.bind_group(), &[monitors.uniform_offset(m)]);
                 pass.draw(0..3, 0..1);
             }
-            if let Some(overlay) = view.overlay {
+            if let Some(overlay) = overlay {
                 overlay.draw(&mut pass, target_size);
             }
         }
         queue.submit([encoder.finish()]);
-    }
-}
-
-/// The monitors the display draws, in the order they are tiled: the soloed
-/// one alone, or the whole bank. Soloing is the tiling with one tile, so the
-/// letterboxing, the aspect and the overlay are written down once and a
-/// monitor has one path to the glass.
-///
-/// A `solo` past the end of the bank is the caller's mistake and says so:
-/// the focus it comes from is clamped to the graph, and there is no other
-/// monitor to fall back to that would not be the wrong one shown quietly.
-fn tiles(monitors: usize, solo: Option<usize>) -> std::ops::Range<usize> {
-    match solo {
-        Some(m) => {
-            debug_assert!(m < monitors, "soloed monitor {m} of {monitors}");
-            m..m + 1
-        }
-        None => 0..monitors,
     }
 }
 
@@ -146,7 +123,7 @@ fn fit(target: (u32, u32), aspect: f32) -> Option<(f32, f32, f32, f32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit, grid, tiles};
+    use super::{fit, grid};
 
     #[test]
     fn a_matching_target_is_filled_edge_to_edge() {
@@ -176,14 +153,6 @@ mod tests {
     fn a_collapsed_target_draws_nothing() {
         assert_eq!(fit((0, 0), 16.0 / 9.0), None);
         assert_eq!(fit((1, 1000), 16.0 / 9.0), None);
-    }
-
-    #[test]
-    fn a_solo_is_the_whole_tiling_with_one_tile() {
-        assert_eq!(tiles(4, Some(2)).collect::<Vec<_>>(), vec![2]);
-        assert_eq!(grid(tiles(4, Some(2)).len()), (1, 1));
-        assert_eq!(tiles(4, None).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
-        assert_eq!(grid(tiles(4, None).len()), (2, 2));
     }
 
     #[test]

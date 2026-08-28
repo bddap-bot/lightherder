@@ -91,7 +91,7 @@ pub fn start() {
         };
         // Windowed: the canvas already covers the viewport, and asking the
         // browser for real fullscreen without a click is refused anyway. The
-        // `f` key still asks, and there it is a gesture the browser accepts.
+        // `f11` key still asks, and there it is a gesture the browser accepts.
         let cli = crate::cli::Cli {
             graph: preset,
             fullscreen: false,

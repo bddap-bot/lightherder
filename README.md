@@ -278,7 +278,7 @@ is reached — and a select past the end of the graph says so on the log rather
 than going quiet, since the button really is dead on that graph. Nothing on
 the surface is guarded: it has no shift, so a single
 press on the Mute row walks over the live panel and one on the Record row
-walks over a slot. Nothing is bound to quit, and four buttons are bound to
+walks over a slot. Nothing is bound to quit, and two buttons are bound to
 nothing at all — Record above all, because a button a blind slip can find is
 not where another irreversible press belongs. Eight of the twenty-four knobs
 are not on the surface, which
@@ -473,9 +473,9 @@ program's; a built binary takes them directly.
 The resolution is every monitor's size, and so the resolution the whole loop
 runs at. The window's shape has nothing to do with it: the bank is tiled into
 the window, each monitor letterboxed in its cell rather than stretched — and
-`f12` solos the focused monitor onto the whole window and back, which is that
-same tiling with one tile in it. Nor is
-it part of a graph — every position here is in screen units and every weight a
+enter solos the focused monitor onto the whole window and back, which is that
+same tiling with one tile in it. Nor is it part of a graph — every position
+here is in screen units and every weight a
 ratio, so it changes how much detail the loop carries and — the grain aside,
 which is hashed per texel and so is finer on a bigger monitor — nothing about
 what it does. On a 4K display ask for `3840x2160` and what is on the glass is
@@ -643,7 +643,7 @@ below assumes a US layout.
 | tab | fine mode for the surface's knobs, on or off |
 | `7` `8` | the tempo: slower / faster, four presses to halve or double it |
 | `f11` | cover the display, or stop covering it |
-| `f12` | the focused monitor on the whole display, or the tiled bank |
+| enter | the focused monitor on the whole display, or the tiled bank |
 | `` ` `` | the controls overlay, on or off |
 | esc | quit |
 

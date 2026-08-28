@@ -59,9 +59,8 @@ pub enum Action {
     /// Cover the display, or stop covering it.
     Fullscreen,
     /// Show the focused monitor on the whole display, or go back to the
-    /// tiled bank. A latch and not a select: which monitor is soloed is
-    /// already a question the instrument answers — the focus — and a second
-    /// index for it would be a focus that could disagree with the focus.
+    /// tiled bank. A latch and not a select — see [`crate::app`], where the
+    /// monitor it shows is the focus and not an index of its own.
     Solo,
     /// Show or hide the controls overlay drawn over the picture.
     Overlay,
@@ -289,13 +288,12 @@ const COMMANDS: &[Command] = &[
         "cover the display, or stop",
         "fullscreen",
     ),
-    // Beside f11, because the two are the same kind of thing: what the
-    // display does with the picture, rather than anything the graph does to
-    // make one. It is also the last free key the board has that is not a
-    // letter, and every letter is a knob.
+    // Enter, and not the f12 beside f11 that it wants to be: the browser
+    // build is a real target and every browser swallows f12 for its
+    // debugger, which would leave the page's own legend naming a dead key.
     cmd(
-        KeyCode::F12,
-        "f12",
+        KeyCode::Enter,
+        "enter",
         Action::Solo,
         "the focused monitor on the whole display, or the tiled bank",
         "solo",
@@ -578,9 +576,9 @@ mod tests {
         assert_eq!(action_for(KeyCode::Quote, false), None);
         assert_eq!(action_for_label("'"), None);
         assert_eq!(action_for(KeyCode::F11, false), Some(Action::Fullscreen));
-        assert_eq!(action_for(KeyCode::F12, false), Some(Action::Solo));
+        assert_eq!(action_for(KeyCode::Enter, false), Some(Action::Solo));
         // A key no table claims.
-        assert_eq!(action_for(KeyCode::Insert, false), None);
+        assert_eq!(action_for(KeyCode::F12, false), None);
     }
 
     #[test]

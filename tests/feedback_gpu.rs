@@ -13,7 +13,7 @@ use lightherder::affine::Framing;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params, Seed};
-use lightherder::present::{Present, View};
+use lightherder::present::Present;
 
 /// The bootstrap stage's one-camera-one-monitor params, kept as this suite's
 /// shorthand: most of what it checks — the colour stage, the framing, the
@@ -108,7 +108,6 @@ struct Harness {
     feedback: Feedback,
     present: Present,
     target: wgpu::Texture,
-    target_view: wgpu::TextureView,
     readback: wgpu::Buffer,
     target_size: (u32, u32),
 }
@@ -140,7 +139,6 @@ impl Harness {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
             size: (target_size.0 * target_size.1 * 4) as u64,
@@ -153,7 +151,6 @@ impl Harness {
             feedback,
             present,
             target,
-            target_view,
             readback,
             target_size,
         }
@@ -172,13 +169,10 @@ impl Harness {
         self.present.draw(
             self.device,
             self.queue,
-            &self.target_view,
-            self.target_size,
+            &self.target,
             &self.feedback,
-            View {
-                solo,
-                overlay: None,
-            },
+            solo,
+            None,
         );
     }
 

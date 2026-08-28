@@ -18,7 +18,7 @@ use crate::keys::{action_for, Action};
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
 use crate::params::{Focus, Knob, Params, Seed};
-use crate::present::{Present, View};
+use crate::present::Present;
 use crate::tempo::Tempo;
 
 /// Borderless rather than exclusive: the instrument renders at its own
@@ -357,19 +357,13 @@ impl Live {
                 return false;
             }
         };
-        let target = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
         self.present.draw(
             &gpu.device,
             &gpu.queue,
-            &target,
-            (self.config.width, self.config.height),
+            &frame.texture,
             &self.feedback,
-            View {
-                solo,
-                overlay: overlay_shown.then_some(&self.overlay),
-            },
+            solo,
+            overlay_shown.then_some(&self.overlay),
         );
         gpu.queue.present(frame);
         true
@@ -698,9 +692,6 @@ impl App {
                     live.window.set_cursor_visible(!self.fullscreen);
                 }
             }
-            // Said out loud like the tempo is, and for the same reason in
-            // reverse: soloing changes what is on the glass so plainly that
-            // the line is only there for the log of a piece afterwards.
             Action::Solo => {
                 self.solo = !self.solo;
                 match self.solo {
@@ -838,6 +829,9 @@ impl ApplicationHandler for App {
                 if self.surface_frame() == Flow::Stop {
                     event_loop.exit();
                 }
+                // Read before the window is taken, which is the whole of why
+                // it is up here: the solo is the focus's and the focus is not
+                // the window's.
                 let solo = self.soloed();
                 let Some(live) = self.live.as_mut() else {
                     return;
