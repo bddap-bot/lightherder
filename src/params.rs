@@ -510,9 +510,8 @@ pub enum Knob {
     Contrast,
     Gamma,
     Headroom,
-    /// The switcher crosspoint the camera and monitor halves of the focus
-    /// name between them: how much of the focused camera the focused monitor
-    /// shows.
+    /// The switcher crosspoint the focus's camera and monitor name between
+    /// them: how much of the focused camera the focused monitor shows.
     Route,
     /// The same, on the switcher's other kind of column: how much of the
     /// focused input the focused monitor shows. This is the level outside
@@ -656,7 +655,7 @@ impl Knob {
             )
     }
 
-    /// Which of the focus's two indices the knob reads.
+    /// Which of a [`Focus`]'s indices the knob reads.
     pub const fn side(self) -> Side {
         match self {
             Knob::Zoom
@@ -846,14 +845,12 @@ impl Params {
     ///
     /// Each field goes through [`Params::set`], so the rails, the wrap and
     /// the reachability a key press has are unchanged.
-    pub fn reset(&mut self, knob: Knob, focus: Focus) -> bool {
-        let mut moved = false;
+    pub fn reset(&mut self, knob: Knob, focus: Focus) {
         for field in Knob::ALL {
             if field.owns_a_field() && knob.shares_a_field_with(field) {
-                moved |= self.set(field, field.identity(), focus);
+                self.set(field, field.identity(), focus);
             }
         }
-        moved
     }
 
     /// Where `knob` is standing. The rigid gain reads as the mean of its
@@ -964,8 +961,8 @@ impl Params {
         })
     }
 
-    /// The focused camera and monitor, and every knob's value: the only
-    /// readout the instrument has.
+    /// The focused nodes and every knob's value: the only readout the
+    /// instrument has.
     pub fn describe(&self, focus: Focus) -> String {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];

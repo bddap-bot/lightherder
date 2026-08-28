@@ -639,7 +639,7 @@ to mean; both are irreversible, since a recall walks over a live panel
 nothing has stored, and the modifier is there because a hand mid-piece
 reaches for a slot far more often than it writes one. On a keypad key it is
 which side of the focus is meant, camera bare and monitor shifted: the board
-has no second block of eight, and the two halves of the focus are the same
+has no second block of eight, and the camera and the monitor are the same
 question asked of the two sides of the graph.
 
 The colour and character knobs start neutral, so the instrument out of the box

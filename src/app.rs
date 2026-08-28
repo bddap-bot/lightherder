@@ -80,7 +80,7 @@ pub struct App {
     /// What Reset restores: the graph as it was loaded, not the single
     /// preset's knobs.
     initial: Params,
-    /// The camera and monitor the knobs act on.
+    /// The camera, the monitor and the input the knobs act on.
     focus: Focus,
     /// The running external inputs, in `params.inputs` order, which is the
     /// order `Feedback::write_input` indexes them by.
@@ -579,13 +579,7 @@ impl App {
             // reports on.
             return log::info!("no knob has been turned yet");
         };
-        // The graph can have changed under the knob since it turned — a
-        // recall onto a rig with no inputs takes the send's field away — so
-        // this asks the same question a turn does rather than assuming a
-        // field that was there once is there still.
-        if !self.params.reset(knob, self.focus) {
-            return log::info!("no {}: the graph has no inputs", knob.name());
-        }
+        self.params.reset(knob, self.focus);
         self.midi.release_knob(knob);
         log::info!(
             "{} reset: {}",
@@ -614,17 +608,19 @@ impl App {
                     ..self.focus
                 });
             }
-            Action::NextInput => {
-                // Nothing to step through on a graph with no inputs, and the
-                // focus is already the only place it could be.
-                if !self.params.inputs.is_empty() {
+            Action::NextInput => match self.params.inputs.is_empty() {
+                // Said out loud, the way a select past the end of the graph
+                // is: a key that quietly does nothing is a key a performer
+                // reads as broken.
+                true => log::info!("no inputs: nothing is plugged into the switcher"),
+                false => {
                     let input = (self.focus.input + 1) % self.params.inputs.len();
                     self.refocus(Focus {
                         input,
                         ..self.focus
                     });
                 }
-            }
+            },
             Action::FocusCamera(camera) => self.focus_camera(camera),
             Action::FocusMonitor(monitor) => self.focus_monitor(monitor),
             Action::NextMonitor => {
@@ -653,7 +649,7 @@ impl App {
                 log::info!("fine {}", if on { "on" } else { "off" });
             }
             // The focused monitor's, because the seed is the monitor's: the
-            // faders' half of the focus is the half that names it, exactly
+            // faders' index of the focus is the one that names it, exactly
             // as the front panel beside it does.
             Action::Seed => {
                 let seed = &mut self.params.monitors[self.focus.monitor].seed;
@@ -930,9 +926,9 @@ mod tests {
     #[test]
     fn a_recall_rebuilds_the_rig_across_graph_shapes() {
         // The couch flow of issue #10: the Play button launches the default
-        // rig, and a slot holds the webcam rig — one more input on the
-        // switcher. `external` is that rig with the capture device swapped
-        // for the bars, so the test runs on machines with no webcam.
+        // rig, and a slot holds a rig with an input on the switcher.
+        // `external` is one, and its input is a drawn pattern, so this runs
+        // on a machine with no capture device.
         let dir = scratch("cross-shape");
         let stored = config::external();
         crate::slots::store(&dir, 0, &stored).unwrap();
@@ -1075,7 +1071,7 @@ mod tests {
 
     #[test]
     fn the_input_focus_walks_and_lands_inside_a_recalled_graph() {
-        // The third half of the focus: `p` steps it, and a recall onto a rig
+        // The focus's third index: `p` steps it, and a recall onto a rig
         // with fewer inputs has to bring it back inside or the readout names
         // a source the graph has not got.
         let dir = scratch("input-focus");

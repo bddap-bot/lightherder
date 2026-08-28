@@ -201,6 +201,11 @@ pub fn external() -> Params {
 /// The key is where the two-monitor shape buys something a one-monitor rig
 /// cannot have: a key on the loop's own camera would gate the trail it is
 /// building, so it would never build one.
+///
+/// The window costs the room one frame on its way in, since a camera reads
+/// the frame a monitor held rather than the one it is being handed. A
+/// sixtieth of a second behind a live subject is under the hand's own
+/// latency, and the loop's own delay is a whole pass anyway.
 pub fn webcam() -> Params {
     let window = 0;
     let loop_monitor = 1;
@@ -291,8 +296,9 @@ pub fn read(path: &std::path::Path) -> Result<Params, String> {
 /// Only the indices the side reads: a camera knob is one value per camera
 /// however many monitors there are, so walking whole focuses and dropping
 /// the ones a knob does not distinguish would be the same checks and eight
-/// times the loop, once a frame, on a camera count nothing caps. The other
-/// indices stay at zero, which every non-empty graph has.
+/// times the loop, once a frame, on a camera count nothing caps. The rest
+/// stay at zero — including the input index on a graph with no inputs, since
+/// a knob on any other side never reads it.
 ///
 /// This is what lets `validate` check the switcher's two halves in one walk
 /// over one rail each: they are different pairs of indices, not a matrix and
@@ -818,10 +824,10 @@ mod tests {
 
     #[test]
     fn an_input_patched_past_the_crosspoint_rail_is_refused() {
-        // No focus names an input, so the rail walk over the knobs never
-        // reaches this half of the switcher: it is checked on its own, off
-        // the very same knob's travel.
-        let (_, high) = Knob::Route.limit().ends();
+        // The send's own rail, which the walk over the knobs reads for it
+        // like every other: a graph the panel could not put in this state is
+        // a graph the loader refuses.
+        let (_, high) = Knob::Send.limit().ends();
         for level in [high + 0.1, -0.1, f32::NAN] {
             let mut params = external();
             params.routing_inputs[0][0] = level;

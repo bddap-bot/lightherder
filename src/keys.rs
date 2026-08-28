@@ -87,7 +87,7 @@ pub(crate) const KEYED_NODES: usize = 8;
 /// and nothing else on the glass.
 ///
 /// `shift` for the monitor rather than a second block of eight keys: the
-/// board has no second block, and the two halves of the focus are the same
+/// board has no second block, and the camera and the monitor are the same
 /// question asked of the two sides of the graph — which is the shape a
 /// modifier has, not the shape two unrelated tables have.
 pub(crate) const NODE_KEYS: [(KeyCode, &str); KEYED_NODES] = [
@@ -169,8 +169,9 @@ const AXES: &[Axis] = &[
     // keys at the right edge, away from the knobs, because they are the two
     // controls that act on a pair of nodes rather than on either of them.
     axis(Knob::Route, KeyCode::Slash, "/", KeyCode::Backslash, "\\"),
-    // The send on the digits the gain channels stop short of: it is a level
-    // like they are, and it is the pair of keys left beside them.
+    // The send on the far end of the digits, clear of the gain channels at
+    // the near end: it is a level like they are, and the two rows' right
+    // edge is where the other crosspoint lives too.
     axis(Knob::Send, KeyCode::Digit9, "9", KeyCode::Digit0, "0"),
 ];
 
@@ -202,8 +203,8 @@ const COMMANDS: &[Command] = &[
         "focus the next monitor",
         "mon >",
     ),
-    // "p" for the patch, beside the "n" and "m" that walk the other two
-    // halves of the focus.
+    // "p" for the patch, beside the "n" and "m" that walk the focus's other
+    // two indices.
     cmd(
         KeyCode::KeyP,
         "p",
