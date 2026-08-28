@@ -18,9 +18,8 @@
 //! stale — keeps evolving on the deadline below, because the piece is not
 //! the picture.
 //!
-//! The rate is not part of a graph and no preset slot holds it: a slot
-//! recalls a rig, and a recall mid-performance must not also change the
-//! speed the piece is playing at.
+//! The rate is not part of a graph: a graph is the rig, and how fast the
+//! piece plays is the performer's, kept for as long as the run.
 
 use std::time::Duration;
 

@@ -11,8 +11,9 @@ character — the lens's bloom, composite chroma bleed, grain — and each monit
 its own amplifier rail. Every camera watches monitors and only monitors, so
 every path in the graph is a loop; light from outside — test patterns, video
 files, capture devices — enters where a real rig's does, on the switcher.
-Nothing is written down: the graph comes from the command line and lives as
-long as the run, the way the hardware it is modelled on does.
+The instrument writes nothing down: the graph comes from the command line and
+the panel lives as long as the run, the way the hardware it is modelled on
+does.
 
 ## How it works
 
@@ -180,8 +181,8 @@ key colour — named as a hue, the way this instrument names every colour —
 with a tolerance for how much of it a pixel may carry; at the top of its
 travel the key is off, so grey and the far hues always pass. All four are
 ordinary knobs: on the keys and mappable from a MIDI surface. On the camera
-because that is the only signal path the instrument has
-— the gain, the framing and the character are all there, and what the
+because that is the only signal path the instrument has — the gain, the
+framing and the character are all there, and what the
 switcher hands a monitor from outside it hands over whole. A camera watches
 monitors, so a key is a gate between one monitor and the next: on a loop's own
 camera it gates the feedback, refusing the dark of a trail or one hue of it a
@@ -193,8 +194,8 @@ monitor — a **window** on the room, with no camera routed to it and so no
 loop of its own — and a camera watches *that* through its luma key, handing
 the lit subject on and refusing the unlit room behind it. What survives
 drives the second monitor's loop, which is `external`'s. Plug a camera in and
-play. The key has to sit one monitor upstream because a key on the
-loop's own camera would gate the trail it is building, so there would never
+play. The key has to sit one monitor upstream because a key on the loop's own
+camera would gate the trail it is building, so there would never
 be a trail.
 
 A monitor's **seed** is what lights its loop from outside: either a soft
@@ -242,8 +243,7 @@ Out of the box, with no configuration:
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | ▶▶ forward | the focused monitor on the whole display, or the tiled bank |
 | |◀ track prev | fine mode, on or off |
-| M 1–8, R 1–8 | nothing |
-| ● record, ▶| track next, marker set, marker prev | nothing |
+| M 1–8, R 1–8, ● record, ▶| track next, marker set, marker prev | nothing |
 
 So the left hand works one monitor, the right hand one camera, and the last
 fader is the switcher crosspoint joining the two the hands are on. The Solo
@@ -252,13 +252,14 @@ hands do: the left four name the camera the rotaries turn, the right four the
 monitor the faders turn. It used to name eight cameras, but no graph anyone
 plays has more than four, and spending half a row on cameras a graph has not
 got left the *monitor* — the node under all eight faders — with no outright
-address at all. A select past the end of the graph says so on the log rather
-than going quiet, since the button really is dead on that graph. Nothing is
-bound to quit, and twenty of the twenty-four buttons are bound to nothing at
-all — the Mute and Record rows whole, and Record above all, because a button
-a blind slip can find is not where a press it cannot take back belongs. Nine
-of the twenty-four
-knobs are not on the surface, which has sixteen controls and binds fifteen of
+address at all. The two rows below it are free now that nothing saves, and
+four a half is still every node anyone plays. A select past the end of the
+graph says so on the log rather than going quiet, since the button really is
+dead on that graph. Nothing is bound to quit, and twenty buttons are bound to
+nothing at all — the Mute and Record rows whole, and the ● record button
+above all, which is the one a blind slip should not find. Nine of the
+twenty-four knobs are not on the surface, which has sixteen controls and
+binds fifteen of
 them: the three per-channel gain offsets, which colour a rigid gain that is
 itself on a rotary; the bloom radius, which sizes a halo whose amount is; the
 send, which a graph with no inputs would leave a fader holding at nothing;
@@ -353,8 +354,8 @@ connect, which is where it belongs.
 drives every button rather than the eight it came for: external mode takes
 every row's lights, not just the Solo row's. So a button the map binds is lit
 while it is held — exactly what internal mode did for it — and the focused
-camera's is
-lit whether or not a finger is on it. What the instrument adds is one lamp;
+camera's is lit whether or not a finger is on it. What the instrument adds is
+one lamp;
 what it takes away is nothing. A button the map binds nothing to stays dark,
 which is now what it means.
 
@@ -381,8 +382,8 @@ a channel.
 
 ### Mapping config
 
-`$XDG_CONFIG_HOME/lightherder/midi.toml`. If it is not
-there you get the layout above; if it is there and will not load, the
+`$XDG_CONFIG_HOME/lightherder/midi.toml`, named on the log at startup. If it
+is not there you get the layout above; if it is there and will not load, the
 instrument says why and does not start.
 
 ```toml
@@ -398,8 +399,8 @@ cc = 41
 key = "space"       # any key label the printed help uses
 
 [[button]]
-cc = 32
-key = "shift num1"
+cc = 48
+key = "shift num1"      # M1, which the factory map leaves free
 ```
 
 A fader names a **knob** and spans its whole travel — for the two knobs that

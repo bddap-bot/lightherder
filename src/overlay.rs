@@ -195,8 +195,8 @@ fn strip_chrome(c: &mut Canvas, i: u8) {
     fader_track(c, i, DIM);
 }
 
-/// Everything left of the fader track is caption room, and the widest button
-/// caption ("mon 1", and "cam 1" beside it) needs five glyphs of it.
+/// The fader track is fourteen texels wide counting the thumb that overhangs
+/// it, and everything left of that is caption room.
 fn track_x(i: u8) -> i32 {
     strip_x(i) + STRIP_W - 14
 }

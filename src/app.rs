@@ -169,7 +169,9 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     // Read before the window opens, like the inputs and for the same reason:
     // a map that will not load is a terminal error, not a surface that turns
     // out to be playing the wrong knobs once there is light on the glass.
-    let map = Map::load(&crate::midi::map_path())?;
+    let map_path = crate::midi::map_path();
+    log::info!("surface map: {}", map_path.display());
+    let map = Map::load(&map_path)?;
     // The controls, off the map that is about to be played rather than off a
     // second read of the same file. Fullscreen this scrolls past behind the
     // instrument; it is here for the terminal it was started from, which is
@@ -855,15 +857,20 @@ mod tests {
             return;
         };
         let started = app.params.clone();
-        let sources = app.sources.len();
         play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
         play(&mut app, Action::FocusMonitor(0));
         play(&mut app, Action::Nudge(Knob::Gamma, 0.5));
         assert_ne!(app.params, started);
+        // The bars are handed over exactly once, so a rig rebuilt or replayed
+        // under the reset would have them pending again.
+        assert!(app.sources[0].frame().is_some(), "nothing to upload");
 
         play(&mut app, Action::Reset);
         assert_eq!(app.params, started);
-        assert_eq!(app.sources.len(), sources, "the inputs were reopened");
+        assert!(
+            app.sources[0].frame().is_none(),
+            "the rig was rebuilt under the reset"
+        );
     }
 
     #[test]

@@ -185,7 +185,7 @@ pub fn external() -> Params {
     }
 }
 
-/// A webcam driving the loop, through a key: plug in, recall, play.
+/// A webcam driving the loop, through a key: plug in and play.
 ///
 /// Two monitors, because a key belongs to a camera and a camera watches
 /// monitors. The switcher puts the device whole on the first — a monitor
@@ -280,9 +280,7 @@ pub fn load(arg: &str) -> Result<Params, String> {
     }
 }
 
-/// One TOML file of [`Params`], validated. The one way a graph is read off
-/// disk.
-pub fn read(path: &std::path::Path) -> Result<Params, String> {
+fn read(path: &std::path::Path) -> Result<Params, String> {
     let shown = path.display();
     let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
     let params: Params = toml::from_str(&text).map_err(|e| format!("{shown}: {e}"))?;
@@ -901,6 +899,91 @@ mod tests {
         validate(&params).unwrap();
         params.monitors[1].seed = Seed::Dark;
         validate(&params).unwrap();
+    }
+
+    /// A file of this test's own: the suite runs in one process, so the pid
+    /// alone would have every test here sharing a path.
+    fn scratch(what: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("lightherder-cfg-{}-{what}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("graph.toml")
+    }
+
+    #[test]
+    fn every_field_of_the_format_arrives_off_a_file_that_names_it() {
+        // Every name the format has, written the way a hand writes them and
+        // read through the door the command line uses. Literal, because a
+        // field is only reachable if its *name* is — and the instrument
+        // writes no file to round-trip against.
+        let path = scratch("every-field");
+        std::fs::write(
+            &path,
+            "cameras = [{ look = [0.5], gain = [0.9, 0.85, 0.8],\n\
+             \x20 framing = { zoom = 0.994, rotation = 0.05, translate = [0.01, -0.02] },\n\
+             \x20 character = { bloom = 0.1, bloom_radius = 0.03, chroma_bleed = 0.02, noise = 0.01 },\n\
+             \x20 key = { threshold = 0.2, softness = 0.05, hue = 1.2, tolerance = 0.3 } }]\n\
+             monitors = [{ seed = { white_blob = 0.2 }, headroom = 1.5,\n\
+             \x20 colour = { hue = 0.1, saturation = 1.1, brightness = 0.02, contrast = 1.05, gamma = 1.2 } }]\n\
+             routing = [[0.7]]\n\
+             routing_inputs = [[0.3]]\n\
+             inputs = [{ pattern = \"bars\" }]\n",
+        )
+        .unwrap();
+        let params = load(path.to_str().unwrap()).unwrap();
+
+        let camera = &params.cameras[0];
+        assert_eq!(camera.look, [0.5]);
+        assert_eq!(camera.gain, [0.9, 0.85, 0.8]);
+        assert_eq!(camera.framing.zoom, 0.994);
+        assert_eq!(camera.framing.rotation, 0.05);
+        assert_eq!(camera.framing.translate, [0.01, -0.02]);
+        assert_eq!(camera.character.bloom, 0.1);
+        assert_eq!(camera.character.bloom_radius, 0.03);
+        assert_eq!(camera.character.chroma_bleed, 0.02);
+        assert_eq!(camera.character.noise, 0.01);
+        assert_eq!(camera.key.threshold, 0.2);
+        assert_eq!(camera.key.softness, 0.05);
+        assert_eq!(camera.key.hue, 1.2);
+        assert_eq!(camera.key.tolerance, 0.3);
+
+        let monitor = &params.monitors[0];
+        assert_eq!(monitor.seed, Seed::WhiteBlob(0.2));
+        assert_eq!(monitor.headroom, 1.5);
+        assert_eq!(monitor.colour.hue, 0.1);
+        assert_eq!(monitor.colour.saturation, 1.1);
+        assert_eq!(monitor.colour.brightness, 0.02);
+        assert_eq!(monitor.colour.contrast, 1.05);
+        assert_eq!(monitor.colour.gamma, 1.2);
+
+        assert_eq!(params.routing, [[0.7]]);
+        assert_eq!(params.routing_inputs, [[0.3]]);
+        assert_eq!(params.inputs, [Input::Pattern(Pattern::Bars)]);
+
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_graph_file_the_instrument_would_refuse_is_refused_at_the_door() {
+        // A file is as editable as the hand that wrote it, so the loader
+        // validates rather than trusting it — the GPU side is built on that
+        // promise. And the refusal names the file, since a performer with
+        // several has to know which one.
+        let path = scratch("poisoned");
+        std::fs::write(
+            &path,
+            "cameras = [{ look = [1.0], gain = [nan, 1.0, 1.0] }]\n\
+             monitors = [{}]\n\
+             routing = [[1.0]]\n",
+        )
+        .unwrap();
+        let why = load(path.to_str().unwrap()).unwrap_err();
+        assert!(why.contains("graph.toml") && why.contains("NaN"), "{why}");
+
+        std::fs::write(&path, "not toml [").unwrap();
+        assert!(load(path.to_str().unwrap()).is_err());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

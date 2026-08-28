@@ -150,19 +150,6 @@ impl Source {
         }
         std::mem::take(&mut self.pending).then_some(self.showing.as_slice())
     }
-
-    /// Hands the frame the layer is showing over once more, for a caller that
-    /// has replaced the bank that layer lived in. A new bank is blank, and a
-    /// still pattern uploads exactly once, so without this its layer would
-    /// stay black for the rest of the run — as would an ffmpeg's that has
-    /// already ended and will send nothing further.
-    ///
-    /// Cheaper than reopening, and it cannot fail: an exclusive device that
-    /// is already open would refuse a second ffmpeg, which would turn a
-    /// recall into an error over a bank the graph did not even change.
-    pub fn replay(&mut self) {
-        self.pending = true;
-    }
 }
 
 /// The circuit two frame buffers travel round: full ones coming up from the
@@ -617,11 +604,6 @@ mod tests {
             !std::path::Path::new(&format!("/proc/{pid}")).exists(),
             "ffmpeg {pid} is still in the process table"
         );
-        // And it still answers a bank rebuild with the frame it ended on.
-        source.replay();
-        let frame = source.frame().expect("the last frame, again");
-        assert_eq!(frame.len(), frame_bytes(SIZE));
-        assert!(mean(frame, 0) > 200.0, "not the red it ended on");
     }
 
     #[test]
