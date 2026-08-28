@@ -18,7 +18,7 @@ use web_time::Instant;
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::params::Params;
-use crate::present::Present;
+use crate::present::{Present, View};
 
 /// How many frames are timed, after a warm-up. Ten seconds' worth at sixty,
 /// long enough that a shader compile or a first-touch allocation cannot be
@@ -78,7 +78,14 @@ pub async fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> 
 
     let frame = |feedback: &mut Feedback| {
         feedback.step(&device, &queue, params);
-        present.draw(&device, &queue, &view, resolution, feedback, None);
+        present.draw(
+            &device,
+            &queue,
+            &view,
+            resolution,
+            feedback,
+            View::default(),
+        );
     };
     for _ in 0..WARMUP {
         frame(&mut feedback);

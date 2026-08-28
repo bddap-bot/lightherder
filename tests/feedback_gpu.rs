@@ -13,7 +13,7 @@ use lightherder::affine::Framing;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params, Seed};
-use lightherder::present::Present;
+use lightherder::present::{Present, View};
 
 /// The bootstrap stage's one-camera-one-monitor params, kept as this suite's
 /// shorthand: most of what it checks — the colour stage, the framing, the
@@ -165,17 +165,20 @@ impl Harness {
 
     fn step_graph(&mut self, params: &Params) {
         self.feedback.step(self.device, self.queue, params);
-        self.present();
+        self.present(None);
     }
 
-    fn present(&self) {
+    fn present(&self, solo: Option<usize>) {
         self.present.draw(
             self.device,
             self.queue,
             &self.target_view,
             self.target_size,
             &self.feedback,
-            None,
+            View {
+                solo,
+                overlay: None,
+            },
         );
     }
 
@@ -946,7 +949,7 @@ fn blanking_the_monitor_puts_out_everything_on_it() {
     assert!(h.read().brightest() > 200.0, "nothing to blank");
 
     h.feedback.clear(h.device, h.queue);
-    h.present();
+    h.present(None);
     let left = h.read().brightest();
     assert!(left < 2.0, "blanking left {left}");
 }
@@ -1297,6 +1300,57 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
             img.at(u, v)
         );
     }
+}
+
+#[test]
+fn a_solo_puts_one_monitor_on_the_whole_target() {
+    // The tiled bank and a soloed monitor are the same picture at two sizes:
+    // light seeded on monitor 2 sits in monitor 2's cell while the bank is
+    // tiled and at the same place on the whole target once that monitor is
+    // soloed. Nothing is routed anywhere here — each monitor is its own seed
+    // and nothing else, which is what lets the read say which monitor it is
+    // looking at.
+    let p = Params {
+        cameras: (0..4).map(|c| plain_camera(one_hot(4, c))).collect(),
+        monitors: (0..4)
+            .map(|m| Monitor {
+                seed: if m == 2 {
+                    Seed::WhiteBlob(1.0)
+                } else {
+                    Seed::Dark
+                },
+                ..silent_monitor()
+            })
+            .collect(),
+        inputs: Vec::new(),
+        routing: vec![vec![0.0; 4]; 4],
+        routing_inputs: Vec::new(),
+    };
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
+        return;
+    };
+    h.step_graph(&p);
+
+    let seed = h.feedback.blob_uv();
+    let (u, v) = tile(4, 2, seed[0], seed[1]);
+    let found = h.read().brightest_uv();
+    assert!(
+        (found[0] - u).abs() < 0.02 && (found[1] - v).abs() < 0.02,
+        "tiled: the seed is at {found:?}, not [{u}, {v}]"
+    );
+
+    h.present(Some(2));
+    let found = h.read().brightest_uv();
+    assert!(
+        (found[0] - seed[0]).abs() < 0.02 && (found[1] - seed[1]).abs() < 0.02,
+        "soloed: the seed is at {found:?}, not {seed:?}"
+    );
+
+    // And the solo shows the monitor it names rather than the lit one it
+    // was tiled beside: a dark monitor soloed is a dark target.
+    h.present(Some(0));
+    let peak = h.read().brightest_in(0.0, 0.0, 1.0, 1.0);
+    assert!(peak < 10.0, "a soloed dark monitor shows {peak}");
 }
 
 #[test]

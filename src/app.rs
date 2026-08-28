@@ -18,7 +18,7 @@ use crate::keys::{action_for, Action};
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
 use crate::params::{Focus, Knob, Params, Seed};
-use crate::present::Present;
+use crate::present::{Present, View};
 use crate::tempo::Tempo;
 
 /// Borderless rather than exclusive: the instrument renders at its own
@@ -82,6 +82,10 @@ pub struct App {
     /// Whether the controls overlay is showing. Off at startup: the overlay
     /// is help, and help is what the cycle button and backquote are for.
     overlay_shown: bool,
+    /// Whether the display shows the focused monitor alone rather than the
+    /// tiled bank. Which monitor is not kept here — that is the focus, and
+    /// two indices for one question is one of them going stale.
+    solo: bool,
     /// Passes and presents since the last rate line, and when that was. Two
     /// counts because they are two clocks — see [`App::meter`], where the
     /// difference between them is the whole of what the line says.
@@ -199,6 +203,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             resolution: cli.resolution,
             fullscreen: cli.fullscreen,
             overlay_shown: false,
+            solo: false,
             passes: 0,
             presents: 0,
             metered: Instant::now(),
@@ -334,7 +339,7 @@ impl Live {
     /// with no texture to give is the one way a present does nothing, and
     /// the caller counts the ones that landed so that a stale surface reads
     /// as the rate it really is.
-    fn show(&mut self, gpu: &Gpu, overlay_shown: bool) -> bool {
+    fn show(&mut self, gpu: &Gpu, solo: Option<usize>, overlay_shown: bool) -> bool {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -361,7 +366,10 @@ impl Live {
             &target,
             (self.config.width, self.config.height),
             &self.feedback,
-            overlay_shown.then_some(&self.overlay),
+            View {
+                solo,
+                overlay: overlay_shown.then_some(&self.overlay),
+            },
         );
         gpu.queue.present(frame);
         true
@@ -500,6 +508,13 @@ impl App {
     /// graph the panel's lamps read, since the focus alone cannot say it.
     fn seed(&self) -> Seed {
         self.params.monitors[self.focus.monitor].seed
+    }
+
+    /// The monitor the display is showing on its own, if any. The solo keeps
+    /// no index: which monitor is the focus's business, and a second one
+    /// would be a focus that can disagree with the focus.
+    fn soloed(&self) -> Option<usize> {
+        self.solo.then_some(self.focus.monitor)
     }
 
     /// Point the knobs at another node. The one way `self.focus` moves, for
@@ -683,6 +698,16 @@ impl App {
                     live.window.set_cursor_visible(!self.fullscreen);
                 }
             }
+            // Said out loud like the tempo is, and for the same reason in
+            // reverse: soloing changes what is on the glass so plainly that
+            // the line is only there for the log of a piece afterwards.
+            Action::Solo => {
+                self.solo = !self.solo;
+                match self.solo {
+                    true => log::info!("solo monitor {}", self.focus.monitor + 1),
+                    false => log::info!("tiled bank"),
+                }
+            }
             Action::Overlay => {
                 self.overlay_shown = !self.overlay_shown;
                 log::info!(
@@ -724,7 +749,8 @@ impl App {
                 flow = Flow::Stop;
             }
         }
-        self.midi.show(self.focus, self.seed(), self.overlay_shown);
+        self.midi
+            .show(self.focus, self.seed(), self.overlay_shown, self.solo);
         flow
     }
 }
@@ -812,6 +838,7 @@ impl ApplicationHandler for App {
                 if self.surface_frame() == Flow::Stop {
                     event_loop.exit();
                 }
+                let solo = self.soloed();
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
@@ -828,7 +855,7 @@ impl ApplicationHandler for App {
                 // all, which the chain below would spin on, or stops handing
                 // them out and leaves a second per frame inside the acquire.
                 // The piece plays on through either; only the picture waits.
-                let shown = !self.covered && live.show(&self.gpu, self.overlay_shown);
+                let shown = !self.covered && live.show(&self.gpu, solo, self.overlay_shown);
                 // Under Fifo the present waits for the blank, so a frame that
                 // went out is the one thing that can ask for the next at the
                 // display's rate. One that did not paces nothing.
@@ -914,6 +941,7 @@ mod tests {
             resolution,
             fullscreen: false,
             overlay_shown: false,
+            solo: false,
             passes: 0,
             presents: 0,
             metered: Instant::now(),
@@ -1403,6 +1431,25 @@ mod tests {
     }
 
     #[test]
+    fn a_solo_shows_whichever_monitor_the_focus_is_on() {
+        // The solo carries no monitor of its own, so the keys that walk the
+        // focus walk what is on the glass — and a bank that is not soloed
+        // shows the lot however far the focus moves.
+        let Some(mut app) = playing(config::crossed(), scratch("solo")) else {
+            return;
+        };
+        assert_eq!(app.soloed(), None);
+        play(&mut app, Action::FocusMonitor(1));
+        assert_eq!(app.soloed(), None);
+        play(&mut app, Action::Solo);
+        assert_eq!(app.soloed(), Some(1));
+        play(&mut app, Action::FocusMonitor(0));
+        assert_eq!(app.soloed(), Some(0));
+        play(&mut app, Action::Solo);
+        assert_eq!(app.soloed(), None);
+    }
+
+    #[test]
     fn quit_is_the_one_action_that_stops_the_loop() {
         // The whole vocabulary is playable without a window system now that
         // the run loop is asked for rather than reached for, so the one
@@ -1414,6 +1461,7 @@ mod tests {
         for action in [
             Action::Clear,
             Action::Overlay,
+            Action::Solo,
             Action::Fine,
             Action::Reset,
             Action::Tempo(Step::Faster),

@@ -58,6 +58,11 @@ pub enum Action {
     Tempo(crate::tempo::Step),
     /// Cover the display, or stop covering it.
     Fullscreen,
+    /// Show the focused monitor on the whole display, or go back to the
+    /// tiled bank. A latch and not a select: which monitor is soloed is
+    /// already a question the instrument answers — the focus — and a second
+    /// index for it would be a focus that could disagree with the focus.
+    Solo,
     /// Show or hide the controls overlay drawn over the picture.
     Overlay,
     Quit,
@@ -283,6 +288,17 @@ const COMMANDS: &[Command] = &[
         Action::Fullscreen,
         "cover the display, or stop",
         "fullscreen",
+    ),
+    // Beside f11, because the two are the same kind of thing: what the
+    // display does with the picture, rather than anything the graph does to
+    // make one. It is also the last free key the board has that is not a
+    // letter, and every letter is a knob.
+    cmd(
+        KeyCode::F12,
+        "f12",
+        Action::Solo,
+        "the focused monitor on the whole display, or the tiled bank",
+        "solo",
     ),
     // Backquote because it is the traditional lid over a console, and the
     // last unclaimed key in easy reach of a resting hand.
@@ -561,8 +577,10 @@ mod tests {
         // vocabulary the instrument no longer has.
         assert_eq!(action_for(KeyCode::Quote, false), None);
         assert_eq!(action_for_label("'"), None);
+        assert_eq!(action_for(KeyCode::F11, false), Some(Action::Fullscreen));
+        assert_eq!(action_for(KeyCode::F12, false), Some(Action::Solo));
         // A key no table claims.
-        assert_eq!(action_for(KeyCode::F12, false), None);
+        assert_eq!(action_for(KeyCode::Insert, false), None);
     }
 
     #[test]

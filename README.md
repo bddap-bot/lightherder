@@ -32,7 +32,8 @@ sampling transform, weight) — and each monitor is one render pass summing
 its taps. There is no intermediate blend texture because none is needed. All
 monitors step from the same previous frames, the simultaneous capture a rig
 of real cameras performs, and the window shows the whole bank tiled in a
-grid.
+grid — or one monitor of it on the whole display, which is the same tiling
+with one tile in it.
 
 The graph comes from a preset or a TOML file. `crossed` is the classic
 two-structure rig — each camera watches its own monitor through
@@ -259,8 +260,9 @@ Out of the box, with no configuration:
 | ■ stop | reset every knob |
 | ▶ play | the focused monitor's seed: white blob or camera; lit while it is the blob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
+| ▶▶ forward | the focused monitor on the whole display, or the tiled bank |
 | |◀ track prev | fine mode, on or off |
-| ▶▶ forward, ● record, ▶| track next | nothing |
+| ● record, ▶| track next | nothing |
 
 So the left hand works one monitor, the right hand one camera, and the last
 fader is the switcher crosspoint joining the two the hands are on. The Solo
@@ -470,7 +472,9 @@ program's; a built binary takes them directly.
 
 The resolution is every monitor's size, and so the resolution the whole loop
 runs at. The window's shape has nothing to do with it: the bank is tiled into
-the window, each monitor letterboxed in its cell rather than stretched. Nor is
+the window, each monitor letterboxed in its cell rather than stretched — and
+`f12` solos the focused monitor onto the whole window and back, which is that
+same tiling with one tile in it. Nor is
 it part of a graph — every position here is in screen units and every weight a
 ratio, so it changes how much detail the loop carries and — the grain aside,
 which is hashed per texel and so is finer on a bigger monitor — nothing about
@@ -639,6 +643,7 @@ below assumes a US layout.
 | tab | fine mode for the surface's knobs, on or off |
 | `7` `8` | the tempo: slower / faster, four presses to halve or double it |
 | `f11` | cover the display, or stop covering it |
+| `f12` | the focused monitor on the whole display, or the tiled bank |
 | `` ` `` | the controls overlay, on or off |
 | esc | quit |
 
