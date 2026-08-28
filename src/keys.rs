@@ -299,8 +299,6 @@ const fn axis(
     }
 }
 
-/// `shift` is read by the node keys and no others: which side of the focus a
-/// key means, camera bare and monitor shifted.
 pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
     if let Some(node) = NODE_KEYS.iter().position(|(bound, _)| *bound == key) {
         return Some(if shift {
@@ -329,8 +327,8 @@ enum Binding {
     Command(&'static Command),
 }
 
-/// A leading `"shift "` is stripped for every table, and the one that reads
-/// it keeps it — exactly as [`action_for`] reads the physical key.
+/// Exactly as [`action_for`] reads the physical key, so a label cannot reach
+/// what a key press cannot.
 fn binding(label: &str) -> Option<Binding> {
     let (shift, bare) = match label.strip_prefix("shift ") {
         Some(rest) => (true, rest),
@@ -366,9 +364,8 @@ pub fn labels() -> impl Iterator<Item = &'static str> {
         .chain(NODE_KEYS.iter().map(|(_, label)| *label))
 }
 
-/// What the key spelled `label` does, `"shift num1"` included. `None` for a
-/// label no table claims, which is how a hand-written MIDI map is caught at
-/// load rather than in the middle of a performance.
+/// `None` for a label no table claims, which is how a hand-written MIDI map
+/// is caught at load rather than in the middle of a performance.
 pub fn action_for_label(label: &str) -> Option<Action> {
     Some(match binding(label)? {
         Binding::Node { node, shift: true } => Action::FocusMonitor(node),

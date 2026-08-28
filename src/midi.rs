@@ -65,8 +65,6 @@ pub struct ControlChange {
 
 /// What the surface's controls are wired to.
 ///
-/// Loaded from [`map_path`] when there is a file there, and
-/// [`Map::nano_kontrol2`] when there is not.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Map {
@@ -104,9 +102,7 @@ const fn fader(cc: u8, knob: Knob) -> Fader {
     Fader { cc, knob }
 }
 
-/// Where the performer's map is kept: `$XDG_CONFIG_HOME`, or the `~/.config`
-/// the spec falls back to, with a relative `XDG_CONFIG_HOME` ignored the way
-/// the spec says to.
+/// A relative `XDG_CONFIG_HOME` is ignored the way the spec says to.
 pub fn map_path() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -332,9 +328,7 @@ pub(crate) const TRANSPORT: &[TransportButton] = &[
 
 /// The control number the first strip's control carries, one per block. The
 /// panel is eight strips wide and each block is that eight in a run, so a
-/// block is named by where it starts. [`nano_buttons`] writes its three
-/// button rows off the three below, so the map and the panel cannot
-/// disagree about which row a number is on.
+/// block is named by where it starts.
 const FADERS: u8 = 0;
 const ROTARIES: u8 = 16;
 const S_ROW: u8 = 32;
@@ -459,9 +453,8 @@ fn nano_buttons() -> Vec<Button> {
         // and this is the only button on the surface a hand has to *mean*.
         button(58, "tab"),
     ]);
-    // The Mute and Record rows, record, track-next and the first two markers
-    // are left unbound. Record above all: it is the one button a blind slip
-    // should not find.
+    // Record stays unbound: it is the one button a blind slip should not
+    // find.
     out
 }
 
@@ -878,13 +871,12 @@ impl Midi {
         want
     }
 
-    /// Let go of every fader's grip on its knob. Twice the knobs move
-    /// without the faders moving with them — a reset, and the focus landing
-    /// on a node whose knobs are somewhere else — and once the faders move
-    /// without the knobs: an unplug, after which nothing can vouch for where
-    /// a fader is standing. Without this the next fader brushed throws its
-    /// knob to wherever the fader is standing, which is the reset undone one
-    /// knob at a time.
+    /// Let go of every fader's grip on its knob, for the moments the two
+    /// part company: the knobs moving without the faders — a reset, a focus
+    /// landing on a node whose knobs are elsewhere — or an unplug, after
+    /// which nothing can vouch for where a fader is standing. Without this
+    /// the next fader brushed throws its knob to wherever that fader was
+    /// left, which is the reset undone one knob at a time.
     pub fn release(&mut self) {
         for pickup in &mut self.pickup {
             *pickup = Pickup::default();
@@ -1402,8 +1394,8 @@ mod tests {
         let focus = at(2, 1);
         let pair = crate::lamps::lamp(34) | crate::lamps::lamp(37);
         assert_eq!(midi.wanted(focus, Seed::Dark, false, false), pair);
-        // A finger goes down on blank, whose light nothing else would give
-        // back. All three lamps, not one.
+        // A finger down on a button whose light nothing else would give
+        // back: all three lamps, not one.
         assert_eq!(feed(&mut midi, &params, &cc(62, 127)), [Action::Clear]);
         assert_eq!(
             midi.wanted(focus, Seed::Dark, false, false),
@@ -1657,9 +1649,8 @@ mod tests {
         // The one fader the map leaves alone. A knob quietly wired onto it
         // later is a knob a hand finds by throwing it.
         assert!(!map.fader.iter().any(|f| f.cc == 0));
-        // And the buttons the factory map leaves alone — the Mute and Record
-        // rows whole, record above all: a button bound here is a button a
-        // blind slip can find.
+        // And the buttons it leaves alone: one bound here is one a blind
+        // slip can find.
         for cc in (M_ROW..M_ROW + 8)
             .chain(R_ROW..R_ROW + 8)
             .chain([45, 59, 60, 61])
@@ -2209,9 +2200,6 @@ mod tests {
             feed(&mut midi, &params, &cc(39, 127)),
             [Action::FocusMonitor(3)]
         );
-        // The Mute and Record rows are dead: what they played is gone, and
-        // the surface says so by doing nothing rather than by doing
-        // something else.
         for control in (M_ROW..M_ROW + 8).chain(R_ROW..R_ROW + 8) {
             assert_eq!(feed(&mut midi, &params, &cc(control, 127)), []);
         }

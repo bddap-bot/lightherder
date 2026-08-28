@@ -259,8 +259,8 @@ dead on that graph. Nothing is bound to quit, and twenty buttons are bound to
 nothing at all — the Mute and Record rows whole, and the ● record button
 above all, which is the one a blind slip should not find. Nine of the
 twenty-four knobs are not on the surface, which has sixteen controls and
-binds fifteen of
-them: the three per-channel gain offsets, which colour a rigid gain that is
+binds fifteen of them: the three per-channel gain offsets, which colour a
+rigid gain that is
 itself on a rotary; the bloom radius, which sizes a halo whose amount is; the
 send, which a graph with no inputs would leave a fader holding at nothing;
 and the keyer's four, which wait for a hand that keys more than it bleeds and
@@ -336,8 +336,8 @@ reading the log line. They follow the focus from wherever it moved — a number
 key or the Solo row — and go out when the instrument does. A node past the
 fourth of its half has no button to light, and lights none: a graph may run
 deeper than the surface, and a lamp on the wrong button is worse than no
-lamp. A latched mode lights the button holding
-it by the same rule, off that button's *action*, so a `midi.toml` that moves
+lamp. A latched mode lights the button holding it by the same rule, off that
+button's *action*, so a `midi.toml` that moves
 fine mode moves its lamp with it.
 
 That takes setting up, and the app does the setting up. A nanoKONTROL2 leaves
@@ -355,8 +355,8 @@ drives every button rather than the eight it came for: external mode takes
 every row's lights, not just the Solo row's. So a button the map binds is lit
 while it is held — exactly what internal mode did for it — and the focused
 camera's is lit whether or not a finger is on it. What the instrument adds is
-one lamp;
-what it takes away is nothing. A button the map binds nothing to stays dark,
+one lamp; what it takes away is nothing. A button the map binds nothing to
+stays dark,
 which is now what it means.
 
 The mode goes back to Internal on the way out, so the surface lights its own
@@ -695,6 +695,11 @@ source against what ffmpeg was told to generate, a real file written and
 decoded, and a file that is not there refused at once rather than after the
 first-frame timeout. Outside the pinned shell the ones that need ffmpeg print
 a skip, on the same terms as the GPU tests.
+
+A graph file is tested as a file: one naming every field of the format, off
+its default in every one, loaded through the door the command line uses; and
+one the instrument would refuse, refused there rather than at the GPU. There
+is nothing to round-trip against, because nothing writes one.
 
 The surface is tested without one plugged in, at every layer and then through
 all of them at once. The decoder against the ways a fader sweep actually

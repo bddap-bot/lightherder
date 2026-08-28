@@ -325,7 +325,7 @@ impl Seed {
     /// A blob at the brightness every preset that has one runs at — the one
     /// copy of that number, and what the toggle brings back. A config that
     /// named its own level does not get it back by pressing the button
-    /// twice: a toggle is not an undo, and nothing else here is either.
+    /// twice: a toggle is not an undo.
     pub const BLOB: Seed = Seed::WhiteBlob(0.10);
 
     /// The brightest a blob may be: display white. A spot brighter than the
@@ -839,8 +839,8 @@ impl Params {
     /// A send on a graph with no inputs reads as the connection not made,
     /// which is what it is: there is no crosspoint, so no light comes over
     /// one. That is the only reading here that is not a field — every other
-    /// index is one [`crate::app::App`] bounds-checked before it moved the
-    /// focus onto it, against a graph whose shape the run cannot change.
+    /// index is one the caller has already landed inside this graph, which
+    /// is why they are read straight out.
     pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];

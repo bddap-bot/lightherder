@@ -63,7 +63,6 @@ pub struct App {
     /// instrument runs rather than at startup, so plugging one in mid-piece
     /// is the whole of setting it up.
     midi: Midi,
-    /// Whether shift is down, which only the node keys read.
     shift: bool,
     /// The last knob that moved, which is the one [`Action::ResetLastKnob`] puts
     /// back. `None` until something is turned — on a panel nothing has
@@ -382,10 +381,9 @@ impl App {
         event_loop.exit();
     }
 
-    /// Every knob back to the graph the instrument was started on. The rig
-    /// itself is untouched — the shape of the graph is the launch
-    /// configuration's and nothing at the keys can move it — so the loops
-    /// keep running and what changes is the knobs the next pass reads.
+    /// The rig is untouched: the graph's shape is the launch
+    /// configuration's and nothing at the keys can move it, so the loops
+    /// keep running and only the knobs the next pass reads have moved.
     fn reset(&mut self) {
         self.params = self.initial.clone();
         // The whole panel just moved without a fader moving with it — and
@@ -850,9 +848,6 @@ mod tests {
 
     #[test]
     fn a_reset_puts_the_panel_back_on_the_graph_the_instrument_started_on() {
-        // What Stop takes back: every knob, on every node, to the launch
-        // configuration's own values rather than to the identity — and the
-        // rig it was playing keeps playing.
         let Some(mut app) = playing(config::external()) else {
             return;
         };
@@ -959,8 +954,6 @@ mod tests {
 
     #[test]
     fn the_input_focus_walks_round_the_switcher_and_the_readout_says_where() {
-        // The focus's third index: `p` steps it, and the readout names the
-        // source the send is on.
         let mut three = config::external();
         three.inputs = vec![config::external().inputs[0].clone(); 3];
         three.routing_inputs = vec![vec![0.014], vec![0.0], vec![0.0]];
@@ -972,12 +965,10 @@ mod tests {
         play(&mut app, Action::NextInput);
         assert_eq!(app.focus.input, 2);
         assert!(app.params.describe(app.focus).contains("input 3/3"));
-        // And round, since a step is the only way there is.
         play(&mut app, Action::NextInput);
         assert_eq!(app.focus.input, 0);
         assert!(app.params.describe(app.focus).contains("input 1/3"));
 
-        // A graph with no inputs at all reads out no send.
         let Some(app) = playing(config::single()) else {
             return;
         };
