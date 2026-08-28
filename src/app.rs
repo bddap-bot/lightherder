@@ -250,17 +250,15 @@ impl Live {
         // Fifo stands in for is the compositor's to invent, and the TV's
         // nested gamescope invents a grid of about 72 Hz (#11).
         config.present_mode = wgpu::PresentMode::Fifo;
-        // Focused under that same gamescope, a presented buffer comes back
-        // one composite hop late (app → Xwayland → gamescope 4K → GNOME),
-        // and at the default latency of two the acquire blocks for a whole
-        // slot: every other present lands a slot late and the piece is shown
-        // 40 times a second instead of 60 (GPU and compositor were both
-        // measured idle-fast; the main thread spent the gap in DRM syncobj
-        // waits). A third frame in flight absorbs the chain's round trip;
-        // the extra 16.7 ms to the screen is invisible in an instrument
-        // whose knobs are the input. It buys presents rather than passes —
-        // the tempo survives a slow display path on its own now — so a
-        // compositor this does not suit costs smoothness, not the piece.
+        // Focused under that same gamescope a presented buffer comes back one
+        // composite hop late (app → Xwayland → gamescope 4K → GNOME), and at
+        // the default latency of two the acquire blocks for a whole slot: the
+        // piece is shown 40 times a second instead of 60 (#11 — measured; GPU
+        // and compositor were both idle-fast, the main thread sat in DRM
+        // syncobj waits). A third frame in flight absorbs the round trip, and
+        // the extra 16.7 ms to the screen is invisible in an instrument whose
+        // knobs are the input. It buys presents and not passes, so a chain it
+        // does not suit costs smoothness rather than the piece.
         config.desired_maximum_frame_latency = 3;
         let format = config.format;
         surface.configure(&gpu.device, &config);
@@ -309,11 +307,10 @@ impl Live {
     /// — the display's grid is not the tempo — and is also why the bench can
     /// time exactly this work with no window at all.
     fn pass(&mut self, gpu: &Gpu, params: &Params, sources: &mut [Source]) {
-        // Before the cameras read the bank, not after. Once a pass rather
-        // than once a present: an input with no pacing of its own is
-        // throttled by how often its frames are collected, so collecting
-        // them per pass is what keeps external light on the piece's clock
-        // instead of on the display's.
+        // Before the cameras read the bank, not after. Once a pass rather than
+        // once a present, because a generator that keeps no time of its own —
+        // `lavfi` — runs at the rate its frames are collected: light entering
+        // the graph follows the piece's clock rather than the display's.
         for (i, source) in sources.iter_mut().enumerate() {
             if let Some(frame) = source.frame() {
                 self.feedback.write_input(&gpu.queue, i, frame);
@@ -661,8 +658,8 @@ impl App {
             // Said out loud, because the tempo has nothing on the glass to
             // show it: the piece looks the same played fast or slow, and the
             // rate line a second later is the only other place it appears.
-            Action::Tempo(ratio) => {
-                self.tempo.scale(ratio, Instant::now());
+            Action::Tempo(step) => {
+                self.tempo.step(step, Instant::now());
                 log::info!("sim {:.0} Hz", self.tempo.rate());
             }
             Action::Fullscreen => {
@@ -719,9 +716,11 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    /// The tempo's own wake-up: past the first frame this is where every
-    /// redraw is asked for, so what decides when a pass happens is the
-    /// deadline — not the end of the last pass, and not the swapchain.
+    /// The tempo's backstop wake-up. A frame that went out asks for the next
+    /// one itself, so ordinarily the swapchain paces the loop and this never
+    /// fires; it is here for the window that has no blank to wait for —
+    /// minimised, or a surface gone stale — where the piece would otherwise
+    /// stop rather than go on playing behind it.
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         if let StartCause::ResumeTimeReached { .. } = cause {
             if let Some(live) = self.live.as_ref() {
@@ -765,10 +764,12 @@ impl ApplicationHandler for App {
         );
         log::info!("{}", self.params.describe(self.focus));
         live.window.request_redraw();
-        // The rate is counted from the first frame, not from before the
-        // adapter, the device and the pipelines were built — half a second of
-        // startup inside the first window would report a rate the instrument
-        // never ran at, and that first line is what a deploy is read off.
+        // The tempo and the rate line both start from the first frame, not
+        // from before the adapter, the device and the pipelines were built —
+        // half a second of startup inside the first window would owe the piece
+        // passes it never missed, and would report a rate the instrument never
+        // ran at. That first line is what a deploy is read off.
+        self.tempo.start();
         self.metered = Instant::now();
         self.passes = 0;
         self.presents = 0;
@@ -791,25 +792,31 @@ impl ApplicationHandler for App {
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
-                // What the tempo owes by now: several when the display path
-                // handed out fewer frames than the piece has passes, and
-                // none at all for a redraw the windowing system asked for on
-                // its own — an X11 expose, a `WM_PAINT` — which arrives
-                // whenever it likes. A pass *is* the tempo, so running one
-                // early would play the piece fast; the frame that redraw
-                // wanted goes out with the next deadline's, at most a beat
-                // away.
-                let passes = self.tempo.passes_due(Instant::now());
-                if passes == 0 {
-                    return;
-                }
+                // What the tempo owes by now: several when the display hands
+                // out fewer frames than the piece has passes, none at all
+                // when the piece plays slower than the display. A pass *is*
+                // the tempo, so running one early would play the piece fast
+                // — but the frame goes out either way. The glass keeps the
+                // display's clock and not the tempo's, which is what was
+                // asked for (#16): the picture stays at vsync at whatever
+                // speed the piece is played, and an expose, a resize or the
+                // overlay is answered on the next blank rather than made to
+                // wait for a pass to fall due.
+                let passes = self.tempo.take_due(Instant::now());
                 for _ in 0..passes {
                     live.pass(&self.gpu, &self.params, &mut self.sources);
                 }
-                // One present for the batch: the display shows where the
-                // piece has got to, which is the last pass and not each of
-                // them.
                 let shown = live.show(&self.gpu, self.overlay_shown);
+                // The present is the pacer: under Fifo it waits for the
+                // vertical blank, so asking here for the next frame runs the
+                // loop at the display's rate with no timer in it. A present
+                // that never went out paces nothing, and that case falls
+                // through to the deadline in [`App::about_to_wait`] — which
+                // is what keeps the piece playing behind a minimised window,
+                // and what wakes the loop to try the surface again.
+                if shown {
+                    live.window.request_redraw();
+                }
                 self.meter(passes, shown);
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -835,6 +842,7 @@ impl ApplicationHandler for App {
 mod tests {
     use super::*;
     use crate::config;
+    use crate::tempo::Step;
 
     /// A directory of this test's own, like the slots tests keep.
     fn scratch(what: &str) -> std::path::PathBuf {
@@ -1382,9 +1390,44 @@ mod tests {
             return;
         };
         assert_eq!(app.act(Action::Quit), Flow::Stop);
-        for action in [Action::Clear, Action::Overlay, Action::Fine, Action::Reset] {
+        for action in [
+            Action::Clear,
+            Action::Overlay,
+            Action::Fine,
+            Action::Reset,
+            Action::Tempo(Step::Faster),
+        ] {
             assert_eq!(app.act(action), Flow::Play, "{action:?}");
         }
+    }
+
+    #[test]
+    fn the_tempo_keys_move_the_rate_the_way_they_are_labelled() {
+        // The half the tempo tests cannot reach: which key carries which
+        // step. A table that hands the faster ratio to the slower key is a
+        // wiring mistake no arithmetic test would see.
+        let Some(mut app) = playing(config::single(), scratch("tempo")) else {
+            return;
+        };
+        let started = app.tempo.rate();
+        play(
+            &mut app,
+            action_for(winit::keyboard::KeyCode::Digit8, false).unwrap(),
+        );
+        assert!(
+            app.tempo.rate() > started,
+            "{} is not faster",
+            app.tempo.rate()
+        );
+        play(
+            &mut app,
+            action_for(winit::keyboard::KeyCode::Digit7, false).unwrap(),
+        );
+        assert!(
+            (app.tempo.rate() - started).abs() < 1e-3,
+            "a press each way left {}",
+            app.tempo.rate()
+        );
     }
 
     #[test]

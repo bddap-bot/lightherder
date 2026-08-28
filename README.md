@@ -515,22 +515,25 @@ a twenty-fifth of one at fifteen hundred. That makes the rate a control rather
 than a property of the machine, and `7` and `8` move it while the piece plays;
 `--rate` starts it somewhere other than sixty.
 
-**The display keeps its own clock.** A pass is not a present: passes fall due
-on the wall clock at the tempo, and whatever batch of them has run goes to the
-glass on the next vertical blank. The two were one number until #16, which
-made the swapchain a floor under the tempo — Fifo blocks, so a compositor
-handing out fewer frames than sixty played the piece slow, and the only way
-out was Immediate and a torn frame. A torn frame is a wrong frame in a piece
-whose look is the point, so the present mode stays pinned to Fifo and the
-tempo no longer depends on it: a display path granting 41 frames a second
-runs the sixty passes anyway, one or two to a present.
+**The display keeps its own clock, and it is vsync.** A pass is not a present.
+Passes fall due on the wall clock at the tempo; the picture goes out on every
+vertical blank, showing wherever the piece has got to — several passes at
+once when the tempo is above the grid, the same bank twice when it is below.
+The present is also what paces the loop, since Fifo waits for the blank, so
+there is no timer in the ordinary path at all.
+
+The two were one number until #16, which made the swapchain a floor under the
+tempo: a compositor handing out fewer frames than sixty played the piece slow,
+and the only way out looked like Immediate and a torn frame. A torn frame is a
+wrong frame in a piece whose look is the point, so the present mode stays
+pinned to Fifo and the tempo no longer depends on it — a path granting 41
+frames a second runs the sixty passes anyway, one or two to a present.
 
 The log prints both clocks once a second — `sim 60 Hz of 60, present 72 Hz` —
 and deployed there is no terminal in front of the instrument, so that line is
 the whole of what can be read. The two say different things. Passes under the
 tempo is the machine or the graph, and the piece really is playing slow.
-Presents under the passes is only the display path, which is allowed to show
-fewer frames than the piece has.
+Presents are the display's own rate and say nothing about the piece.
 
 **When the display belongs to another user's session** — as it does on the
 machine this was built for — the instrument runs as that user, who cannot read
@@ -577,8 +580,7 @@ stepped and presented into a target the size of the display.
 | `insanity` (4 monitors, all-to-all) | 0.67 | 2.35 |
 
 A beat at sixty is 16.7 ms, so the heaviest graph that ships uses a seventh of
-one at 4K — which is also the headroom the tempo keys spend: the same graph has
-room for several passes inside one beat. Measured on an RTX 2080. What the numbers leave out is a frame's
+one at 4K. Measured on an RTX 2080. What the numbers leave out is a frame's
 edges rather than its loop: handing the frame to the compositor, and the
 upload of a live input, which for a video file or a capture device is a
 conversion and two writes of a whole frame every frame. `webcam` is measured

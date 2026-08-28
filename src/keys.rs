@@ -52,11 +52,10 @@ pub enum Action {
     Seed,
     /// Blank every monitor, so the loops restart from the seeds alone.
     Clear,
-    /// Take the tempo — passes a second, which is the speed the piece plays
-    /// at — times this ratio. A ratio and not a rate, so one action serves
-    /// both directions and the step means the same thing at either end of
-    /// the range; see [`crate::tempo`], which owns the range and the step.
-    Tempo(f32),
+    /// Move the tempo — passes a second, which is the speed the piece plays
+    /// at — one press. Which way and no more: how far a press moves it is
+    /// [`crate::tempo`]'s, along with the range it moves inside.
+    Tempo(crate::tempo::Step),
     /// Cover the display, or stop covering it.
     Fullscreen,
     /// Show or hide the controls overlay drawn over the picture.
@@ -268,14 +267,14 @@ const COMMANDS: &[Command] = &[
     cmd(
         KeyCode::Digit7,
         "7",
-        Action::Tempo(crate::tempo::STEP_DOWN),
+        Action::Tempo(crate::tempo::Step::Slower),
         "slow the piece down (four presses halve the rate)",
         "rate -",
     ),
     cmd(
         KeyCode::Digit8,
         "8",
-        Action::Tempo(crate::tempo::STEP_UP),
+        Action::Tempo(crate::tempo::Step::Faster),
         "speed the piece up (four presses double the rate)",
         "rate +",
     ),
