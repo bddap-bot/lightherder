@@ -14,21 +14,15 @@ pub enum Action {
     /// the instrument's.
     Set(Knob, f32),
     Nudge(Knob, f32),
-    /// Move the camera knobs' focus to the next camera in the graph.
-    NextCamera,
     /// Move the send's focus to the next input the switcher has. A step and
     /// no outright key: nothing has more than [`crate::config::MAX_INPUTS`]
     /// of them, so a step reaches every one inside four presses.
     NextInput,
-    /// Move the monitor knobs' focus to the next monitor.
-    NextMonitor,
     /// Put the camera knobs' focus on one camera outright, by its place in
     /// the graph. A select rather than a step: a hand that means "that one"
     /// should not have to walk past the ones it does not mean.
     FocusCamera(usize),
-    /// The same for the monitor half of the focus. It had only the step for
-    /// a long while, which left the eight faders' node the one thing on the
-    /// instrument a hand could not point at outright.
+    /// The same for the monitor half of the focus.
     FocusMonitor(usize),
     Reset,
     /// Put the last knob that moved back to its identity, and nothing else.
@@ -83,8 +77,8 @@ pub(crate) const SLOT_KEYS: [(KeyCode, &str); SLOTS] = [
 
 /// How many nodes of each side of the focus have a key of their own. Eight
 /// because that is the keypad, and because it is a control surface's channel
-/// strips — a graph may hold more nodes than either, and `n` and `m` are what
-/// walk to those.
+/// strips. The outright select is the only way to the focus, so this is also
+/// as deep a graph as a hand can reach into.
 pub(crate) const KEYED_NODES: usize = 8;
 
 /// The nodes a key reaches outright: a camera bare, and the monitor of the
@@ -197,22 +191,6 @@ struct Command {
 }
 
 const COMMANDS: &[Command] = &[
-    cmd(
-        KeyCode::KeyN,
-        "n",
-        Action::NextCamera,
-        "focus the next camera",
-        "cam >",
-    ),
-    cmd(
-        KeyCode::KeyM,
-        "m",
-        Action::NextMonitor,
-        "focus the next monitor",
-        "mon >",
-    ),
-    // "p" for the patch, beside the "n" and "m" that walk the focus's other
-    // two indices.
     cmd(
         KeyCode::KeyP,
         "p",
@@ -564,8 +542,6 @@ mod tests {
 
     #[test]
     fn the_commands_do_what_they_say() {
-        assert_eq!(action_for(KeyCode::KeyN, false), Some(Action::NextCamera));
-        assert_eq!(action_for(KeyCode::KeyM, false), Some(Action::NextMonitor));
         assert_eq!(action_for(KeyCode::Space, false), Some(Action::Clear));
         assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape, false), Some(Action::Quit));
@@ -575,6 +551,12 @@ mod tests {
         // vocabulary the instrument no longer has.
         assert_eq!(action_for(KeyCode::Quote, false), None);
         assert_eq!(action_for_label("'"), None);
+        // The focus steps went the same way, leaving the outright select the
+        // one way to either side of the focus.
+        for (key, label) in [(KeyCode::KeyN, "n"), (KeyCode::KeyM, "m")] {
+            assert_eq!(action_for(key, false), None);
+            assert_eq!(action_for_label(label), None);
+        }
         assert_eq!(action_for(KeyCode::F11, false), Some(Action::Fullscreen));
         assert_eq!(action_for(KeyCode::Enter, false), Some(Action::Solo));
         // A key no table claims.

@@ -255,14 +255,14 @@ Out of the box, with no configuration:
 | S 5–8 | focus monitor 1–4 |
 | M 1–8 | recall preset slot 1–8 |
 | R 1–8 | store preset slot 1–8 |
-| marker set, prev, next | next camera, next monitor, blank the monitors |
+| marker next | blank the monitors |
 | ◀◀ rewind | put the last knob turned back to its identity |
 | ■ stop | reset every knob |
 | ▶ play | the focused monitor's seed: white blob or camera; lit while it is the blob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | ▶▶ forward | the focused monitor on the whole display, or the tiled bank |
 | |◀ track prev | fine mode, on or off |
-| ● record, ▶| track next | nothing |
+| ● record, ▶| track next, marker set, marker prev | nothing |
 
 So the left hand works one monitor, the right hand one camera, and the last
 fader is the switcher crosspoint joining the two the hands are on. The Solo
@@ -272,11 +272,9 @@ monitor the faders turn. It used to name eight cameras, but no graph anyone
 plays has more than four, and spending half a row on cameras a graph has not
 got left the *monitor* — the node under all eight faders — with no outright
 address at all. Mute plays slot n back and Record writes over it, the two
-lower rows in order of how much they commit. The first two markers step the
-focus the way `n` and `m` do, which is how a graph deeper than four of either
-is reached — and a select past the end of the graph says so on the log rather
-than going quiet, since the button really is dead on that graph. Nothing on
-the surface is guarded: it has no shift, so a single
+lower rows in order of how much they commit. A select past the end of the
+graph says so on the log rather than going quiet, since the button really is
+dead on that graph. Nothing on the surface is guarded: it has no shift, so a single
 press on the Mute row walks over the live panel and one on the Record row
 walks over a slot. Nothing is bound to quit, and two buttons are bound to
 nothing at all — Record above all, because a button a blind slip can find is
@@ -629,9 +627,7 @@ below assumes a US layout.
 | `e` `t` | headroom, i.e. where the amplifier's rails are |
 | `/` `\` | the crosspoint: how much of the focused camera the focused monitor shows |
 | `9` `0` | the send: how much of the focused input the focused monitor shows |
-| `n` | focus the next camera |
 | `num1`…`num8` | focus camera 1–8 outright |
-| `m` | focus the next monitor |
 | shift `num1`…`num8` | focus monitor 1–8 outright |
 | `p` | focus the next input |
 | `f1`…`f8` | recall preset slot |
@@ -648,10 +644,10 @@ below assumes a US layout.
 | esc | quit |
 
 The knobs act on the focused camera (framing, gain and character) and the
-focused monitor (colour and headroom); `n` and `m` walk the two focuses
-through the graph and `num1`…`num8` pick a node of either side outright, and
-the log line names them. Those eight are keypad keys, so on a board with no
-keypad `n` and `m` are the only way to the nodes. A third focus, `p`, names
+focused monitor (colour and headroom); `num1`…`num8` pick a node of either
+side outright, and the log line names them. Those eight are keypad keys and
+they are the only way to the nodes, so a board with no keypad cannot move the
+focus. A third focus, `p`, names
 the input the send acts on — a step and no outright key, since a switcher has
 four spare inputs at most, and it is a focus of its own rather than a widening
 of the camera's so that riding a send costs you none of the lens.

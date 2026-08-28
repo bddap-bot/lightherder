@@ -398,9 +398,9 @@ fn button(cc: u8, key: impl Into<String>) -> Button {
 /// hands, so each half is four. The graph is why the split is affordable —
 /// nothing anyone plays has more than four cameras or four monitors, while
 /// eight buttons spent on the camera half left the *monitor* half, the node
-/// under all eight faders, with no outright address at all — but a deeper
-/// graph is reached the way a graph deeper than the surface always was, by
-/// the `n` and `m` steps.
+/// under all eight faders, with no outright address at all. A graph deeper
+/// than four is reached from the keyboard's node keys, which the surface's
+/// half-row is a subset of.
 const NODES_PER_HALF: usize = 4;
 
 /// The row is written out of the key table, so a half wider than the table
@@ -436,11 +436,6 @@ fn nano_buttons() -> Vec<Button> {
         out.push(button(R_ROW + slot as u8, format!("shift {key}")));
     }
     out.extend([
-        // The markers: the two that step the focus, and the one that blanks
-        // the glass. The steps stay even though the Solo row selects,
-        // because a graph may run deeper than the half-row each side has.
-        button(60, "n"),
-        button(61, "m"),
         button(62, "space"),
         // The tape row's left half is the reset ladder, in the order of how
         // much it takes back: rewind puts the last knob turned back, stop
@@ -468,9 +463,9 @@ fn nano_buttons() -> Vec<Button> {
         // and this is the only button on the surface a hand has to *mean*.
         button(58, "tab"),
     ]);
-    // Record and track-next are left unbound on purpose. Record above all:
-    // it is the one button a blind slip should not find, and the surface has
-    // no want of another irreversible press.
+    // Record, track-next and the first two markers are left unbound. Record
+    // above all: it is the one button a blind slip should not find, and the
+    // surface has no want of another irreversible press.
     out
 }
 
@@ -1615,7 +1610,7 @@ mod tests {
     #[test]
     fn the_factory_map_is_wired_the_way_the_readme_says() {
         // Every pair, literally. Coverage alone let Hue and Brightness swap
-        // CCs, and "next monitor" and "reset" swap buttons — a surface whose
+        // CCs, and "blank" and "reset" swap buttons — a surface whose
         // silkscreen lies, and every behaviour test still green.
         let map = Map::nano_kontrol2();
         assert_eq!(
@@ -1664,8 +1659,6 @@ mod tests {
         assert_eq!(
             map.button[24..],
             [
-                button(60, "n"),
-                button(61, "m"),
                 button(62, "space"),
                 button(43, "backspace"),
                 button(42, "r"),
@@ -1738,7 +1731,7 @@ mod tests {
     fn a_map_that_would_play_the_wrong_thing_is_refused() {
         // Within one list...
         let mut map = Map::nano_kontrol2();
-        map.button.push(button(48, "n"));
+        map.button.push(button(48, "space"));
         assert!(map.validate().unwrap_err().contains("bound twice"));
 
         // ...and across the two, which matters more: `action_for` looks at
@@ -2200,13 +2193,13 @@ mod tests {
     #[test]
     fn a_button_acts_when_it_goes_down_and_not_when_it_comes_up() {
         let (mut midi, params) = surface();
-        // CC 60 is "marker set", bound to "n".
-        assert_eq!(feed(&mut midi, &params, &cc(60, 127)), [Action::NextCamera]);
-        // Held: a surface that repeats while a finger is on it must not walk
-        // the focus round the graph.
-        assert_eq!(feed(&mut midi, &params, &cc(60, 127)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(60, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(60, 127)), [Action::NextCamera]);
+        // CC 62 is "marker next", bound to "space".
+        assert_eq!(feed(&mut midi, &params, &cc(62, 127)), [Action::Clear]);
+        // Held: a surface that repeats while a finger is on it must not act
+        // again until the finger comes off.
+        assert_eq!(feed(&mut midi, &params, &cc(62, 127)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(62, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(62, 127)), [Action::Clear]);
     }
 
     #[test]
@@ -2260,10 +2253,7 @@ mod tests {
         // a nanoKONTROL2 set to channel 10 dead, and the decoder test alone
         // cannot see one added in `action_for`.
         let (mut midi, params) = surface();
-        assert_eq!(
-            feed(&mut midi, &params, &[0xB9, 60, 127]),
-            [Action::NextCamera]
-        );
+        assert_eq!(feed(&mut midi, &params, &[0xB9, 62, 127]), [Action::Clear]);
         assert_eq!(decode(&[0xB9, 0x07, 0x64]), [message(7, 0x64)]);
     }
 
@@ -2329,9 +2319,9 @@ mod tests {
             "{acted:?}"
         );
         // A button held down at the moment the cable comes out.
-        pipe.write_all(&[0xB0, 60, 127]).unwrap();
+        pipe.write_all(&[0xB0, 62, 127]).unwrap();
         pipe.flush().unwrap();
-        assert_eq!(wait_for(&mut midi, &params), [Action::NextCamera]);
+        assert_eq!(wait_for(&mut midi, &params), [Action::Clear]);
 
         // Unplug: the last writer goes, so the reader's `read` returns 0.
         drop(pipe);
@@ -2346,11 +2336,11 @@ mod tests {
         // Plug it back in. It has to be looked for again — and the button
         // that was down when the cable went must count as a fresh press.
         let mut pipe = plug(&node);
-        pipe.write_all(&[0xB0, 60, 127]).unwrap();
+        pipe.write_all(&[0xB0, 62, 127]).unwrap();
         pipe.flush().unwrap();
         assert_eq!(
             wait_for(&mut midi, &params),
-            [Action::NextCamera],
+            [Action::Clear],
             "the surface did not come back"
         );
         // And every fader starts again from wherever the knob is: this one

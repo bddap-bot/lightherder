@@ -624,13 +624,6 @@ impl App {
         match action {
             Action::Nudge(knob, delta) => self.turned(knob, |p, f| p.nudge(knob, delta, f)),
             Action::Set(knob, value) => self.turned(knob, |p, f| p.set(knob, value, f)),
-            Action::NextCamera => {
-                let camera = (self.focus.camera + 1) % self.params.cameras.len();
-                self.refocus(Focus {
-                    camera,
-                    ..self.focus
-                });
-            }
             Action::NextInput => match self.params.inputs.is_empty() {
                 // Said out loud, the way a select past the end of the graph
                 // is: a key that quietly does nothing is a key a performer
@@ -646,13 +639,6 @@ impl App {
             },
             Action::FocusCamera(camera) => self.focus_camera(camera),
             Action::FocusMonitor(monitor) => self.focus_monitor(monitor),
-            Action::NextMonitor => {
-                let monitor = (self.focus.monitor + 1) % self.params.monitors.len();
-                self.refocus(Focus {
-                    monitor,
-                    ..self.focus
-                });
-            }
             Action::Store(slot) => match crate::slots::store(&self.slots, slot, &self.params) {
                 Ok(path) => log::info!("slot {}: wrote {}", slot + 1, path.display()),
                 Err(why) => log::error!("slot {}: {why}", slot + 1),
