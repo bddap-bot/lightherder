@@ -235,7 +235,7 @@ const COMMANDS: &[Command] = &[
     // The tempo, on the two digits the gain channels and the send left
     // between them: the one control that acts on the whole piece rather than
     // on a node of the graph, and the digits are where the other levels
-    // already are. On the surface it is the track pair.
+    // already are.
     cmd(
         KeyCode::Digit7,
         "7",

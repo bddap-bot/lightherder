@@ -242,7 +242,7 @@ Out of the box, with no configuration:
 | ▶ play | the focused monitor's seed: white blob or camera; lit while it is the blob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | ▶▶ forward | the focused monitor on the whole display, or the tiled bank |
-| |◀ track prev, ▶| track next | the tempo: slower / faster, four presses to halve or double it |
+| \|◀ track prev, ▶\| track next | the tempo: slower / faster, four presses to halve or double it |
 | ● marker set | write what the display is showing to a file |
 | ● record | record the display for as long as it is held down |
 | M 1–8, R 1–8, marker prev | nothing |
@@ -259,12 +259,11 @@ four a half is still every node anyone plays. A select past the end of the
 graph says so on the log rather than going quiet, since the button really is
 dead on that graph. Nothing is bound to quit, and seventeen buttons are bound
 to nothing at all — the Mute and Record rows whole, and marker prev. Nine of
-the
-twenty-four knobs are not on the surface, which has sixteen controls and
+the twenty-four knobs are not on the surface, which has sixteen controls and
 binds fifteen of them: the three per-channel gain offsets, which colour a
-rigid gain that is
-itself on a rotary; the bloom radius, which sizes a halo whose amount is; the
-send, which a graph with no inputs would leave a fader holding at nothing;
+rigid gain that is itself on a rotary; the bloom radius, which sizes a halo
+whose amount is; the send, which a graph with no inputs would leave a fader
+holding at nothing;
 and the keyer's four, which wait for a hand that keys more than it bleeds and
 swaps this map for its own. They all stay on the keys.
 
@@ -308,7 +307,7 @@ control that acts on the whole piece rather than on a node of the graph, and
 the TRACK silkscreen is the one pair the surface prints as a pair — a minus
 and a plus want a pair to sit on. `--rate` is where the piece starts; the
 track pair is where it is played from there, and the rate line a second later
-is the readout. Nothing is latched and nothing lights: a tempo is heard.
+is the readout. Nothing latches: a tempo is heard, not held.
 
 ### The lit buttons
 
@@ -477,8 +476,9 @@ integrated adapter instead.
 pass at a time — the camera pulls back 0.6% and turns 0.05 rad per *pass*, and
 the trail decays per pass — so a spiral drawn in a second at sixty is drawn in
 a quarter of one at 240, the top of the range. That makes the rate a control
-rather than a property of the machine: `7` and `8` move it while the piece
-plays, and `--rate` starts it somewhere other than sixty.
+rather than a property of the machine: the surface's track pair and the `7`
+and `8` keys move it while the piece plays, and `--rate` starts it somewhere
+other than sixty.
 
 **The display keeps its own clock, and it is vsync.** A pass is not a present.
 Passes fall due on the wall clock at the tempo; the picture goes out on every
@@ -597,10 +597,12 @@ below assumes a US layout.
 | `r` | reset every knob |
 | `;` | the focused monitor's seed: a white blob or dark glass |
 | backspace | reset the last knob turned, to its identity |
-| `7` `8` | the tempo: slower / faster, four presses to halve or double it — the track pair on the surface |
+| `7` `8` | the tempo: slower / faster, four presses to halve or double it |
 | `f11` | cover the display, or stop covering it |
 | enter | the focused monitor on the whole display, or the tiled bank |
 | `` ` `` | the controls overlay, on or off |
+| `f7` | write what the display is showing to a file |
+| `f8` | record the display for as long as it is held down |
 | esc | quit |
 
 The knobs act on the focused camera (framing, gain and character) and the

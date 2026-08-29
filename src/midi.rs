@@ -442,10 +442,9 @@ fn nano_buttons() -> Vec<Button> {
         // two rigs that monitor is — a toggle with no indicator on a
         // fullscreen display being a footgun.
         button(41, ";"),
-        // The tempo, on the one pair of buttons the silkscreen prints as a
-        // pair: the rate is the one control that moves the whole piece
-        // rather than a node of the graph, and a minus and a plus want a
-        // pair to sit on.
+        // The tempo, on the one pair the silkscreen groups. A step and not
+        // the free fader, so `--rate` stays where the piece starts rather
+        // than being thrown to wherever a cap was left standing.
         button(58, "7"),
         button(59, "8"),
         // The capture pair, on the two buttons whose silkscreen already says

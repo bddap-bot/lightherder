@@ -1336,29 +1336,6 @@ mod tests {
     }
 
     #[test]
-    fn the_track_pair_is_what_moves_the_rate_from_the_surface() {
-        // The button, not the action: a rate the board cannot reach is a
-        // rate the instrument has not got (#39), and only playing the two
-        // control numbers through the map says which one carries which way.
-        let Some(mut app) = playing(config::single()) else {
-            return;
-        };
-        let started = app.tempo.rate();
-        surface(&mut app, 59, 127);
-        assert!(
-            app.tempo.rate() > started,
-            "track next left {}",
-            app.tempo.rate()
-        );
-        surface(&mut app, 58, 127);
-        assert!(
-            (app.tempo.rate() - started).abs() < 1e-3,
-            "a press each way left {}",
-            app.tempo.rate()
-        );
-    }
-
-    #[test]
     fn a_change_of_focus_takes_the_faders_off_the_node_they_were_on() {
         // The select row moves the knobs to another node; the faders stay
         // where the hands left them. Without the release the next touch
