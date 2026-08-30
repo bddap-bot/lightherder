@@ -1622,16 +1622,6 @@ mod tests {
                 "send",
             ]
         );
-        // And every key that does one thing is a button here, because the
-        // board is what a control exists on. Quit is the one that is not, on
-        // purpose: it stops the instrument rather than playing it, and a
-        // slipped finger on a control surface must not be able to.
-        let unreachable: Vec<&str> = crate::keys::commands()
-            .filter(|(_, action)| *action != Action::Quit)
-            .filter(|(label, _)| !map.button.iter().any(|b| b.key == *label))
-            .map(|(label, _)| label)
-            .collect();
-        assert_eq!(unreachable, [""; 0]);
         // And every control the map names is one the surface has. The rows
         // are eight-wide blocks of control numbers, so a key table grown
         // past eight walks off the end of its block into numbers no button
@@ -1645,6 +1635,23 @@ mod tests {
             assert!(spot(cc).is_some(), "cc {cc} is nowhere on the panel");
         }
         Midi::new(map).unwrap();
+    }
+
+    #[test]
+    fn every_command_but_quit_has_a_button() {
+        let map = Map::nano_kontrol2();
+        let missing: Vec<&str> = crate::keys::command_labels()
+            .filter(|label| action_for_label(label) != Some(Action::Quit))
+            .filter(|label| !map.button.iter().any(|b| b.key == *label))
+            .collect();
+        assert!(missing.is_empty(), "{missing:?}");
+        // Quit is the one key the board is not held to, on purpose: it stops
+        // the instrument rather than playing it, and a slipped finger on a
+        // control surface must not be able to.
+        assert!(!map
+            .button
+            .iter()
+            .any(|b| action_for_label(&b.key) == Some(Action::Quit)));
     }
 
     #[test]

@@ -162,7 +162,8 @@ straight to ffmpeg, and `{ format = "lavfi", device = "movie=/private.mp4" }`
 puts a local file on screen. Read a graph before you play it.
 
 Injection level is the crosspoint the input is sent on — a knob like the
-other crosspoint, on `9` and `0` against the focused monitor. Near unity a little goes a long way: the
+other crosspoint, on `9` and `0` against the focused monitor. Near unity a
+little goes a long way: the
 `external` preset sends a seventieth of the bars — 0.014 — onto a monitor
 whose loop runs at 0.985 and whose glass is dark, so the trickle goes round
 seventy times before it fades and every photon on that monitor came in from
@@ -606,9 +607,9 @@ focused monitor (colour and headroom); `num1`…`num8` pick a node of either
 side outright, and the log line names them. Those eight are keypad keys and
 they are the keyboard's only way to the nodes, so a board with no keypad and
 no surface plays camera one and monitor one, on the knobs the config gave
-them. The input the send acts on is the first, and nothing moves it: no
-button on the board ever selected an input, so the step that only the
-keyboard had is gone until the surface has a row to put one on.
+them. The send acts on the first input and nothing selects another: no
+button on the board reaches one, and a control the board cannot reach is not
+a control.
 
 Splitter weights are config; the two crosspoints are not — `/` and `\` sweep
 the camera one, which is fader 8 on the surface, and `9` and `0` sweep the

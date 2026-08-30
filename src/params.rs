@@ -454,12 +454,9 @@ impl Default for Params {
 /// fields on purpose: bare `usize`s in a row would let a swapped pair compile
 /// and silently edit the wrong node.
 ///
-/// Three because the switcher has two kinds of column and a hand plays both:
-/// the camera and the monitor name a crosspoint between them, and the input
-/// and the monitor name the crosspoint outside light enters on. The camera
-/// half stays a camera rather than widening into "a source", so focusing an
-/// input costs the sixteen camera knobs nothing — a performer rides a send
-/// with one hand while the other is still on the lens.
+/// The input leg is the first input and stays there: nothing on the board
+/// selects one, so the send is the crosspoint outside light enters on and
+/// the graph decides which source that is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Focus {
     pub camera: usize,
@@ -499,7 +496,7 @@ pub enum Knob {
     /// them: how much of the focused camera the focused monitor shows.
     Route,
     /// The same, on the switcher's other kind of column: how much of the
-    /// focused input the focused monitor shows. This is the level outside
+    /// first input the focused monitor shows. This is the level outside
     /// light enters the graph at, and the only knob that is not there on
     /// every graph — a rig with no inputs has no send to turn.
     Send,
@@ -1266,22 +1263,12 @@ mod tests {
         });
         assert!(at.contains("cam 2/2"));
         assert!(at.contains("mon 1/2"));
-        // A rig with no input half has no send to read out, so the line does
-        // not offer a level for a source that is not there.
         assert!(!at.contains("send"));
 
         let mut three = crate::config::external();
         three.inputs = vec![three.inputs[0].clone(); 3];
         three.routing_inputs = vec![vec![0.014], vec![0.0], vec![0.0]];
-        for input in 0..3 {
-            let focus = Focus {
-                camera: 0,
-                monitor: 0,
-                input,
-            };
-            let expect = format!("input {}/3", input + 1);
-            assert!(three.describe(focus).contains(&expect), "{expect}");
-        }
+        assert!(three.describe(Focus::default()).contains("input 1/3"));
     }
 
     /// Settings that between them exercise both signs of the phase, a

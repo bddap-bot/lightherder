@@ -74,7 +74,6 @@ pub struct App {
     /// How big every monitor is — see [`crate::cli::DEFAULT_RESOLUTION`], and
     /// note that the window has nothing to do with it.
     resolution: (u32, u32),
-    /// Whether the window covers the display.
     fullscreen: bool,
     /// Whether the controls overlay is showing. Off at startup: the overlay
     /// is help, and help is what the cycle button and backquote are for.
@@ -128,10 +127,9 @@ fn attributes(fullscreen: bool) -> Result<winit::window::WindowAttributes, Strin
     // Borderless rather than exclusive: the instrument renders at its own
     // resolution and lets the compositor scale, so taking a video mode from
     // the display would buy nothing.
-    let cover = fullscreen.then_some(winit::window::Fullscreen::Borderless(None));
     Ok(Window::default_attributes()
         .with_title("lightherder")
-        .with_fullscreen(cover))
+        .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))))
 }
 
 /// Hand the run loop over. Native gives it the thread, which it keeps until

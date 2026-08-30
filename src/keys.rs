@@ -162,7 +162,7 @@ const AXES: &[Axis] = &[
     // The amplifier's rail, beside the phosphor curve it feeds.
     axis(Knob::Headroom, KeyCode::KeyE, "e", KeyCode::KeyT, "t"),
     // The switcher's crosspoints: how much of the focused camera, and how
-    // much of the focused input, the focused monitor shows. On the spare
+    // much of the first input, the focused monitor shows. On the spare
     // keys at the right edge, away from the knobs, because they are the two
     // controls that act on a pair of nodes rather than on either of them.
     axis(Knob::Route, KeyCode::Slash, "/", KeyCode::Backslash, "\\"),
@@ -237,8 +237,6 @@ const COMMANDS: &[Command] = &[
         "speed the piece up (four presses double the rate)",
         "rate +",
     ),
-    // Enter, and not f12: this table is printed as the web build's own
-    // legend, and every browser swallows f12 for its debugger.
     cmd(
         KeyCode::Enter,
         "enter",
@@ -366,15 +364,15 @@ fn binding(label: &str) -> Option<Binding> {
 pub fn labels() -> impl Iterator<Item = &'static str> {
     AXES.iter()
         .flat_map(|axis| [axis.down.1, axis.up.1])
-        .chain(COMMANDS.iter().map(|c| c.label))
+        .chain(command_labels())
         .chain(NODE_KEYS.iter().map(|(_, label)| *label))
 }
 
-/// The keys that do one thing each, and what each one does. The surface is
-/// held to this: a command with no button on the board is one nobody plays.
-#[cfg(test)]
-pub(crate) fn commands() -> impl Iterator<Item = (&'static str, Action)> {
-    COMMANDS.iter().map(|c| (c.label, c.action))
+/// The keys that do one thing each. Named apart from the rest of the
+/// vocabulary because the surface is held to them: a command with no button
+/// on the board is one nobody plays.
+pub fn command_labels() -> impl Iterator<Item = &'static str> {
+    COMMANDS.iter().map(|c| c.label)
 }
 
 /// `None` for a label no table claims, which is how a hand-written MIDI map
@@ -506,8 +504,6 @@ mod tests {
         assert_eq!(action_for(KeyCode::Escape, false), Some(Action::Quit));
         assert_eq!(action_for(KeyCode::Semicolon, false), Some(Action::Seed));
         assert_eq!(action_for(KeyCode::Enter, false), Some(Action::Solo));
-        // A key no table claims, which is also how a hand-written MIDI map
-        // naming one is caught at load.
         assert_eq!(action_for(KeyCode::F12, false), None);
         assert_eq!(action_for_label("f12"), None);
     }
