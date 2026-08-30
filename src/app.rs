@@ -560,19 +560,6 @@ impl App {
         match action {
             Action::Nudge(knob, delta) => self.turned(knob, |p, f| p.nudge(knob, delta, f)),
             Action::Set(knob, value) => self.turned(knob, |p, f| p.set(knob, value, f)),
-            Action::NextInput => match self.params.inputs.is_empty() {
-                // Said out loud, the way a select past the end of the graph
-                // is: a key that quietly does nothing is a key a performer
-                // reads as broken.
-                true => log::info!("no inputs: nothing is plugged into the switcher"),
-                false => {
-                    let input = (self.focus.input + 1) % self.params.inputs.len();
-                    self.refocus(Focus {
-                        input,
-                        ..self.focus
-                    });
-                }
-            },
             Action::FocusCamera(camera) => self.focus_camera(camera),
             Action::FocusMonitor(monitor) => self.focus_monitor(monitor),
             Action::Reset => self.reset(),
@@ -600,13 +587,6 @@ impl App {
                 // the rate by less than a whole pass a second and a readout
                 // that did not move would read as a dead key.
                 log::info!("sim {:.1} Hz", self.tempo.rate());
-            }
-            Action::Fullscreen => {
-                self.fullscreen = !self.fullscreen;
-                if let Some(live) = self.live.as_ref() {
-                    live.window.set_fullscreen(borderless(self.fullscreen));
-                    live.window.set_cursor_visible(!self.fullscreen);
-                }
             }
             Action::Solo => {
                 self.solo = !self.solo;
@@ -890,10 +870,7 @@ impl ApplicationHandler for App {
                 // do: a repeated toggle is a control strobing at the
                 // keyboard's rate, and a repeated capture is a directory of
                 // them.
-                let sweeps = matches!(
-                    action,
-                    Action::Nudge(..) | Action::Tempo(_) | Action::NextInput
-                );
+                let sweeps = matches!(action, Action::Nudge(..) | Action::Tempo(_));
                 if event.repeat && !sweeps {
                     return;
                 }
@@ -1083,20 +1060,13 @@ mod tests {
     }
 
     #[test]
-    fn the_input_focus_walks_round_the_switcher_and_the_readout_says_where() {
+    fn the_readout_names_the_input_the_send_is_on() {
         let mut three = config::external();
         three.inputs = vec![config::external().inputs[0].clone(); 3];
         three.routing_inputs = vec![vec![0.014], vec![0.0], vec![0.0]];
-        let Some(mut app) = playing(three) else {
+        let Some(app) = playing(three) else {
             return;
         };
-
-        play(&mut app, Action::NextInput);
-        play(&mut app, Action::NextInput);
-        assert_eq!(app.focus.input, 2);
-        assert!(app.params.describe(app.focus).contains("input 3/3"));
-        play(&mut app, Action::NextInput);
-        assert_eq!(app.focus.input, 0);
         assert!(app.params.describe(app.focus).contains("input 1/3"));
 
         let Some(app) = playing(config::single()) else {

@@ -13,10 +13,6 @@ pub enum Action {
     /// the instrument's.
     Set(Knob, f32),
     Nudge(Knob, f32),
-    /// Move the send's focus to the next input the switcher has. A step and
-    /// no outright key: nothing has more than [`crate::config::MAX_INPUTS`]
-    /// of them, so a step reaches every one inside four presses.
-    NextInput,
     /// Put the camera knobs' focus on one camera outright, by its place in
     /// the graph. A select rather than a step: a hand that means "that one"
     /// should not have to walk past the ones it does not mean.
@@ -39,8 +35,6 @@ pub enum Action {
     /// piece plays at. How far, and the range it moves inside, are
     /// [`crate::tempo`]'s.
     Tempo(crate::tempo::Step),
-    /// Cover the display, or stop covering it.
-    Fullscreen,
     /// Show the focused monitor on the whole display, or go back to the
     /// tiled bank. A latch and not a select — see [`crate::app`], where the
     /// monitor it shows is the focus and not an index of its own.
@@ -193,13 +187,6 @@ struct Command {
 
 const COMMANDS: &[Command] = &[
     cmd(
-        KeyCode::KeyP,
-        "p",
-        Action::NextInput,
-        "focus the next input",
-        "in >",
-    ),
-    cmd(
         KeyCode::Space,
         "space",
         Action::Clear,
@@ -250,16 +237,8 @@ const COMMANDS: &[Command] = &[
         "speed the piece up (four presses double the rate)",
         "rate +",
     ),
-    cmd(
-        KeyCode::F11,
-        "f11",
-        Action::Fullscreen,
-        "cover the display, or stop",
-        "fullscreen",
-    ),
-    // Enter, and not the f12 beside f11 that it wants to be: this table is
-    // printed as the web build's own legend, and every browser swallows f12
-    // for its debugger.
+    // Enter, and not the f12 that it wants to be: this table is printed as the
+    // web build.s own legend, and every browser swallows f12 for its debugger.
     cmd(
         KeyCode::Enter,
         "enter",
@@ -519,21 +498,36 @@ mod tests {
         assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
         assert_eq!(action_for(KeyCode::Escape, false), Some(Action::Quit));
         assert_eq!(action_for(KeyCode::Semicolon, false), Some(Action::Seed));
-        // The seed's other key went with its fader, and free means free: a
-        // key still resolving to the knob that was deleted would be a
-        // vocabulary the instrument no longer has.
-        assert_eq!(action_for(KeyCode::Quote, false), None);
-        assert_eq!(action_for_label("'"), None);
-        // The focus steps went the same way, leaving the outright select the
-        // one way to either side of the focus.
-        for (key, label) in [(KeyCode::KeyN, "n"), (KeyCode::KeyM, "m")] {
-            assert_eq!(action_for(key, false), None);
-            assert_eq!(action_for_label(label), None);
-        }
-        assert_eq!(action_for(KeyCode::F11, false), Some(Action::Fullscreen));
         assert_eq!(action_for(KeyCode::Enter, false), Some(Action::Solo));
-        // A key no table claims.
-        assert_eq!(action_for(KeyCode::F12, false), None);
+        // A key still resolving to a deleted control would be a vocabulary the
+        // instrument no longer has.
+        for (key, label) in [
+            (KeyCode::Quote, "'"),
+            (KeyCode::KeyN, "n"),
+            (KeyCode::KeyM, "m"),
+            (KeyCode::KeyP, "p"),
+            (KeyCode::F11, "f11"),
+            (KeyCode::F12, "f12"),
+        ] {
+            assert_eq!(action_for(key, false), None, "{label}");
+            assert_eq!(action_for_label(label), None, "{label}");
+        }
+    }
+
+    #[test]
+    fn every_command_key_is_a_button_on_the_board() {
+        // The board is the existence criterion: a command only the keyboard can
+        // reach is one nobody plays. Quit is the exception on purpose — it
+        // stops the instrument rather than playing it, and a slipped finger on
+        // the surface must not be able to.
+        let map = crate::midi::Map::nano_kontrol2();
+        let unreachable: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|c| c.action != Action::Quit)
+            .filter(|c| !map.button.iter().any(|b| b.key == c.label))
+            .map(|c| c.label)
+            .collect();
+        assert!(unreachable.is_empty(), "{unreachable:?}");
     }
 
     #[test]

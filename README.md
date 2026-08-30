@@ -410,10 +410,9 @@ nix-shell --run "cargo run --release my-graph.toml"      # your own
 ```
 
 It comes up covering the display, because an instrument on a stage is the only
-thing on its screen. `f11` switches that off and on while it runs, which is how
-you get at the rest of the machine without stopping the piece; `esc` quits, and
-nothing on the factory MIDI map does — a slipped finger mid-performance must
-not be able to stop the instrument.
+thing on its screen; `--windowed` is how you get at the rest of the machine.
+`esc` quits, and nothing on the factory MIDI map does — a slipped finger
+mid-performance must not be able to stop the instrument.
 
 ```
 nix-shell --run "cargo run --release -- --windowed crossed"
@@ -592,13 +591,11 @@ below assumes a US layout.
 | `9` `0` | the send: how much of the focused input the focused monitor shows |
 | `num1`…`num8` | focus camera 1–8 outright |
 | shift `num1`…`num8` | focus monitor 1–8 outright |
-| `p` | focus the next input |
 | space | blank every monitor |
 | `r` | reset every knob |
 | `;` | the focused monitor's seed: a white blob or dark glass |
 | backspace | reset the last knob turned, to its identity |
 | `7` `8` | the tempo: slower / faster, four presses to halve or double it |
-| `f11` | cover the display, or stop covering it |
 | enter | the focused monitor on the whole display, or the tiled bank |
 | `` ` `` | the controls overlay, on or off |
 | `f7` | write what the display is showing to a file |
