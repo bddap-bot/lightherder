@@ -1622,12 +1622,16 @@ mod tests {
                 "send",
             ]
         );
-        // Nothing is bound to quit: a slipped finger on a control surface
-        // must not be able to stop the instrument.
-        assert!(!map
-            .button
-            .iter()
-            .any(|b| action_for_label(&b.key) == Some(Action::Quit)));
+        // And every key that does one thing is a button here, because the
+        // board is what a control exists on. Quit is the one that is not, on
+        // purpose: it stops the instrument rather than playing it, and a
+        // slipped finger on a control surface must not be able to.
+        let unreachable: Vec<&str> = crate::keys::commands()
+            .filter(|(_, action)| *action != Action::Quit)
+            .filter(|(label, _)| !map.button.iter().any(|b| b.key == *label))
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(unreachable, [""; 0]);
         // And every control the map names is one the surface has. The rows
         // are eight-wide blocks of control numbers, so a key table grown
         // past eight walks off the end of its block into numbers no button

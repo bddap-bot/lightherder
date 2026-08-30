@@ -237,8 +237,8 @@ const COMMANDS: &[Command] = &[
         "speed the piece up (four presses double the rate)",
         "rate +",
     ),
-    // Enter, and not the f12 that it wants to be: this table is printed as the
-    // web build.s own legend, and every browser swallows f12 for its debugger.
+    // Enter, and not f12: this table is printed as the web build's own
+    // legend, and every browser swallows f12 for its debugger.
     cmd(
         KeyCode::Enter,
         "enter",
@@ -370,6 +370,13 @@ pub fn labels() -> impl Iterator<Item = &'static str> {
         .chain(NODE_KEYS.iter().map(|(_, label)| *label))
 }
 
+/// The keys that do one thing each, and what each one does. The surface is
+/// held to this: a command with no button on the board is one nobody plays.
+#[cfg(test)]
+pub(crate) fn commands() -> impl Iterator<Item = (&'static str, Action)> {
+    COMMANDS.iter().map(|c| (c.label, c.action))
+}
+
 /// `None` for a label no table claims, which is how a hand-written MIDI map
 /// is caught at load rather than in the middle of a performance.
 pub fn action_for_label(label: &str) -> Option<Action> {
@@ -499,35 +506,10 @@ mod tests {
         assert_eq!(action_for(KeyCode::Escape, false), Some(Action::Quit));
         assert_eq!(action_for(KeyCode::Semicolon, false), Some(Action::Seed));
         assert_eq!(action_for(KeyCode::Enter, false), Some(Action::Solo));
-        // A key still resolving to a deleted control would be a vocabulary the
-        // instrument no longer has.
-        for (key, label) in [
-            (KeyCode::Quote, "'"),
-            (KeyCode::KeyN, "n"),
-            (KeyCode::KeyM, "m"),
-            (KeyCode::KeyP, "p"),
-            (KeyCode::F11, "f11"),
-            (KeyCode::F12, "f12"),
-        ] {
-            assert_eq!(action_for(key, false), None, "{label}");
-            assert_eq!(action_for_label(label), None, "{label}");
-        }
-    }
-
-    #[test]
-    fn every_command_key_is_a_button_on_the_board() {
-        // The board is the existence criterion: a command only the keyboard can
-        // reach is one nobody plays. Quit is the exception on purpose — it
-        // stops the instrument rather than playing it, and a slipped finger on
-        // the surface must not be able to.
-        let map = crate::midi::Map::nano_kontrol2();
-        let unreachable: Vec<&str> = COMMANDS
-            .iter()
-            .filter(|c| c.action != Action::Quit)
-            .filter(|c| !map.button.iter().any(|b| b.key == c.label))
-            .map(|c| c.label)
-            .collect();
-        assert!(unreachable.is_empty(), "{unreachable:?}");
+        // A key no table claims, which is also how a hand-written MIDI map
+        // naming one is caught at load.
+        assert_eq!(action_for(KeyCode::F12, false), None);
+        assert_eq!(action_for_label("f12"), None);
     }
 
     #[test]

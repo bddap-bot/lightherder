@@ -22,13 +22,6 @@ use crate::params::{Focus, Knob, Params, Seed};
 use crate::present::Present;
 use crate::tempo::Tempo;
 
-/// Borderless rather than exclusive: the instrument renders at its own
-/// resolution and lets the compositor scale, so taking a video mode from the
-/// display would buy nothing and cost a mode switch on every toggle.
-fn borderless(fullscreen: bool) -> Option<winit::window::Fullscreen> {
-    fullscreen.then_some(winit::window::Fullscreen::Borderless(None))
-}
-
 /// Close a capture and say where it went, which is the only report a
 /// performer on a fullscreen display gets of one.
 fn finished(capture: Capture) {
@@ -81,8 +74,7 @@ pub struct App {
     /// How big every monitor is — see [`crate::cli::DEFAULT_RESOLUTION`], and
     /// note that the window has nothing to do with it.
     resolution: (u32, u32),
-    /// Whether the window covers the display. Kept here rather than asked of
-    /// the window, because it is also what the window is *created* with.
+    /// Whether the window covers the display.
     fullscreen: bool,
     /// Whether the controls overlay is showing. Off at startup: the overlay
     /// is help, and help is what the cycle button and backquote are for.
@@ -133,9 +125,13 @@ fn attributes(_fullscreen: bool) -> Result<winit::window::WindowAttributes, Stri
 
 #[cfg(not(target_arch = "wasm32"))]
 fn attributes(fullscreen: bool) -> Result<winit::window::WindowAttributes, String> {
+    // Borderless rather than exclusive: the instrument renders at its own
+    // resolution and lets the compositor scale, so taking a video mode from
+    // the display would buy nothing.
+    let cover = fullscreen.then_some(winit::window::Fullscreen::Borderless(None));
     Ok(Window::default_attributes()
         .with_title("lightherder")
-        .with_fullscreen(borderless(fullscreen)))
+        .with_fullscreen(cover))
 }
 
 /// Hand the run loop over. Native gives it the thread, which it keeps until
@@ -1057,22 +1053,6 @@ mod tests {
             app.params.knob(Knob::Send, app.focus),
             Knob::Send.identity()
         );
-    }
-
-    #[test]
-    fn the_readout_names_the_input_the_send_is_on() {
-        let mut three = config::external();
-        three.inputs = vec![config::external().inputs[0].clone(); 3];
-        three.routing_inputs = vec![vec![0.014], vec![0.0], vec![0.0]];
-        let Some(app) = playing(three) else {
-            return;
-        };
-        assert!(app.params.describe(app.focus).contains("input 1/3"));
-
-        let Some(app) = playing(config::single()) else {
-            return;
-        };
-        assert!(!app.params.describe(app.focus).contains("send"));
     }
 
     #[test]

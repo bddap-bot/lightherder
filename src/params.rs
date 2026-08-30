@@ -1259,20 +1259,29 @@ mod tests {
     #[test]
     fn the_log_line_names_the_focus() {
         let params = crate::config::crossed();
-        assert!(params
-            .describe(Focus {
-                camera: 1,
+        let at = params.describe(Focus {
+            camera: 1,
+            monitor: 0,
+            input: 0,
+        });
+        assert!(at.contains("cam 2/2"));
+        assert!(at.contains("mon 1/2"));
+        // A rig with no input half has no send to read out, so the line does
+        // not offer a level for a source that is not there.
+        assert!(!at.contains("send"));
+
+        let mut three = crate::config::external();
+        three.inputs = vec![three.inputs[0].clone(); 3];
+        three.routing_inputs = vec![vec![0.014], vec![0.0], vec![0.0]];
+        for input in 0..3 {
+            let focus = Focus {
+                camera: 0,
                 monitor: 0,
-                input: 0,
-            })
-            .contains("cam 2/2"));
-        assert!(params
-            .describe(Focus {
-                camera: 1,
-                monitor: 0,
-                input: 0,
-            })
-            .contains("mon 1/2"));
+                input,
+            };
+            let expect = format!("input {}/3", input + 1);
+            assert!(three.describe(focus).contains(&expect), "{expect}");
+        }
     }
 
     /// Settings that between them exercise both signs of the phase, a
