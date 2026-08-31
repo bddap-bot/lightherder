@@ -9,9 +9,15 @@ use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Params, Seed, 
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
-/// Cameras have no cap of their own: they only reach the GPU as taps, and
-/// [`MAX_TAPS`] already bounds those.
 pub const MAX_MONITORS: usize = 8;
+
+/// One camera per key, by definition rather than by assertion so the tie
+/// cannot drift: a ninth camera has no key to bring the focus to it, so it
+/// would play forever at whatever the file left its knobs on. Monitors make
+/// the same promise, so their independently-motivated cap must stay inside
+/// the keys too.
+pub const MAX_CAMERAS: usize = crate::keys::KEYED_NODES;
+const _: () = assert!(MAX_MONITORS <= crate::keys::KEYED_NODES);
 
 /// Inputs get their own cap because what [`MAX_TAPS`] bounds is not what
 /// they cost: one tap each, against a bank layer each plus — for a file or a
@@ -352,6 +358,12 @@ pub fn validate(params: &Params) -> Result<(), String> {
              panel's camera knobs would have nothing to point at"
                 .into(),
         );
+    }
+    if c > MAX_CAMERAS {
+        return Err(format!(
+            "{c} cameras; at most {MAX_CAMERAS} — one per focus key, and a camera \
+             past the keys could never be turned live"
+        ));
     }
     if n > MAX_INPUTS {
         return Err(format!("{n} inputs; at most {MAX_INPUTS}"));
@@ -1041,6 +1053,28 @@ mod tests {
         sent_nowhere.routing_inputs[0][0] = 0.0;
         assert_eq!(crate::feedback::taps_of(&sent_nowhere, 0).count(), 1);
         assert_eq!(crate::feedback::reachable_taps(&sent_nowhere), 2);
+    }
+
+    #[test]
+    fn a_camera_past_the_keys_is_refused_at_load() {
+        let mut params = external();
+        let spare = params.cameras[0].clone();
+        while params.cameras.len() <= MAX_CAMERAS {
+            params.cameras.push(spare.clone());
+        }
+        let why = validate(&params).unwrap_err();
+        assert!(
+            why.contains("focus key"),
+            "refused for the wrong reason: {why}"
+        );
+
+        // And exactly at the cap, well-shaped, it loads: the bound is the
+        // ninth camera, not the eighth.
+        params.cameras.pop();
+        for row in &mut params.routing {
+            row.resize(params.cameras.len(), 0.0);
+        }
+        validate(&params).unwrap();
     }
 
     #[test]

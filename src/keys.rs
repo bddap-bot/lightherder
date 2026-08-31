@@ -71,9 +71,9 @@ pub fn released(action: Action) -> Option<Action> {
 
 /// How many nodes of each side of the focus have a key of their own. Eight
 /// because that is the keypad, and because it is a control surface's channel
-/// strips. It is also how far into a graph the focus reaches, the select
-/// being the only way to move it — a node past the eighth still plays, it
-/// just plays at whatever the config left its knobs on.
+/// strips. It is also as deep as any graph goes: a node past the keys could
+/// never be turned live, so [`crate::config::MAX_CAMERAS`] is this by
+/// definition and [`crate::config::MAX_MONITORS`] happens to match.
 pub(crate) const KEYED_NODES: usize = 8;
 
 /// The nodes a key reaches outright: a camera bare, and the monitor of the
