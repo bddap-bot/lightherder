@@ -180,7 +180,7 @@ the room feeds nothing. The **chroma key** cuts the pixels leaning toward its
 key colour — named as a hue, the way this instrument names every colour —
 with a tolerance for how much of it a pixel may carry; at the top of its
 travel the key is off, so grey and the far hues always pass. All four are
-ordinary knobs: on the keys and mappable from a MIDI surface. On the camera
+ordinary knobs, set in the graph file and mappable from a MIDI surface. On the camera
 because that is the only signal path the instrument has — the gain, the
 framing and the character are all there, and what the
 switcher hands a monitor from outside it hands over whole. A camera watches
@@ -233,7 +233,7 @@ camera, one monitor, no inputs — all three are dead.
 
 | control | is |
 |---|---|
-| fader 1 | nothing: a control a `midi.toml` can claim |
+| fader 1 | the **send**, on a rig that has an input; nothing on one that has not |
 | faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
 | S 1–8 | focus camera 1–8, as many as the graph has a choice of |
@@ -250,8 +250,9 @@ camera, one monitor, no inputs — all three are dead.
 | ● record | record the display for as long as it is held down |
 | marker prev | nothing |
 
-So the left hand works one monitor, the right hand one camera, and the last
-fader is the switcher crosspoint joining the two the hands are on. The three
+So the left hand works one monitor, the right hand one camera, and the two
+crosspoints bracket the front panel: outside light enters at fader 1 and loop
+light arrives at fader 8. The three
 select rows point the knobs at a node, one kind of node each: Solo the
 cameras, Mute the monitors, Record the inputs.
 
@@ -267,14 +268,13 @@ The loud cases are the other way round. More of a kind than a row is wide and
 the config is refused at load rather than played with a node no hand can
 bring the knobs to; a `midi.toml` that binds a select button on a node the
 graph has not got is refused the same way, rather than lighting a button that
-lies. Nothing is bound to quit. Nine of
-the twenty-four knobs are not on the surface, which has sixteen controls and
-binds fifteen of them: the three per-channel gain offsets, which colour a
-rigid gain that is itself on a rotary; the bloom radius, which sizes a halo
-whose amount is; the send, which a graph with no inputs would leave a fader
-holding at nothing;
-and the keyer's four, which wait for a hand that keys more than it bleeds and
-swaps this map for its own. They all stay on the keys.
+lies. Nothing is bound to quit — the window manager ends the instrument, and a
+slipped finger on the surface must not be able to. Eight of the twenty-four
+knobs are not on the factory map: the three per-channel gain offsets, which
+colour a rigid gain that is itself on a rotary; the bloom radius, which sizes
+a halo whose amount is; and the keyer's four, which wait for a hand that keys
+more than it bleeds and swaps this map for its own. They are set in the graph
+file, and a `midi.toml` may put any of them on a control.
 
 **A fader does not take its knob over until it has passed through where the
 knob already is.** A fader sends where it is standing, so without that,
@@ -322,8 +322,8 @@ is the readout. Nothing latches: a tempo is heard, not held.
 
 **The Solo button of the focused camera is lit, and so is the focused
 monitor's**, so the panel says where each hand's knobs are without anyone
-reading the log line. They follow the focus from wherever it moved — a number
-key or the Solo row — and go out when the instrument does. A node past the
+reading the log line. They follow the focus wherever it moves and go out when
+the instrument does. A node past the
 fourth of its half has no button to light, and lights none: a graph may run
 deeper than the surface, and a lamp on the wrong button is worse than no
 lamp. A latched mode lights the button holding it by the same rule, off that
@@ -382,29 +382,26 @@ device = "nanoKONTROL"
 
 [[fader]]
 cc = 0
-knob = "hue"        # any knob name the printed help uses
+knob = "hue"        # any knob name the card prints
 
 [[button]]
 cc = 41
-key = "space"       # any key label the printed help uses
+command = "blank"   # any command name the card prints
 
 [[button]]
 cc = 90
-key = "shift num1"      # focus monitor 1, off a control the surface has spare
+command = "mon 1"       # focus monitor 1, off a control the surface has spare
 ```
 
 A fader names a **knob** and spans its whole travel — for the two knobs that
 wrap, rotation and hue, that is one full revolution from bottom to top. A
-button names a **key**, spelled the way the startup help spells it, and does
-exactly what pressing that key does. Naming a key rather than an action of its
-own is what keeps the surface from growing a second vocabulary beside the
-keyboard's: everything a button can reach is on the help the instrument
-already prints, and a binding added to the keys is playable from the panel the
-same day.
+button names a **command**, spelled the way the overlay captions it: `blank`,
+`reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `rate -`,
+`rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 8` for the focus.
 
 Every channel is listened to, so a surface set to some other MIDI channel
-still works. A control number may only be bound once, and a key label that no
-key answers to is refused at load with the list of the ones that do.
+still works. A control number may only be bound once, and a command name that
+nothing answers to is refused at load with the list of the ones that do.
 
 ## Run it
 
@@ -420,8 +417,9 @@ nix-shell --run "cargo run --release my-graph.toml"      # your own
 
 It comes up covering the display, because an instrument on a stage is the only
 thing on its screen; `--windowed` is how you get at the rest of the machine.
-`esc` quits, and nothing on the factory MIDI map does — a slipped finger
-mid-performance must not be able to stop the instrument.
+Quitting is the window manager's — closing the window, or a `TERM`. Nothing on
+the surface stops the instrument: a slipped finger mid-performance must not be
+able to.
 
 ```
 nix-shell --run "cargo run --release -- --windowed crossed"
@@ -432,7 +430,7 @@ nix-shell --run "cargo run --release -- --windowed crossed"
 | `--windowed` | a window rather than the whole display |
 | `--resolution 3840x2160` | how big every monitor is (default 1920x1080) |
 | `--rate 30` | passes a second, the speed the piece plays at (default 60, 1 to 240) |
-| `--cheatsheet` | the controls — keys and surface both — and exit |
+| `--cheatsheet` | the surface as it is mapped, and exit |
 | `--bench` | what a frame costs, off screen, and exit |
 
 Through `cargo run` they need the `--` above, which is cargo's and not this
@@ -565,76 +563,32 @@ nothing — so its row is the passes and not the wire.
 The bank itself is what grows: two copies of every monitor and input at eight
 bytes a texel, half a gigabyte for `insanity` at 4K, and refused past two.
 
-## Keys
+## Playing it
 
-The binding list prints on startup, together with the control surface under
-whatever map is in force; `--cheatsheet` prints the same card without starting
-anything. On the glass, `` ` `` — or the surface's cycle button — toggles a
-controls overlay in the bottom-right corner: the panel drawn as it is
-actually mapped, each control captioned in a couple of words. Every knob logs
-its new value on change. Keys are physical positions, so the punctuation
-below assumes a US layout.
+**The control surface is the instrument.** There is no keyboard: if a control
+is not on the board it does not exist, so every knob a hand turns and every
+command a hand presses is on the panel above, and everything else is the graph
+file. The card prints on startup and `--cheatsheet` prints it without starting
+anything; the surface's cycle button toggles the same panel on the glass,
+drawn as it is actually mapped and each control captioned in a couple of
+words. Every knob logs its new value on change.
 
-| key | effect |
-| --- | --- |
-| `-` `=` | zoom out / in, per pass |
-| `,` `.` | rotation, per pass |
-| arrows | pan x, pan y |
-| `[` `]` | loop gain, all channels at once |
-| `1`…`6` | loop gain, red / green / blue (down, up each) |
-| `g` `h` | bloom, i.e. how much the lens scatters |
-| `j` `k` | bloom radius |
-| `y` `u` | chroma bleed |
-| `i` `o` | noise, i.e. the grain |
-| `b` `l` | key threshold: the luma the path passes in full |
-| `f9` `f10` | key softness, both keys' soft edge |
-| `home` `end` | key hue: the colour the chroma key cuts |
-| `pgdn` `pgup` | key tolerance; at the top, the chroma key is off |
-| `a` `s` | hue, per pass |
-| `d` `f` | saturation |
-| `z` `x` | brightness, i.e. black level |
-| `c` `v` | contrast |
-| `q` `w` | gamma |
-| `e` `t` | headroom, i.e. where the amplifier's rails are |
-| `/` `\` | the crosspoint: how much of the focused camera the focused monitor shows |
-| `9` `0` | the send: how much of the focused input the focused monitor shows |
-| `num1`…`num8` | focus camera 1–8 outright |
-| shift `num1`…`num8` | focus monitor 1–8 outright |
-| ctrl `num1`…`num8` | focus input 1–8 outright |
-| space | blank every monitor |
-| `r` | reset every knob |
-| `;` | the focused monitor's seed: a white blob or dark glass |
-| backspace | reset the last knob turned, to its identity |
-| `7` `8` | the tempo: slower / faster, four presses to halve or double it |
-| enter | the focused monitor on the whole display, or the tiled bank |
-| `` ` `` | the controls overlay, on or off |
-| `f7` | write what the display is showing to a file |
-| `f8` | record the display for as long as it is held down |
-| esc | quit |
+The knobs act on the focused camera (framing, gain and character), the focused
+monitor (colour and headroom) and the focused input (the send). The three
+select rows pick a node of any of the three outright, and the log line names
+them — so a rig with nothing to choose plays camera one, monitor one and input
+one, on the knobs the config gave them.
 
-The knobs act on the focused camera (framing, gain and character), the
-focused monitor (colour and headroom) and the focused input (the send);
-`num1`…`num8` pick a node of any of the three outright, and the log line
-names them. Those eight are keypad keys and they are the keyboard's only way
-to the nodes, so a board with no keypad and no surface plays camera one,
-monitor one and input one, on the knobs the config gave them.
-
-Splitter weights are config; the two crosspoints are not — `/` and `\` sweep
-the camera one, which is fader 8 on the surface, and `9` and `0` sweep the
-send, which is on the keys alone because a graph without inputs has no send
-for a fixed fader to be holding.
-
-The modifiers are read by the keypad keys and no others: which kind of node
-is meant, camera bare, monitor shifted, input under ctrl. The board has no
-second block of eight, let alone a third, and the three are the same question
-asked of the graph's three sides.
+Splitter weights are config; the two crosspoints are not — fader 8 sweeps how
+much of the focused camera the focused monitor shows, and fader 1 sweeps how
+much of the focused input it shows, on a rig that has one.
 
 The colour and character knobs start neutral, so the instrument out of the box
-is the loop described above and nothing else. Turn one against it: `s` held
-down is the quickest way to see what a stage inside the loop does, and `h`
-held down is the quickest way to see what the loop does to a stage — a lens
-that scatters a tenth of the light per pass has spread it everywhere by the
-tenth pass.
+is the loop described above and nothing else. Turn one against it: the
+saturation fader swept is the quickest way to see what a stage inside the loop
+does, and the bloom rotary swept is the quickest way to see what the loop does
+to a stage — a lens that scatters a tenth of the light per pass has spread it
+everywhere by the tenth pass.
 
 Zoom and gain are the sensitive ones. A few thousandths either side of
 `zoom 1.000` is the difference between an image that walks inward, one that
@@ -695,9 +649,9 @@ left off, a clock byte landing between a control number and its value, a scene
 dump that must not read as a hundred knob moves, and notes and bends that are
 not knobs. The pickup against a fader that has to reach its knob before it
 moves it, one already standing on it, and one that loses its grip on an
-unplug. The map against a duplicate binding, a key nothing
+unplug. The map against a duplicate binding, a command nothing
 answers to, and a literal file rather than a round trip, because a round trip
-agrees with itself whatever the keys are called. The card search against a `/proc/asound/cards`
+agrees with itself whatever the fields are called. The card search against a `/proc/asound/cards`
 with two other cards that also have raw MIDI devices. And the whole path —
 discovery, the open, the reader thread, the decode, the map and the pickup —
 against a device that is not there when the instrument starts, appears, sends
@@ -721,17 +675,17 @@ against a held button, which must light with the focus rather than instead of
 it, against a lamp no button of the map answers to, which must never reach the
 wire, and against the exit, which must put the lamps out and the mode back.
 The two halves of the select row are lit one side at a time, so neither can
-cover for the other; a latched mode is checked to light the button its key is
-bound to, and to light nothing when the map binds that key nowhere; and the
-first of two buttons bound to one node is the one that lights.
+cover for the other; a latched mode is checked to light the button its command
+is bound to, and to light nothing when the map binds that command nowhere; and
+the first of two buttons bound to one node is the one that lights.
 
 ## In a browser
 
 The same instrument, on WebGPU, at
 <https://bddap-bot.github.io/lightherder/> — the graph is chosen the way a
-page takes an argument, `?preset=insanity`, and the keys are the keys. What
-is not there is what a browser has no way to give it: the ALSA control
-surface and an ffmpeg input.
+page takes an argument, `?preset=insanity`. What is not there is what a
+browser has no way to give it: the ALSA control surface and an ffmpeg input —
+so a tab plays the graph it was handed and nothing turns a knob.
 
 `web/build.sh` builds `web/dist` — the module, its glue and the page — and
 every push to `main` runs it and publishes the result. Locally:

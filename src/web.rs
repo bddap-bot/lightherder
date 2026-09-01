@@ -1,9 +1,9 @@
 //! The instrument in a browser tab.
 //!
-//! Everything below the window is already portable — the graph, the shader,
-//! the knobs and the keys are the same code the deployed instrument runs — so
-//! this is only the three things a page supplies that a terminal does not: an
-//! entry point, somewhere for the log to go, and the canvas winit draws on.
+//! Everything below the window is already portable — the graph, the shader
+//! and the knobs are the same code the deployed instrument runs — so this is
+//! only the three things a page supplies that a terminal does not: an entry
+//! point, somewhere for the log to go, and the canvas winit draws on.
 //! Which graph to play arrives the way a web page takes an argument, in the
 //! query string: `?preset=insanity`.
 
@@ -66,15 +66,15 @@ pub(crate) fn complain(why: &str) {
     fill("why", why);
 }
 
-/// The corner legend: the keys off the same tables the instrument plays,
-/// which is why there is no copy of them in the page, and the presets as the
-/// query string spells them. No control surface: there is no ALSA here.
+/// The corner legend: the presets as the query string spells them, which is
+/// the whole of what a browser can be told here. No control surface — there
+/// is no ALSA in a page — and no keys, so the instrument plays itself.
 fn legend() -> String {
     let names: Vec<&str> = crate::config::PRESETS
         .iter()
         .map(|(name, _)| *name)
         .collect();
-    format!("{}?preset={}\n", crate::keys::help(), names.join(" | "))
+    format!("?preset={}\n", names.join(" | "))
 }
 
 /// Called by the page as soon as the module is instantiated.
@@ -82,7 +82,7 @@ fn legend() -> String {
 pub fn start() {
     console_error_panic_hook::set_once();
     let _ = console_log::init_with_level(log::Level::Info);
-    fill("keys", &legend());
+    fill("legend", &legend());
     wasm_bindgen_futures::spawn_local(async {
         let preset = requested_preset();
         let params = match crate::config::load(&preset) {

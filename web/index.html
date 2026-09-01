@@ -10,20 +10,20 @@
       html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
       #lightherder { display: block; width: 100%; height: 100%; }
       body { color: #ccc; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; }
-      /* Never a click target. winit reads the keyboard off the *canvas* and
-         focuses it once, so anything painted over the canvas that can take a
-         click takes the focus away with it — and the keys are all there is. */
-      #keys, #why { pointer-events: none; }
-      /* The keys, in the corner, getting out of the way of the thing they
-         describe. An animation rather than a transition off :hover, so a
-         touch device — which never hovers — still reads them first. */
-      #keys {
+      /* Never a click target: nothing painted over the canvas is meant to be
+         reached, and a click that landed on one would be a click the
+         instrument never saw. */
+      #legend, #why { pointer-events: none; }
+      /* The legend, in the corner, getting out of the way of the thing it
+         describes. An animation rather than a transition off :hover, so a
+         touch device — which never hovers — still reads it first. */
+      #legend {
         position: fixed; left: 1rem; bottom: 1rem; margin: 0; padding: .75rem 1rem;
         background: #000a; border: 1px solid #333; white-space: pre;
         opacity: .85; animation: recede 1s 6s forwards;
       }
       @keyframes recede { to { opacity: .06; } }
-      body:hover #keys { animation: none; }
+      body:hover #legend { animation: none; }
       #why { position: fixed; inset: 0; display: grid; place-content: center;
              text-align: center; padding: 2rem; color: #f66; }
     </style>
@@ -33,9 +33,9 @@
     <!-- Filled in only when the instrument will not start, so an empty
          browser (no WebGPU) says so instead of showing a black rectangle. -->
     <div id="why"></div>
-    <!-- Filled from the same tables the instrument plays, so a binding added
-         to the keys appears here the same day. -->
-    <pre id="keys"></pre>
+    <!-- Filled from the same table the instrument loads, so a preset added
+         to it appears here the same day. -->
+    <pre id="legend"></pre>
     <script type="module">
       import init from "./lightherder.js";
       init().catch((e) => {

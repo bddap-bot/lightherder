@@ -5,17 +5,16 @@ use std::time::Duration;
 
 use web_time::Instant;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, StartCause, WindowEvent};
+use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 use crate::capture::Capture;
 use crate::cli::Cli;
+use crate::command::{Action, Edge};
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
-use crate::keys::{action_for, node_of, Action, Edge};
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
 use crate::params::{Focus, Knob, Node, Params, Seed};
@@ -29,15 +28,6 @@ fn finished(capture: Capture) {
         Ok(path) => log::info!("captured {}", path.display()),
         Err(why) => log::error!("capture: {why}"),
     }
-}
-
-/// Whether the instrument goes on after an action. Named rather than a
-/// `bool`, because the one caller that reads it is a line about ending the
-/// run loop and `if self.act(a) { exit }` would not say which way round.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Flow {
-    Play,
-    Stop,
 }
 
 struct Live {
@@ -66,9 +56,6 @@ pub struct App {
     /// instrument runs rather than at startup, so plugging one in mid-piece
     /// is the whole of setting it up.
     midi: Midi,
-    /// Which kind of node the keypad is naming, off the held modifiers: the
-    /// one thing the instrument reads a modifier for.
-    node: Node,
     /// The last knob that moved, which is the one [`Action::ResetLastKnob`] puts
     /// back. `None` until something is turned — on a panel nothing has
     /// touched there is no "that one" to mean.
@@ -185,7 +172,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     // second read of the same file. Fullscreen this scrolls past behind the
     // instrument; it is here for the terminal it was started from, which is
     // where the log lands too.
-    print!("{}{}", crate::keys::help(), map.card());
+    print!("{}", map.card());
     log::info!("surface: waiting for {}", map.device);
     let midi = Midi::new(map, &params)?;
     let event_loop = EventLoop::new()?;
@@ -202,7 +189,6 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             focus: Focus::default(),
             sources,
             midi,
-            node: Node::Camera,
             last_knob: None,
             resolution: cli.resolution,
             fullscreen: cli.fullscreen,
@@ -406,12 +392,10 @@ impl App {
     }
 
     /// Point the knobs at one node by its kind and its place in the graph.
-    /// No button reaches past the graph — the select rows are built as wide
-    /// as it is — but the keys are a fixed block of eight, so a press past
-    /// the end does nothing: sliding to the last node instead would make
-    /// every key past the end the same key. It says so rather than going
-    /// quiet, so a performer who cannot read the panel can read the log
-    /// afterwards.
+    /// The one place a bare index becomes a focus, so this is where the
+    /// focus is kept inside the graph: past the end it says so rather than
+    /// going quiet, and rather than sliding to the last node — which would
+    /// make every button past the end the same button.
     fn focus(&mut self, node: Node, index: usize) {
         match index < self.params.count(node) {
             true => self.refocus(self.focus.with(node, index)),
@@ -443,10 +427,9 @@ impl App {
     /// rotary touched throws it to wherever the fader is standing.
     ///
     /// A focus that is not moving costs no grips: the select row invites a
-    /// press on the node already under the knobs, and a key held down
-    /// repeats. The readout still prints — on a one-node graph that press is
-    /// the only way to ask what the knobs are on, and the log line is the
-    /// only place the answer appears.
+    /// press on the node already under the knobs. The readout still prints —
+    /// on a one-node graph that press is the only way to ask what the knobs
+    /// are on, and the log line is the only place the answer appears.
     fn refocus(&mut self, focus: Focus) {
         if focus != self.focus {
             self.focus = focus;
@@ -526,18 +509,14 @@ impl App {
         );
     }
 
-    /// One action, from wherever it came. The keyboard and the control
-    /// surface both land here and nowhere else, so a binding cannot mean one
-    /// thing under a finger and another under a fader.
-    /// Whether the action wants the run loop stopped — the one thing an
-    /// action can ask for that this cannot do itself, since the loop is only
-    /// in scope where the events arrive. Returned rather than performed, so
-    /// there is no action this refuses to take and the tests can play the
-    /// whole vocabulary with no window system under them.
-    #[must_use]
-    fn act(&mut self, action: Action) -> Flow {
+    /// One action off the control surface, which is the only place one comes
+    /// from — so a binding cannot mean one thing here and another there.
+    ///
+    /// Nothing it can do ends the run loop: the instrument is quit the way
+    /// any window is, by the window manager, and a slipped finger on a
+    /// control surface must not be able to.
+    fn act(&mut self, action: Action) {
         match action {
-            Action::Nudge(knob, delta) => self.turned(knob, |p, f| p.nudge(knob, delta, f)),
             Action::Set(knob, value) => self.turned(knob, |p, f| p.set(knob, value, f)),
             Action::Focus(node, index) => self.focus(node, index),
             Action::Reset => self.reset(),
@@ -587,9 +566,7 @@ impl App {
             Action::Screencap => self.screencap(),
             Action::Record(Edge::Down) => self.record(),
             Action::Record(Edge::Up) => self.stop_recording(),
-            Action::Quit => return Flow::Stop,
         }
-        Flow::Play
     }
 
     /// Draw the display into `capture` and hand it whatever falls due.
@@ -684,29 +661,23 @@ impl App {
     ///
     /// The surface is read once a frame, and each message is turned into an
     /// action against the panel the message before it left — not against a
-    /// snapshot of the whole batch. A Stop and a fader inside one frame is a
+    /// snapshot of the whole batch. A reset and a fader inside one frame is a
     /// real two-handed gesture, and resolved against a snapshot the fader
     /// would be dragging a knob back out of the panel the button just put
-    /// back. Every message is played even after one has asked to stop: the
-    /// run loop ends after this frame, not inside it.
+    /// back.
     ///
     /// Then the panel is written — see [`Midi::show`] for why every redraw
     /// and not each of the several places the focus moves. A method of its
     /// own rather than the body of the redraw arm, because this half of a
     /// frame needs no window, and so can be played by a test.
-    fn surface_frame(&mut self) -> Flow {
-        let mut flow = Flow::Play;
+    fn surface_frame(&mut self) {
         for message in self.midi.poll() {
-            let Some(action) = self.midi.action_for(message, &self.params, self.focus) else {
-                continue;
-            };
-            if self.act(action) == Flow::Stop {
-                flow = Flow::Stop;
+            if let Some(action) = self.midi.action_for(message, &self.params, self.focus) {
+                self.act(action);
             }
         }
         self.midi
             .show(self.focus, self.seed(), self.overlay_shown, self.solo);
-        flow
     }
 }
 
@@ -783,14 +754,10 @@ impl ApplicationHandler for App {
                     live.window.request_redraw();
                 }
             }
-            WindowEvent::ModifiersChanged(modifiers) => self.node = node_of(modifiers.state()),
             // A window that loses focus is a window whose held controls all
-            // come up. On Wayland it is told so in no other way — winit
-            // sends no release for a key held when focus goes — so without
-            // this a recording started from the keyboard runs until the
-            // instrument is closed. A surface button still physically down
-            // is stopped with it, and starts a new recording on its next
-            // press: the alternative is a recording nobody can end.
+            // come up. A surface button still physically down is stopped
+            // with it, and starts a new recording on its next press: the
+            // alternative is a recording that outlives the hand on it.
             WindowEvent::Focused(false) => self.stop_recording(),
             WindowEvent::Resized(size) => {
                 if let Some(live) = self.live.as_mut() {
@@ -798,9 +765,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if self.surface_frame() == Flow::Stop {
-                    event_loop.exit();
-                }
+                self.surface_frame();
                 // Read before the window is taken, which is the whole of why
                 // it is up here: the solo is the focus's and the focus is not
                 // the window's.
@@ -835,37 +800,6 @@ impl ApplicationHandler for App {
                 // see — the piece is not the picture.
                 self.record_frame();
             }
-            WindowEvent::KeyboardInput { event, .. } => {
-                let PhysicalKey::Code(code) = event.physical_key else {
-                    return;
-                };
-                let Some(action) = action_for(code, self.node) else {
-                    return;
-                };
-                // A held key repeats, and a repeat sweeps the controls that
-                // move by steps — it is not a second press. Everything else
-                // acts once per press, the way the surface's buttons already
-                // do: a repeated toggle is a control strobing at the
-                // keyboard's rate, and a repeated capture is a directory of
-                // them.
-                let sweeps = matches!(action, Action::Nudge(..) | Action::Tempo(_));
-                if event.repeat && !sweeps {
-                    return;
-                }
-                let action = match event.state {
-                    ElementState::Pressed => action,
-                    // A release reaches only the controls that are held
-                    // rather than pressed, which is the surface's answer
-                    // too — see [`crate::keys::released`].
-                    ElementState::Released => match crate::keys::released(action) {
-                        Some(action) => action,
-                        None => return,
-                    },
-                };
-                if self.act(action) == Flow::Stop {
-                    event_loop.exit();
-                }
-            }
             _ => {}
         }
     }
@@ -875,7 +809,6 @@ impl ApplicationHandler for App {
 mod tests {
     use super::*;
     use crate::config;
-    use crate::tempo::Step;
 
     /// An instrument playing `params`, headless: no window has opened, so
     /// `live` is `None` the way it is before `resumed`. `None` when the
@@ -913,7 +846,6 @@ mod tests {
             sources,
             midi: Midi::new(Map::nano_kontrol2(&params), &params).unwrap(),
             params,
-            node: Node::Camera,
             last_knob: None,
             resolution,
             fullscreen: false,
@@ -937,15 +869,15 @@ mod tests {
             return;
         };
         let started = app.params.clone();
-        play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
-        play(&mut app, Action::Focus(Node::Monitor, 0));
-        play(&mut app, Action::Nudge(Knob::Gamma, 0.5));
+        turn(&mut app, Knob::Zoom, 0.5);
+        app.act(Action::Focus(Node::Monitor, 0));
+        turn(&mut app, Knob::Gamma, 0.5);
         assert_ne!(app.params, started);
         // The bars are handed over exactly once, so a rig rebuilt or replayed
         // under the reset would have them pending again.
         assert!(app.sources[0].frame().is_some(), "nothing to upload");
 
-        play(&mut app, Action::Reset);
+        app.act(Action::Reset);
         assert_eq!(app.params, started);
         assert!(
             app.sources[0].frame().is_none(),
@@ -963,7 +895,7 @@ mod tests {
         app.focus(Node::Monitor, 1);
         assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
 
-        play(&mut app, Action::Seed);
+        app.act(Action::Seed);
         assert_eq!(app.params.monitors[1].seed, Seed::Dark);
         assert_eq!(app.params.monitors[0].seed, Seed::BLOB, "both went");
         // What the panel reads, which is the focused monitor's and follows
@@ -972,14 +904,12 @@ mod tests {
         app.focus(Node::Monitor, 0);
         assert_eq!(app.seed(), Seed::BLOB);
 
-        // And back, on the key a hand actually presses.
+        // And back, through the name a `midi.toml` binds a button to.
         app.focus(Node::Monitor, 1);
-        let Some(action) =
-            crate::keys::action_for(winit::keyboard::KeyCode::Semicolon, Node::Camera)
-        else {
-            panic!("; should do something")
+        let Some(action) = crate::command::action_for_name("seed") else {
+            panic!("the seed should be a command")
         };
-        play(&mut app, action);
+        app.act(action);
         assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
     }
 
@@ -1002,21 +932,21 @@ mod tests {
 
     #[test]
     fn a_send_on_a_graph_with_no_inputs_is_a_knob_that_holds_nothing() {
-        // The send's keys are on the board whatever graph is playing, and
-        // most graphs have no input under them. A turn that moved nothing
-        // must not become the knob backspace takes back — that button would
-        // then put a knob the hand never turned back to its identity, and
-        // report a panel it did not change.
+        // A `midi.toml` may bind the send whatever graph is playing, and
+        // most graphs have no input under it. A turn that moved nothing must
+        // not become the knob the reset button takes back — that button
+        // would then put a knob the hand never turned back to its identity,
+        // and report a panel it did not change.
         let Some(mut app) = playing(config::single()) else {
             return;
         };
         assert!(app.params.inputs.is_empty());
 
-        play(&mut app, Action::Nudge(Knob::Zoom, 0.1));
+        turn(&mut app, Knob::Zoom, 0.1);
         let zoom = app.params.knob(Knob::Zoom, app.focus);
-        play(&mut app, Action::Nudge(Knob::Send, -0.005));
+        turn(&mut app, Knob::Send, -0.005);
         assert_eq!(app.last_knob, Some(Knob::Zoom), "the send took the button");
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Zoom, app.focus),
             Knob::Zoom.identity()
@@ -1028,10 +958,10 @@ mod tests {
             return;
         };
         let sent = app.params.knob(Knob::Send, app.focus);
-        play(&mut app, Action::Nudge(Knob::Send, 0.005));
+        turn(&mut app, Knob::Send, 0.005);
         assert!(app.params.knob(Knob::Send, app.focus) > sent);
         assert_eq!(app.last_knob, Some(Knob::Send));
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Send, app.focus),
             Knob::Send.identity()
@@ -1057,13 +987,13 @@ mod tests {
         // would land on the wrong number, and there is nowhere else in this
         // test that difference shows.
         assert_ne!(before.knob(Knob::Zoom, app.focus), Knob::Zoom.identity());
-        play(&mut app, Action::Nudge(Knob::Saturation, 1.0));
-        play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
+        turn(&mut app, Knob::Saturation, 1.0);
+        turn(&mut app, Knob::Zoom, 0.5);
         assert_ne!(app.params, before);
 
         // Only the last one turned, and only on the focused node — the other
         // camera's zoom is a different number in the same field.
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Zoom, app.focus),
             Knob::Zoom.identity()
@@ -1077,7 +1007,7 @@ mod tests {
 
         // Idempotent: a second press is the same knob at the same place, not
         // the one before it.
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Zoom, app.focus),
             Knob::Zoom.identity()
@@ -1089,8 +1019,8 @@ mod tests {
 
         // And a fader takes over from where the reset left the knob, not
         // from wherever that fader happens to be standing.
-        play(&mut app, Action::Set(Knob::Gamma, 2.0));
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::Set(Knob::Gamma, 2.0));
+        app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Gamma, app.focus),
             Knob::Gamma.identity()
@@ -1115,21 +1045,13 @@ mod tests {
         // is the graph's business rather than this test's — said outright,
         // so the panels below are exactly the lamps the focus is.
         app.params.monitors[0].seed = Seed::Dark;
-        // The factory layout binds nothing to quit; a performer's map may,
-        // and whether the run loop goes on is what a frame's answer *is*.
-        let mut map = Map::nano_kontrol2(&app.params);
-        map.button.push(crate::midi::Button {
-            cc: 61,
-            key: "esc".into(),
-        });
-        app.midi = Midi::new(map, &app.params).unwrap();
         let mut surface = app.midi.plug_in_a_test_surface();
         surface.wire.handshake(0);
 
         // One row per kind, each as wide as this graph: camera 1 is S1 and
         // monitor 1 is M1, which are controls 32 and 48. The graph has no
         // input, so the Record row is dark and owed nothing.
-        assert_eq!(app.surface_frame(), Flow::Play);
+        app.surface_frame();
         assert!(
             surface.wire.panel_becomes(lamp(32) | lamp(48)),
             "the focus the instrument started on never reached the surface"
@@ -1137,7 +1059,7 @@ mod tests {
         // Solo 2 selects camera 2 — pressed on the surface rather than acted
         // on directly, so what is asserted is that the frame read it at all.
         surface.press(33);
-        assert_eq!(app.surface_frame(), Flow::Play);
+        app.surface_frame();
         assert_eq!(app.focus.camera, 1, "the press was never played");
         assert!(
             surface.wire.panel_becomes(lamp(33) | lamp(48)),
@@ -1146,28 +1068,25 @@ mod tests {
         // Record is held rather than pressed, and its lamp is lit for as
         // long as the finger is.
         surface.press(45);
-        assert_eq!(app.surface_frame(), Flow::Play);
+        app.surface_frame();
         assert!(
             surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(45)),
             "the record button never lit under the finger"
         );
         surface.release(45);
-        assert_eq!(app.surface_frame(), Flow::Play);
+        app.surface_frame();
         assert!(
             surface.wire.panel_becomes(lamp(33) | lamp(48)),
             "the record button stayed lit after the finger left"
         );
-        // And the press that ends the run loop ends it, which only the
-        // frame's answer carries.
-        surface.press(61);
-        assert_eq!(app.surface_frame(), Flow::Stop);
     }
 
-    /// One action, asserting the instrument plays on. Nothing these tests do
-    /// is meant to end the run loop, and `act`'s answer is the only thing
-    /// that would say otherwise — so it is asserted rather than discarded.
-    fn play(app: &mut App, action: Action) {
-        assert_eq!(app.act(action), Flow::Play, "{action:?} ended the run loop");
+    /// A fader moving `knob` by `delta` from wherever it stands. The surface
+    /// sends where it is, so a move is a `Set` against the value the knob
+    /// already holds — there is no other way to turn one.
+    fn turn(app: &mut App, knob: Knob, delta: f32) {
+        let to = app.params.knob(knob, app.focus) + delta;
+        app.act(Action::Set(knob, to));
     }
 
     /// One message off the surface, played the way the redraw plays it:
@@ -1175,7 +1094,7 @@ mod tests {
     fn surface(app: &mut App, control: u8, value: u8) {
         let change = crate::midi::change(control, value);
         if let Some(action) = app.midi.action_for(change, &app.params, app.focus) {
-            play(app, action);
+            app.act(action);
         }
     }
 
@@ -1194,16 +1113,16 @@ mod tests {
         }
         assert_eq!(app.params.knob(Knob::Gamma, app.focus), 4.0);
         assert_eq!(app.params.knob(Knob::Contrast, app.focus), 4.0);
-        // Walk gamma away from its fader with the keys, so that whether its
-        // fader is still holding it is a question the next touch answers
-        // out loud: a grip that survived puts it back at the top, and one
-        // that was let go leaves it where the keys left it.
-        play(&mut app, Action::Nudge(Knob::Gamma, -2.0));
+        // Walk gamma away from its fader without touching that fader, so
+        // that whether it is still holding the knob is a question the next
+        // touch answers out loud: a grip that survived puts it back at the
+        // top, and one that was let go leaves the knob where this left it.
+        turn(&mut app, Knob::Gamma, -2.0);
         // Contrast last, so it is the knob the reset means.
         surface(&mut app, 4, 126);
         surface(&mut app, 4, 127);
 
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::ResetLastKnob);
         let identity = Knob::Contrast.identity();
         assert_eq!(app.params.knob(Knob::Contrast, app.focus), identity);
         // Contrast's fader is still at the top while its knob is back at
@@ -1235,22 +1154,22 @@ mod tests {
             return;
         };
 
-        play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
-        play(&mut app, Action::Focus(Node::Camera, 1));
+        turn(&mut app, Knob::Zoom, 0.5);
+        app.act(Action::Focus(Node::Camera, 1));
         let moved = app.params.clone();
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::ResetLastKnob);
         assert_eq!(app.params, moved, "a focus change left the knob named");
 
-        play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
-        play(&mut app, Action::Reset);
+        turn(&mut app, Knob::Zoom, 0.5);
+        app.act(Action::Reset);
         let reset = app.params.clone();
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::ResetLastKnob);
         assert_eq!(app.params, reset, "a reset left the knob named");
 
         // A knob turned *after* the move is named again, so this clears the
         // name rather than disabling the button.
-        play(&mut app, Action::Nudge(Knob::Gamma, 0.5));
-        play(&mut app, Action::ResetLastKnob);
+        turn(&mut app, Knob::Gamma, 0.5);
+        app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Gamma, app.focus),
             Knob::Gamma.identity()
@@ -1265,7 +1184,7 @@ mod tests {
             return;
         };
         let before = app.params.clone();
-        play(&mut app, Action::ResetLastKnob);
+        app.act(Action::ResetLastKnob);
         assert_eq!(app.params, before);
     }
 
@@ -1282,7 +1201,7 @@ mod tests {
         surface(&mut app, 4, 127);
         assert_eq!(app.params.monitors[0].colour.contrast, 4.0);
 
-        play(&mut app, Action::Focus(Node::Monitor, 1));
+        app.act(Action::Focus(Node::Monitor, 1));
         surface(&mut app, 4, 126);
         assert_eq!(
             app.params.monitors[1].colour.contrast,
@@ -1307,76 +1226,50 @@ mod tests {
         };
         assert_eq!(app.params.cameras.len(), 2);
         assert_eq!(app.params.monitors.len(), 3);
-        play(&mut app, Action::Focus(Node::Monitor, 2));
+        app.act(Action::Focus(Node::Monitor, 2));
         assert_eq!(
             app.focus.monitor, 2,
             "monitor 3 is a monitor this graph has"
         );
-        play(&mut app, Action::Focus(Node::Monitor, 3));
+        app.act(Action::Focus(Node::Monitor, 3));
         assert_eq!(app.focus.monitor, 2);
     }
 
     #[test]
     fn a_solo_shows_whichever_monitor_the_focus_is_on() {
-        // The solo carries no monitor of its own, so the keys that walk the
-        // focus walk what is on the glass — and a bank that is not soloed
-        // shows the lot however far the focus moves.
+        // The solo carries no monitor of its own, so the buttons that move
+        // the focus move what is on the glass — and a bank that is not
+        // soloed shows the lot however far the focus moves.
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
         assert_eq!(app.soloed(), None);
-        play(&mut app, Action::Focus(Node::Monitor, 1));
+        app.act(Action::Focus(Node::Monitor, 1));
         assert_eq!(app.soloed(), None);
-        play(&mut app, Action::Solo);
+        app.act(Action::Solo);
         assert_eq!(app.soloed(), Some(1));
-        play(&mut app, Action::Focus(Node::Monitor, 0));
+        app.act(Action::Focus(Node::Monitor, 0));
         assert_eq!(app.soloed(), Some(0));
-        play(&mut app, Action::Solo);
+        app.act(Action::Solo);
         assert_eq!(app.soloed(), None);
     }
 
     #[test]
-    fn quit_is_the_one_action_that_stops_the_loop() {
-        // The whole vocabulary is playable without a window system now that
-        // the run loop is asked for rather than reached for, so the one
-        // action that ends it can be checked alongside the ones that do not.
-        let Some(mut app) = playing(config::single()) else {
-            return;
-        };
-        assert_eq!(app.act(Action::Quit), Flow::Stop);
-        for action in [
-            Action::Clear,
-            Action::Overlay,
-            Action::Solo,
-            Action::Reset,
-            Action::Tempo(Step::Faster),
-        ] {
-            assert_eq!(app.act(action), Flow::Play, "{action:?}");
-        }
-    }
-
-    #[test]
-    fn the_tempo_keys_move_the_rate_the_way_they_are_labelled() {
-        // The half the tempo tests cannot reach: which key carries which
-        // step. A table that hands the faster ratio to the slower key is a
-        // wiring mistake no arithmetic test would see.
+    fn the_tempo_buttons_move_the_rate_the_way_they_are_named() {
+        // The half the tempo tests cannot reach: which name carries which
+        // step. A table that hands the faster ratio to "rate -" is a wiring
+        // mistake no arithmetic test would see.
         let Some(mut app) = playing(config::single()) else {
             return;
         };
         let started = app.tempo.rate();
-        play(
-            &mut app,
-            action_for(winit::keyboard::KeyCode::Digit8, Node::Camera).unwrap(),
-        );
+        app.act(crate::command::action_for_name("rate +").unwrap());
         assert!(
             app.tempo.rate() > started,
             "{} is not faster",
             app.tempo.rate()
         );
-        play(
-            &mut app,
-            action_for(winit::keyboard::KeyCode::Digit7, Node::Camera).unwrap(),
-        );
+        app.act(crate::command::action_for_name("rate -").unwrap());
         assert!(
             (app.tempo.rate() - started).abs() < 1e-3,
             "a press each way left {}",
@@ -1393,10 +1286,10 @@ mod tests {
             return;
         };
         assert_eq!(app.params.monitors.len(), 2);
-        play(&mut app, Action::Focus(Node::Monitor, 1));
+        app.act(Action::Focus(Node::Monitor, 1));
         assert_eq!(app.focus.monitor, 1);
         assert_eq!(app.focus.camera, 0, "the other hand moved");
-        play(&mut app, Action::Focus(Node::Monitor, 7));
+        app.act(Action::Focus(Node::Monitor, 7));
         assert_eq!(app.focus.monitor, 1);
     }
 }

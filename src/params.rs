@@ -1,5 +1,5 @@
 //! The knobs on the instrument. No windowing, no GPU — a MIDI surface drives
-//! the same values a keyboard does.
+//! the same values a fader does.
 
 use std::fmt;
 
@@ -450,8 +450,8 @@ impl Default for Params {
     }
 }
 
-/// A kind of node the focus points at: a row of select buttons, and one of
-/// the three readings of a node key.
+/// A kind of node the focus points at, and so one of the surface's three
+/// rows of select buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Node {
     Camera,
@@ -714,46 +714,6 @@ impl Knob {
         }
     }
 
-    /// One key press worth of this knob. Spelled out rather than defaulted,
-    /// so a knob added later cannot quietly inherit a step nobody chose.
-    pub const fn increment(self) -> f32 {
-        match self {
-            // A full turn of the subcarrier is a gesture rather than a trim,
-            // and at the default step it would take three thousand presses.
-            Knob::Hue | Knob::KeyHue => 0.02,
-            // Coarse enough to see: a thousandth of a radian, or of a decade
-            // of phosphor curve, is imperceptible.
-            Knob::Rotation
-            | Knob::Saturation
-            | Knob::Contrast
-            | Knob::Gamma
-            | Knob::Bloom
-            | Knob::Headroom
-            // A crosspoint runs 0 to 1 and gets swept end to end, so it wants
-            // the coarse step rather than the trim one.
-            | Knob::Route
-            | Knob::Send
-            // Both are swept end to end hunting the backdrop's level, and
-            // the soft edge is what forgives a coarse landing.
-            | Knob::KeyThreshold
-            | Knob::KeyTolerance => 0.005,
-            Knob::Zoom
-            | Knob::TranslateX
-            | Knob::TranslateY
-            | Knob::Gain
-            | Knob::GainR
-            | Knob::GainG
-            | Knob::GainB
-            | Knob::Brightness
-            // Radii, and a hundredth of the monitor's height is already a
-            // visible smear: these want a finer step than the levels do.
-            | Knob::BloomRadius
-            | Knob::ChromaBleed
-            | Knob::Noise
-            | Knob::KeySoftness => 0.002,
-        }
-    }
-
     /// Where this knob stands with its stage doing nothing to the light:
     /// zoom 1, no turn, no pan, unity gain, a clean path, the keys off and a
     /// neutral front panel. This is what one knob is put back to
@@ -857,10 +817,9 @@ impl Params {
     /// Put `knob` at `value` outright, which is what a fader does: it sends
     /// where it is standing rather than which way it moved.
     ///
-    /// Through [`Params::nudge`] rather than by writing the field, so a
-    /// fader is subject to the very same rails, wrap and rigid three-channel
-    /// step a key press is — there is nowhere a fader can put a knob that a
-    /// hand could not. Its answer, too: false where there was no field.
+    /// Through a delta rather than by writing the field, so the rails, the
+    /// wrap and the rigid three-channel step live in one place. Its answer,
+    /// too: false where there was no field.
     pub fn set(&mut self, knob: Knob, value: f32, focus: Focus) -> bool {
         self.nudge(knob, value - self.knob(knob, focus), focus)
     }
@@ -877,7 +836,7 @@ impl Params {
     /// stage that tints the light, which is not what identity means.
     ///
     /// Each field goes through [`Params::set`], so the rails, the wrap and
-    /// the reachability a key press has are unchanged.
+    /// the reachability a fader has are unchanged.
     pub fn reset(&mut self, knob: Knob, focus: Focus) {
         for field in Knob::ALL {
             if field.owns_a_field() && knob.shares_a_field_with(field) {
@@ -929,12 +888,12 @@ impl Params {
         }
     }
 
-    /// Turn `knob` on the node its side of the graph names, and say whether
-    /// there was one: a send is the one knob a graph can be without, and a
-    /// turn that landed on nothing must not be reported as a move — the
-    /// button that takes back the last knob turned would otherwise be
-    /// holding one that never turned.
-    pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) -> bool {
+    /// Move `knob` by `delta` on the node its side of the graph names, and
+    /// say whether there was one: a send is the one knob a graph can be
+    /// without, and a turn that landed on nothing must not be reported as a
+    /// move — the button that takes back the last knob turned would
+    /// otherwise be holding one that never turned.
+    fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) -> bool {
         // The rigid gain knob is the one that is not a single value: clamp its
         // step once against the tightest channel, so hitting the rail slides
         // all three together instead of flattening the colour offsets.
@@ -1688,10 +1647,12 @@ mod tests {
                 .collect();
             // Away from whichever rail the default sits on — the key
             // tolerance's off state is its top rail, so it only has room
-            // down.
+            // down. Inside the tightest knob's travel, so every knob can
+            // take it.
+            const STEP: f32 = 0.002;
             let step = match knob.limit() {
-                Limit::Clamp(_, high) if params.knob(knob, focus) >= high => -knob.increment(),
-                _ => knob.increment(),
+                Limit::Clamp(_, high) if params.knob(knob, focus) >= high => -STEP,
+                _ => STEP,
             };
             params.nudge(knob, step, focus);
             for (other, was) in Knob::ALL.into_iter().zip(before) {

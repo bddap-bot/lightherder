@@ -5,7 +5,7 @@
 use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
-use crate::keys::KEYED_NODES;
+use crate::midi::ROW_BUTTONS;
 use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Node, Params, Seed, Side};
 
 /// More monitors than this and the uniform buffer, the present grid and the
@@ -21,7 +21,7 @@ pub const MAX_INPUTS: usize = 4;
 /// *surface* rather than about any rig means by "the factory layout".
 #[cfg(test)]
 pub(crate) fn widest() -> Params {
-    rig(crate::keys::KEYED_NODES, MAX_MONITORS, MAX_INPUTS)
+    rig(ROW_BUTTONS, MAX_MONITORS, MAX_INPUTS)
 }
 
 /// A graph of a named shape, for the tests that are about the *surface* a
@@ -386,16 +386,16 @@ pub fn validate(params: &Params) -> Result<(), String> {
              own, and a file or a device is a process and a thread besides"
         ));
     }
-    // Then the reach, which every kind answers to: a node past the keys
-    // would play forever at whatever the file left its knobs on, since
+    // Then the reach, which every kind answers to: a node past the select
+    // rows would play forever at whatever the file left its knobs on, since
     // nothing could bring the focus to it. The board's row is eight wide
     // whichever row it is, so one bound.
     for node in Node::ALL {
         let have = params.count(node);
-        if have > KEYED_NODES {
+        if have > ROW_BUTTONS {
             return Err(format!(
-                "{have} {}s; at most {KEYED_NODES} — one button and one key per \
-                 node, and a {} past those could never be turned live",
+                "{have} {}s; at most {ROW_BUTTONS} — one button per node, and \
+                 a {} past those could never be turned live",
                 node.name(),
                 node.name()
             ));
@@ -1112,10 +1112,10 @@ mod tests {
         };
         // The reach is the camera's whole bound, so it is the kind that
         // shows the reach's own words.
-        let why = validate(&shaped(Node::Camera, KEYED_NODES + 1)).unwrap_err();
+        let why = validate(&shaped(Node::Camera, ROW_BUTTONS + 1)).unwrap_err();
         assert!(
-            why.contains("one button and one key per node")
-                && why.contains(&format!("{} cameras", KEYED_NODES + 1)),
+            why.contains("one button per node")
+                && why.contains(&format!("{} cameras", ROW_BUTTONS + 1)),
             "refused for the wrong reason: {why}"
         );
         // The two kinds that cost something are refused past their own cap
@@ -1137,7 +1137,7 @@ mod tests {
         // And exactly at each cap, well-shaped, a graph loads: every bound
         // is the node past the last legal one, not the last legal one.
         for (node, cap) in [
-            (Node::Camera, KEYED_NODES),
+            (Node::Camera, ROW_BUTTONS),
             (Node::Monitor, MAX_MONITORS),
             (Node::Input, MAX_INPUTS),
         ] {

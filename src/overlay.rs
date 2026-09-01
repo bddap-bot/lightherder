@@ -283,22 +283,16 @@ fn place(c: &mut Canvas, spot: Spot, label: &str) {
     }
 }
 
-/// What the overlay captions a binding with: a knob's name, or a button's
-/// two-word short. The map in force has been validated, so every key
-/// resolves; the fallback spells the key itself rather than leaving a lit
-/// control mute if an unvalidated map ever reaches a test's raster.
+/// What the overlay captions a binding with: a knob's name, or the two words
+/// a button's command is spelled with — which is what a `midi.toml` writes,
+/// so the caption and the file say the same thing.
 ///
 /// Every binding the map has, with nothing filtered out: a select row is
 /// built as wide as the graph, so a button that exists is a node that
 /// exists. What the panel draws dim is what the map left unbound.
 fn labels<'a>(map: &'a Map) -> impl Iterator<Item = (u8, String)> + 'a {
     let faders = map.fader.iter().map(|f| (f.cc, f.knob.name().to_string()));
-    let buttons = map.button.iter().map(|b| {
-        (
-            b.cc,
-            crate::keys::short(&b.key).unwrap_or_else(|| b.key.clone()),
-        )
-    });
+    let buttons = map.button.iter().map(|b| (b.cc, b.command.clone()));
     faders.chain(buttons)
 }
 
@@ -629,7 +623,7 @@ mod tests {
         let mut map = Map::nano_kontrol2(&crate::config::widest());
         map.button.push(crate::midi::Button {
             cc: 100,
-            key: "space".into(),
+            command: "blank".into(),
         });
         let raster = rasterize(&map);
         assert!(raster.height > PANEL_H as u32);
@@ -668,8 +662,7 @@ mod tests {
             );
         }
         for b in &map.button {
-            let short = crate::keys::short(&b.key).unwrap();
-            assert!(short.split_whitespace().count() <= 2, "{short:?}");
+            assert!(b.command.split_whitespace().count() <= 2, "{:?}", b.command);
         }
     }
 
@@ -737,7 +730,7 @@ mod tests {
                     0 | 1 => 0,
                     have => have,
                 };
-                for i in 0..crate::keys::KEYED_NODES as u8 {
+                for i in 0..crate::midi::ROW_BUTTONS as u8 {
                     let want = match (i as usize) < bound {
                         true => selects(node, i),
                         false => asleep(node, i),

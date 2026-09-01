@@ -7,11 +7,11 @@ pub mod app;
 pub mod bench;
 pub mod capture;
 pub mod cli;
+pub mod command;
 pub mod config;
 pub mod feedback;
 pub mod gpu;
 pub mod input;
-pub mod keys;
 pub(crate) mod lamps;
 pub mod midi;
 pub mod overlay;
@@ -21,15 +21,15 @@ pub mod tempo;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
-/// The controls as they actually are: the keys, and the control surface under
-/// whatever map is in force. Printed by `--cheatsheet` and on the way up,
-/// from the tables that drive the instrument rather than from a copy kept
-/// beside them. Against `params` because the select rows are as wide as the
-/// graph — the card is of the rig about to be played, not of a rig in
-/// general.
+/// The controls as they actually are: the control surface under whatever map
+/// is in force, which is the whole of what plays this instrument. Printed by
+/// `--cheatsheet` and on the way up, from the tables that drive the
+/// instrument rather than from a copy kept beside them. Against `params`
+/// because the select rows are as wide as the graph — the card is of the rig
+/// about to be played, not of a rig in general.
 pub fn cheatsheet(params: &params::Params) -> Result<String, String> {
     let map = midi::Map::load(&midi::map_path(), params)?;
-    Ok(format!("{}{}", keys::help(), map.card()))
+    Ok(map.card())
 }
 
 /// Vulkan, Metal, DX12 and WebGPU. Deliberately not `Backends::all()`, which
