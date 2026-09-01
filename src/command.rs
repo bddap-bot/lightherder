@@ -35,11 +35,8 @@ pub enum Action {
     /// tiled bank. A latch and not a select — see [`crate::app`], where the
     /// monitor it shows is the focus and not an index of its own.
     Solo,
-    /// Show or hide the controls overlay drawn over the picture.
     Overlay,
-    /// Write what the display is showing to a file.
     Screencap,
-    /// Record the display for as long as the control is held down.
     Record(Edge),
 }
 
@@ -53,8 +50,6 @@ pub enum Edge {
     Up,
 }
 
-/// What letting go of the control that pressed `action` does, and `None` for
-/// a binding that is a press and nothing else.
 pub fn released(action: Action) -> Option<Action> {
     match action {
         Action::Record(Edge::Down) => Some(Action::Record(Edge::Up)),
@@ -62,8 +57,6 @@ pub fn released(action: Action) -> Option<Action> {
     }
 }
 
-/// A command a button may name, in the two words a `midi.toml` writes and the
-/// panel captions it with, and in the sentence the printed card spells out.
 struct Command {
     name: &'static str,
     action: Action,
@@ -115,17 +108,15 @@ const fn cmd(name: &'static str, action: Action, what: &'static str) -> Command 
     Command { name, action, what }
 }
 
-/// How a `midi.toml` spells the select that focuses each node of `node`'s
-/// kind, in the order a row is built and no longer than one. The one place a
-/// kind and a number are written into a name, so a row taken from it cannot
-/// run past the buttons.
+/// The one place a kind and a number are written into a name. It stops at the
+/// most of that kind a graph may legally hold, so every name it mints is one
+/// a `midi.toml` can actually bind.
 pub fn select_names(node: Node) -> impl Iterator<Item = String> {
-    (1..=crate::midi::ROW_BUTTONS).map(move |i| format!("{} {i}", node.short()))
+    (1..=crate::config::cap(node)).map(move |i| format!("{} {i}", node.short()))
 }
 
-/// A name resolved against the two vocabularies: the one walk behind
-/// [`action_for_name`] and [`describes`], so their wordings can differ but
-/// what a name reaches cannot.
+/// The one walk behind [`action_for_name`] and [`describes`], so what a name
+/// reaches cannot depend on which of the two asked.
 enum Binding {
     Select { node: Node, index: usize },
     Command(&'static Command),
@@ -202,7 +193,7 @@ mod tests {
                     format!("focus {} {}", node.name(), index + 1)
                 );
             }
-            assert_eq!(select_names(node).count(), crate::midi::ROW_BUTTONS);
+            assert_eq!(select_names(node).count(), crate::config::cap(node));
         }
         // The one place the actual words are pinned: every other select test
         // builds its expectation out of `Node::short` and `Node::name`, so a
@@ -214,6 +205,11 @@ mod tests {
         );
         assert_eq!(describes("mon 3").as_deref(), Some("focus monitor 3"));
         assert_eq!(action_for_name("in 1"), Some(Action::Focus(Node::Input, 0)));
+        // And it stops where the graph does: a fifth input is refused at
+        // load, so a name for one is a binding the loader would reject and a
+        // line in the refusal's own list of what to write instead.
+        assert_eq!(action_for_name("in 5"), None);
+        assert_eq!(action_for_name("cam 9"), None);
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
-use crate::params::{Focus, Knob, Node, Params, Seed};
+use crate::params::{Focus, Knob, Params, Seed};
 use crate::present::Present;
 use crate::tempo::Tempo;
 
@@ -378,9 +378,9 @@ impl App {
         event_loop.exit();
     }
 
-    /// The rig is untouched: the graph's shape is the launch
-    /// configuration's and nothing at the keys can move it, so the loops
-    /// keep running and only the knobs the next pass reads have moved.
+    /// The rig is untouched: the graph's shape is the launch configuration's
+    /// and nothing on the surface can move it, so the loops keep running and
+    /// only the knobs the next pass reads have moved.
     fn reset(&mut self) {
         self.params = self.initial.clone();
         // The whole panel just moved without a fader moving with it — and
@@ -389,23 +389,6 @@ impl App {
         self.midi.release();
         self.last_knob = None;
         log::info!("reset: {}", self.params.describe(self.focus));
-    }
-
-    /// Point the knobs at one node by its kind and its place in the graph.
-    /// The one place a bare index becomes a focus, so this is where the
-    /// focus is kept inside the graph: past the end it says so rather than
-    /// going quiet, and rather than sliding to the last node — which would
-    /// make every button past the end the same button.
-    fn focus(&mut self, node: Node, index: usize) {
-        match index < self.params.count(node) {
-            true => self.refocus(self.focus.with(node, index)),
-            false => log::info!(
-                "no {} {}: the graph has {}",
-                node.name(),
-                index + 1,
-                self.params.count(node)
-            ),
-        }
     }
 
     /// What lights the monitor the faders are on — the one fact about the
@@ -472,10 +455,9 @@ impl App {
 
     /// A turn of `knob`, and what the panel owes it. A knob whose graph has
     /// no node for it — a send with no input — moved nothing, so it must not
-    /// become the knob backspace takes back: that button would then reset a
-    /// knob the hand never turned, and report a panel it did not change. Said
-    /// out loud rather than passed over, the way a select past the end of the
-    /// graph is.
+    /// become the knob the rewind button takes back: that button would then
+    /// reset a knob the hand never turned, and report a panel it did not
+    /// change.
     fn turned(&mut self, knob: Knob, turn: impl FnOnce(&mut Params, Focus) -> bool) {
         match turn(&mut self.params, self.focus) {
             true => {
@@ -518,7 +500,10 @@ impl App {
     fn act(&mut self, action: Action) {
         match action {
             Action::Set(knob, value) => self.turned(knob, |p, f| p.set(knob, value, f)),
-            Action::Focus(node, index) => self.focus(node, index),
+            // Never past the graph: the factory rows are built as wide as it
+            // is, and `Map::validate` refuses a hand-written select on a node
+            // the rig has not got.
+            Action::Focus(node, index) => self.refocus(self.focus.with(node, index)),
             Action::Reset => self.reset(),
             Action::ResetLastKnob => self.reset_knob(),
             // The focused monitor's, because the seed is the monitor's: the
@@ -809,6 +794,7 @@ impl ApplicationHandler for App {
 mod tests {
     use super::*;
     use crate::config;
+    use crate::params::Node;
 
     /// An instrument playing `params`, headless: no window has opened, so
     /// `live` is `None` the way it is before `resumed`. `None` when the
@@ -892,7 +878,7 @@ mod tests {
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
-        app.focus(Node::Monitor, 1);
+        app.act(Action::Focus(Node::Monitor, 1));
         assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
 
         app.act(Action::Seed);
@@ -901,33 +887,16 @@ mod tests {
         // What the panel reads, which is the focused monitor's and follows
         // the focus rather than the press.
         assert_eq!(app.seed(), Seed::Dark);
-        app.focus(Node::Monitor, 0);
+        app.act(Action::Focus(Node::Monitor, 0));
         assert_eq!(app.seed(), Seed::BLOB);
 
         // And back, through the name a `midi.toml` binds a button to.
-        app.focus(Node::Monitor, 1);
+        app.act(Action::Focus(Node::Monitor, 1));
         let Some(action) = crate::command::action_for_name("seed") else {
             panic!("the seed should be a command")
         };
         app.act(action);
         assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
-    }
-
-    #[test]
-    fn a_camera_the_graph_does_not_have_is_a_button_that_does_nothing() {
-        // The select row is eight wide and every shipped graph is shallower,
-        // so most of a set is played with some of it pointing past the end.
-        let Some(mut app) = playing(config::crossed()) else {
-            return;
-        };
-        assert_eq!(app.params.cameras.len(), 2);
-
-        app.focus(Node::Camera, 1);
-        assert_eq!(app.focus.camera, 1);
-        // Past the end the focus stays where the hand left it, rather than
-        // sliding to the last camera — which would make six buttons one.
-        app.focus(Node::Camera, 7);
-        assert_eq!(app.focus.camera, 1);
     }
 
     #[test]
@@ -1211,10 +1180,11 @@ mod tests {
     }
 
     #[test]
-    fn the_monitor_half_of_the_select_row_is_bounded_by_the_monitors() {
-        // A square graph cannot tell the two counts apart, so the guard is
+    fn the_monitor_half_of_the_select_row_reaches_a_monitor_no_camera_matches() {
+        // A square graph cannot tell the two counts apart, so the row is
         // checked on one that has more monitors than cameras: monitor 3
-        // exists and camera 3 does not.
+        // exists and camera 3 does not, so a row read off the wrong count
+        // could not reach it.
         let mut wider = config::crossed();
         wider.monitors.push(wider.monitors[0].clone());
         wider.routing = vec![vec![1.0, 0.0]; 3];
@@ -1231,8 +1201,7 @@ mod tests {
             app.focus.monitor, 2,
             "monitor 3 is a monitor this graph has"
         );
-        app.act(Action::Focus(Node::Monitor, 3));
-        assert_eq!(app.focus.monitor, 2);
+        assert_eq!(app.focus.camera, 0, "the other hand moved");
     }
 
     #[test]
@@ -1279,9 +1248,7 @@ mod tests {
 
     #[test]
     fn the_select_row_reaches_both_halves_of_the_focus() {
-        // The right half of the row points the faders at a monitor, which
-        // before this had only the `m` step. Past the end it does nothing,
-        // for the same reason the camera half does.
+        // One row per kind, and a press on one must not move the other's.
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
@@ -1289,7 +1256,5 @@ mod tests {
         app.act(Action::Focus(Node::Monitor, 1));
         assert_eq!(app.focus.monitor, 1);
         assert_eq!(app.focus.camera, 0, "the other hand moved");
-        app.act(Action::Focus(Node::Monitor, 7));
-        assert_eq!(app.focus.monitor, 1);
     }
 }

@@ -283,9 +283,8 @@ fn place(c: &mut Canvas, spot: Spot, label: &str) {
     }
 }
 
-/// What the overlay captions a binding with: a knob's name, or the two words
-/// a button's command is spelled with — which is what a `midi.toml` writes,
-/// so the caption and the file say the same thing.
+/// A button is captioned with the very name a `midi.toml` binds it by, so the
+/// panel and the file say one thing.
 ///
 /// Every binding the map has, with nothing filtered out: a select row is
 /// built as wide as the graph, so a button that exists is a node that

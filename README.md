@@ -482,9 +482,8 @@ integrated adapter instead.
 pass at a time — the camera pulls back 0.6% and turns 0.05 rad per *pass*, and
 the trail decays per pass — so a spiral drawn in a second at sixty is drawn in
 a quarter of one at 240, the top of the range. That makes the rate a control
-rather than a property of the machine: the surface's track pair and the `7`
-and `8` keys move it while the piece plays, and `--rate` starts it somewhere
-other than sixty.
+rather than a property of the machine: the surface's track pair moves it while
+the piece plays, and `--rate` starts it somewhere other than sixty.
 
 **The display keeps its own clock, and it is vsync.** A pass is not a present.
 Passes fall due on the wall clock at the tempo; the picture goes out on every

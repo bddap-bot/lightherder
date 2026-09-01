@@ -58,10 +58,10 @@ const PER_PRESS: f32 = 1.189_207_1;
 /// rate line says so.
 const BACKLOG: Duration = Duration::from_millis(100);
 
-/// Which way a tempo key moves the rate. Named rather than passed as the
-/// ratio itself: "times 1.19" and "sixty passes a second" are the same shape
-/// of argument, and a table of key bindings is exactly where the two would
-/// be confused.
+/// Which way a press moves the rate. Named rather than passed as the ratio
+/// itself: "times 1.19" and "sixty passes a second" are the same shape of
+/// argument, and a table of bindings is exactly where the two would be
+/// confused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     Slower,

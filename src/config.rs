@@ -17,6 +17,24 @@ pub const MAX_MONITORS: usize = 8;
 /// a switcher has spare inputs for.
 pub const MAX_INPUTS: usize = 4;
 
+/// The most of `node` a legal graph may hold — what [`validate`] refuses past,
+/// and so how far the surface's vocabulary of selects runs. A kind that costs
+/// something is held to its own cap; a camera costs nothing but a button.
+pub const fn cap(node: Node) -> usize {
+    match node {
+        Node::Camera => ROW_BUTTONS,
+        Node::Monitor => MAX_MONITORS,
+        Node::Input => MAX_INPUTS,
+    }
+}
+
+const _: () = assert!(
+    cap(Node::Camera) <= ROW_BUTTONS
+        && cap(Node::Monitor) <= ROW_BUTTONS
+        && cap(Node::Input) <= ROW_BUTTONS,
+    "a kind whose cap runs past the select row would name selects no button can carry"
+);
+
 /// The widest graph the board reaches, which is the map a test about the
 /// *surface* rather than about any rig means by "the factory layout".
 #[cfg(test)]
@@ -350,7 +368,7 @@ fn focuses(side: Side, params: &Params) -> impl Iterator<Item = Focus> {
 ///
 /// Every value a knob turns is checked against that knob's own [`Knob::limit`]
 /// and nowhere else. A file outside one is *refused* rather than loaded and
-/// silently snapped by the first key press: a `headroom = 1e6` that validates
+/// silently snapped by the first fader that catches it: a `headroom = 1e6` that validates
 /// is a state the instrument shows, cannot return to, and hands a fader a
 /// travel it is standing off the end of.
 ///
@@ -388,8 +406,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
     }
     // Then the reach, which every kind answers to: a node past the select
     // rows would play forever at whatever the file left its knobs on, since
-    // nothing could bring the focus to it. The board's row is eight wide
-    // whichever row it is, so one bound.
+    // nothing could bring the focus to it.
     for node in Node::ALL {
         let have = params.count(node);
         if have > ROW_BUTTONS {
@@ -447,7 +464,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
     }
     // A splitter is not a knob — nothing on the panel turns one — so this is
     // the only place its weights are decided, and they are checked as
-    // written rather than against a rail no key could hit. Monitors only:
+    // written rather than against a rail no control could hit. Monitors only:
     // a camera watches the light going round and never the light coming in.
     for (i, camera) in params.cameras.iter().enumerate() {
         if camera.look.len() != m {

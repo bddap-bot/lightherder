@@ -179,8 +179,11 @@ impl Map {
         }
         for b in &self.button {
             let control = silkscreen(&self.device, b.cc);
+            // The name as well as the sentence: the name is what a
+            // `midi.toml` writes, so a performer reading the card has read
+            // the vocabulary too.
             let what = crate::command::describes(&b.command).unwrap_or_default();
-            out.push_str(&format!("  {control:<12} {what}\n"));
+            out.push_str(&format!("  {control:<12} {what} ({})\n", b.command));
         }
         out
     }
@@ -674,22 +677,22 @@ struct Port {
 #[cfg(test)]
 pub(crate) struct TestSurface {
     pub(crate) wire: crate::lamps::Wire,
-    /// The surface's keys. Held rather than dropped even by a test that says
-    /// nothing on them, because a dropped sender is exactly what
+    /// The surface's controls. Held rather than dropped even by a test that
+    /// touches none of them, because a dropped sender is exactly what
     /// [`Midi::poll`] reads as the cable coming out.
-    keys: std::sync::mpsc::Sender<ControlChange>,
+    controls: std::sync::mpsc::Sender<ControlChange>,
 }
 
 #[cfg(test)]
 impl TestSurface {
     /// A button pushed, the way the reader thread reports one.
     pub(crate) fn press(&self, control: u8) {
-        self.keys.send(change(control, 127)).unwrap();
+        self.controls.send(change(control, 127)).unwrap();
     }
 
     /// And let go of.
     pub(crate) fn release(&self, control: u8) {
-        self.keys.send(change(control, 0)).unwrap();
+        self.controls.send(change(control, 0)).unwrap();
     }
 }
 
@@ -744,13 +747,13 @@ impl Midi {
     pub(crate) fn plug_in_a_test_surface(&mut self) -> TestSurface {
         let buttons = self.map.button.iter().fold(0, |mask, b| mask | lamp(b.cc));
         let (lamps, wire) = crate::lamps::over_a_socket(buttons);
-        let (keys, rx) = std::sync::mpsc::channel();
+        let (controls, rx) = std::sync::mpsc::channel();
         self.port = Some(Port {
             path: PathBuf::from("a test's surface"),
             rx,
             lamps: Some(lamps),
         });
-        TestSurface { wire, keys }
+        TestSurface { wire, controls }
     }
 
     /// Every message the surface has sent since the last call, and the
@@ -960,9 +963,6 @@ impl Midi {
         let was = std::mem::replace(&mut self.held[i], down);
         match (down, was) {
             (true, false) => Some(self.action[i]),
-            // A release speaks only for the controls that are held rather
-            // than pressed, which is [`crate::command::released`]'s answer
-            // and nobody else's.
             (false, true) => crate::command::released(self.action[i]),
             _ => None,
         }
@@ -1153,7 +1153,11 @@ mod tests {
         }
         for b in &map.button {
             let what = crate::command::describes(&b.command).expect("every command is described");
-            let line = format!("  {:<12} {what}", silkscreen(&map.device, b.cc));
+            let line = format!(
+                "  {:<12} {what} ({})",
+                silkscreen(&map.device, b.cc),
+                b.command
+            );
             assert!(card.contains(&line), "missing: {line}");
         }
         assert!(
@@ -1578,7 +1582,6 @@ mod tests {
         assert_eq!(
             map.fader,
             [
-                // Fader 1, on a rig that has an input to send.
                 fader(0, Knob::Send),
                 fader(1, Knob::Hue),
                 fader(2, Knob::Saturation),
@@ -1642,11 +1645,11 @@ mod tests {
                 button(45, "record"),
             ]
         );
-        // Fader 1 is the send, and this rig has inputs to send.
-        assert_eq!(
-            map.fader.iter().find(|f| f.cc == 0).map(|f| f.knob),
-            Some(Knob::Send)
-        );
+        // And fader 1 is dead on a rig with nothing to send into: a fader
+        // holding a knob that moves nothing is the lie the row law refuses,
+        // one control to the left of the rows.
+        let no_inputs = Map::nano_kontrol2(&crate::config::rig(2, 2, 0));
+        assert!(!no_inputs.fader.iter().any(|f| f.cc == 0));
         // And the buttons it leaves alone even on the widest rig: one bound
         // here is one a blind slip can find. The Record row runs out past
         // the inputs, which is what a row as wide as its kind looks like.

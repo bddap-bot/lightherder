@@ -27,8 +27,7 @@ pub const MAX_RESOLUTION: u32 = 7680;
 pub enum Mode {
     /// Open a window and play.
     Play,
-    /// Print the controls — the keys, and the surface as it is actually
-    /// mapped — and exit.
+    /// Print the surface as it is actually mapped, and exit.
     Cheatsheet,
     /// Step the graph off screen, as fast as the GPU will take it, and report
     /// what a frame costs. The only way to see how much of a pass is spare: on
@@ -44,8 +43,8 @@ pub struct Cli {
     /// A preset name or the path to a graph file.
     pub graph: String,
     pub resolution: (u32, u32),
-    /// Passes a second — the speed the piece plays at, which the tempo keys
-    /// move from here while it runs. See [`crate::tempo`].
+    /// Passes a second — the speed the piece plays at, which the track pair
+    /// moves from here while it runs. See [`crate::tempo`].
     pub rate: f32,
     /// Deployed, this instrument is the only thing on its display, so the
     /// window covers it unless asked otherwise — `--windowed` is there
@@ -73,8 +72,8 @@ pub fn usage() -> String {
          \x20 --windowed          open a window instead of covering the display\n\
          \x20 --resolution WxH    how big every monitor is (default {}x{})\n\
          \x20 --rate HZ           passes a second, the speed the piece plays at\n\
-         \x20                     (default {}, {} to {}; the 7 and 8 keys and the\n\
-         \x20                     surface's track pair move it from there)\n\
+         \x20                     (default {}, {} to {}; the surface's track\n\
+         \x20                     pair moves it from there)\n\
          \x20 --cheatsheet        print the controls and exit\n\
          \x20 --bench             time {} frames off screen and exit\n\
          \x20 --help              this\n",
