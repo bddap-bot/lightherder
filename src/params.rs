@@ -451,9 +451,7 @@ impl Default for Params {
 }
 
 /// A kind of node the focus points at: a row of select buttons, and one of
-/// the three readings of a node key. Three because the graph has three kinds
-/// of thing to be on — the loops' cameras, their monitors, and the light
-/// arriving from outside.
+/// the three readings of a node key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Node {
     Camera,
@@ -833,9 +831,8 @@ impl<'de> Deserialize<'de> for Knob {
 }
 
 impl Params {
-    /// How many of `node` this graph has. The one walk over the three lists
-    /// by kind, so a control surface built from the graph and a check run
-    /// against it cannot count it two different ways.
+    /// The one walk over the three lists by kind, so a surface built from
+    /// the graph and a check run against it cannot count it two ways.
     pub fn count(&self, node: Node) -> usize {
         match node {
             Node::Camera => self.cameras.len(),

@@ -5,6 +5,7 @@
 use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
+use crate::keys::KEYED_NODES;
 use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Node, Params, Seed, Side};
 
 /// More monitors than this and the uniform buffer, the present grid and the
@@ -15,23 +16,6 @@ pub const MAX_MONITORS: usize = 8;
 /// for a file or a device — a process and a thread of its own. Four is what
 /// a switcher has spare inputs for.
 pub const MAX_INPUTS: usize = 4;
-
-/// Cameras have no cost of their own to cap, so the reach in [`validate`] is
-/// the whole of their bound. These two do, and both must stay inside it: a
-/// node the surface cannot reach is what that check exists to refuse, so a
-/// cap that let one through would make the check a lie the compiler could
-/// have caught.
-const _: () = assert!(MAX_MONITORS <= crate::keys::KEYED_NODES);
-const _: () = assert!(MAX_INPUTS <= crate::keys::KEYED_NODES);
-
-/// Every kind of node and the cap it is held to. One table so the law is
-/// stated once for all three: a graph is refused unless the surface reaches
-/// every node in it.
-const CAPS: [(Node, usize); 3] = [
-    (Node::Camera, crate::keys::KEYED_NODES),
-    (Node::Monitor, MAX_MONITORS),
-    (Node::Input, MAX_INPUTS),
-];
 
 /// A graph of a named shape, for the tests that are about the *surface* a
 /// graph builds rather than about any light it makes. One-hot looks and a
@@ -379,20 +363,34 @@ pub fn validate(params: &Params) -> Result<(), String> {
         params.cameras.len(),
         params.inputs.len(),
     );
-    // Every node gets a button, so every node has to have one to get: the
-    // surface is built from the graph and stops where the graph does, and a
-    // node past the row it would sit on would play forever at whatever the
-    // file left its knobs on. Loud here rather than dark on the panel.
-    for (node, cap) in CAPS {
+    // The reach: a node past the keys would play forever at whatever the
+    // file left its knobs on, since nothing could bring the focus to it.
+    // The board's row is eight wide whichever row it is, so one bound.
+    for node in Node::ALL {
         let have = params.count(node);
-        if have > cap {
+        if have > KEYED_NODES {
             return Err(format!(
-                "{have} {}s; at most {cap} — one button per node, and a {} past \
-                 the board's row could never be turned live",
+                "{have} {}s; at most {KEYED_NODES} — one button and one key per \
+                 node, and a {} past those could never be turned live",
                 node.name(),
                 node.name()
             ));
         }
+    }
+    // What the two kinds that cost something are held to besides, in their
+    // own words: these are bank layers and threads, not buttons, and a
+    // refusal that named the board would send a performer to the wrong fix.
+    if m > MAX_MONITORS {
+        return Err(format!(
+            "{m} monitors; at most {MAX_MONITORS} — the uniform buffer, the \
+             present grid and the texture array are all sized for that many"
+        ));
+    }
+    if n > MAX_INPUTS {
+        return Err(format!(
+            "{n} inputs; at most {MAX_INPUTS} — each one is a bank layer of its \
+             own, and a file or a device is a process and a thread besides"
+        ));
     }
     if m == 0 {
         return Err("no monitors; a rig with none has no glass to draw to".into());
@@ -1103,20 +1101,38 @@ mod tests {
             Node::Monitor => rig(1, n, 1),
             Node::Input => rig(1, 1, n),
         };
-        for (node, cap) in CAPS {
-            let why = validate(&shaped(node, cap + 1)).unwrap_err();
+        for node in Node::ALL {
+            let why = validate(&shaped(node, KEYED_NODES + 1)).unwrap_err();
             assert!(
-                why.contains("one button per node"),
+                why.contains("one button and one key per node"),
                 "{}: refused for the wrong reason: {why}",
                 node.name()
             );
             assert!(
-                why.contains(&format!("{} {}s", cap + 1, node.name())),
+                why.contains(&format!("{} {}s", KEYED_NODES + 1, node.name())),
                 "{why}"
             );
-
-            // And exactly at the cap, well-shaped, it loads: the bound is
-            // the node past the row, not the last one on it.
+        }
+        // The two kinds that cost something are refused past their own cap
+        // for their own reason — a refusal naming the board would send a
+        // performer to rebind buttons over a bank the GPU cannot hold.
+        for (node, cap, says) in [
+            (Node::Monitor, MAX_MONITORS, "texture array"),
+            (Node::Input, MAX_INPUTS, "bank layer"),
+        ] {
+            if cap >= KEYED_NODES {
+                continue;
+            }
+            let why = validate(&shaped(node, cap + 1)).unwrap_err();
+            assert!(why.contains(says), "{}: {why}", node.name());
+        }
+        // And exactly at each cap, well-shaped, a graph loads: every bound
+        // is the node past the last legal one, not the last legal one.
+        for (node, cap) in [
+            (Node::Camera, KEYED_NODES),
+            (Node::Monitor, MAX_MONITORS),
+            (Node::Input, MAX_INPUTS),
+        ] {
             validate(&shaped(node, cap)).unwrap_or_else(|why| panic!("{}: {why}", node.name()));
         }
     }

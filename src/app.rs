@@ -66,8 +66,8 @@ pub struct App {
     /// instrument runs rather than at startup, so plugging one in mid-piece
     /// is the whole of setting it up.
     midi: Midi,
-    /// Which kind of node the keypad is currently naming, off the held
-    /// modifiers. A camera bare, and the modifiers say the other two.
+    /// Which kind of node the keypad is naming, off the held modifiers: the
+    /// one thing the instrument reads a modifier for.
     node: Node,
     /// The last knob that moved, which is the one [`Action::ResetLastKnob`] puts
     /// back. `None` until something is turned — on a panel nothing has
@@ -187,7 +187,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     // where the log lands too.
     print!("{}{}", crate::keys::help(), map.card());
     log::info!("surface: waiting for {}", map.device);
-    let midi = Midi::new(map)?;
+    let midi = Midi::new(map, &params)?;
     let event_loop = EventLoop::new()?;
     // Through the event loop's own display connection rather than a window's:
     // the adapter is chosen before there is a window, and wgpu forbids a
@@ -783,8 +783,6 @@ impl ApplicationHandler for App {
                     live.window.request_redraw();
                 }
             }
-            // Which kind of node a press on the keypad names — the one thing
-            // the instrument reads a modifier for.
             WindowEvent::ModifiersChanged(modifiers) => {
                 let state = modifiers.state();
                 self.node = node_of(state.shift_key(), state.control_key());
@@ -916,7 +914,7 @@ mod tests {
             initial: params.clone(),
             focus: Focus::default(),
             sources,
-            midi: Midi::new(Map::nano_kontrol2(&params)).unwrap(),
+            midi: Midi::new(Map::nano_kontrol2(&params), &params).unwrap(),
             params,
             node: Node::Camera,
             last_knob: None,
@@ -1127,7 +1125,7 @@ mod tests {
             cc: 61,
             key: "esc".into(),
         });
-        app.midi = Midi::new(map).unwrap();
+        app.midi = Midi::new(map, &app.params).unwrap();
         let mut surface = app.midi.plug_in_a_test_surface();
         surface.wire.handshake(0);
 

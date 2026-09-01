@@ -234,9 +234,9 @@ Out of the box, with no configuration:
 | fader 1 | nothing: a control a `midi.toml` can claim |
 | faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
-| S 1–8 | focus camera 1–8, as many as the graph has |
-| M 1–8 | focus monitor 1–8, as many as the graph has |
-| R 1–4 | focus input 1–4, as many as the graph has |
+| S 1–8 | focus camera 1–8, as many as the graph has a choice of |
+| M 1–8 | focus monitor 1–8, likewise |
+| R 1–4 | focus input 1–4, likewise |
 | marker next | blank the monitors |
 | ◀◀ rewind | put the last knob turned back to its identity |
 | ■ stop | reset every knob |
@@ -253,14 +253,19 @@ fader is the switcher crosspoint joining the two the hands are on. The three
 select rows point the knobs at a node, one kind of node each: Solo the
 cameras, Mute the monitors, Record the inputs.
 
-**A row stops where its kind of node does.** The surface is built for the
-graph about to be played, so a rig of one camera and two monitors binds S1,
-M1 and M2 and leaves the other twenty-one select buttons dead — unlit,
-silent, and free for a `midi.toml` to claim. Dead is the point: a button for
-equipment the rig has not got is a button that lies. The graph the board
-cannot reach is the loud case instead — more of any kind than a row is wide
-and the config is refused at load rather than played with a node no hand can
-bring the knobs to. Nothing is bound to quit. Nine of
+**A row is the choice its kind offers, and nothing else.** The surface is
+built for the graph about to be played. A rig of one camera and two monitors
+binds M1 and M2 and leaves the other twenty-two select buttons dead — unlit,
+silent, and free for a `midi.toml` to claim. The Solo row is dead there
+because one camera is no choice: a button that selects the only camera there
+is selects what is already selected, and the rule is that a button is
+owed to equipment, not spent on it. Dead is the point.
+
+The loud cases are the other way round. More of a kind than a row is wide and
+the config is refused at load rather than played with a node no hand can
+bring the knobs to; a `midi.toml` that binds a select button on a node the
+graph has not got is refused the same way, rather than lighting a button that
+lies. Nothing is bound to quit. Nine of
 the twenty-four knobs are not on the surface, which has sixteen controls and
 binds fifteen of them: the three per-channel gain offsets, which colour a
 rigid gain that is itself on a rotary; the bloom radius, which sizes a halo

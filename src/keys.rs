@@ -312,25 +312,26 @@ pub const fn node_of(shift: bool, ctrl: bool) -> Node {
     }
 }
 
-/// What a label writes in front of a node key to name `node`.
-pub(crate) const fn prefix(node: Node) -> &'static str {
+/// `None` for the camera, which is the bare key. The absence is what makes
+/// [`binding`] one search over [`Node::ALL`] rather than a second table of
+/// the kinds that do carry a word.
+pub(crate) const fn prefix(node: Node) -> Option<&'static str> {
     match node {
-        Node::Camera => "",
-        Node::Monitor => "shift ",
-        Node::Input => "ctrl ",
+        Node::Camera => None,
+        Node::Monitor => Some("shift "),
+        Node::Input => Some("ctrl "),
     }
 }
 
-/// The kinds a label names with a modifier in front. [`Node::Camera`] is not
-/// one: it is what is left when none of these matched.
-pub(crate) const MODIFIERS: [Node; 2] = [Node::Monitor, Node::Input];
-
-/// How a MIDI map spells the key that focuses `node` number `index`, and
-/// `None` past the keys. The one place a modifier is written into a label,
-/// so a surface built from this and a key press cannot disagree.
-pub fn node_label(node: Node, index: usize) -> Option<String> {
-    let (_, key) = NODE_KEYS.get(index)?;
-    Some(format!("{}{key}", prefix(node)))
+/// How a MIDI map spells each key that focuses a `node`, in the key table's
+/// order and no longer than it. The one place a modifier is written into a
+/// label, so a surface built from this and a key press cannot disagree — and
+/// a row taken from it cannot run past the keys.
+pub fn node_labels(node: Node) -> impl Iterator<Item = String> {
+    let modifier = prefix(node).unwrap_or_default();
+    NODE_KEYS
+        .iter()
+        .map(move |(_, key)| format!("{modifier}{key}"))
 }
 
 pub fn action_for(key: KeyCode, node: Node) -> Option<Action> {
@@ -360,9 +361,9 @@ enum Binding {
 /// Exactly as [`action_for`] reads the physical key, so a label cannot reach
 /// what a key press cannot.
 fn binding(label: &str) -> Option<Binding> {
-    let (node, bare) = MODIFIERS
-        .iter()
-        .find_map(|node| Some((*node, label.strip_prefix(prefix(*node))?)))
+    let (node, bare) = Node::ALL
+        .into_iter()
+        .find_map(|node| Some((node, label.strip_prefix(prefix(node)?)?)))
         .unwrap_or((Node::Camera, label));
     if let Some(index) = NODE_KEYS.iter().position(|(_, bound)| *bound == bare) {
         return Some(Binding::Node { node, index });
@@ -455,7 +456,8 @@ pub fn help() -> String {
     let nodes = NODE_KEYS.len();
     let (first, last) = (NODE_KEYS[0].1, NODE_KEYS[nodes - 1].1);
     for node in Node::ALL {
-        let keys = format!("{}{first} / {last}", prefix(node));
+        let modifier = prefix(node).unwrap_or_default();
+        let keys = format!("{modifier}{first} / {last}");
         out.push_str(&format!(
             "  {keys:<12} focus {} 1 to {nodes}\n",
             node.name()
@@ -474,7 +476,11 @@ mod tests {
     fn every_node_label() -> Vec<(Node, usize, String)> {
         Node::ALL
             .into_iter()
-            .flat_map(|node| (0..KEYED_NODES).map(move |i| (node, i, node_label(node, i).unwrap())))
+            .flat_map(|node| {
+                node_labels(node)
+                    .enumerate()
+                    .map(move |(i, l)| (node, i, l))
+            })
             .collect()
     }
 
@@ -557,7 +563,7 @@ mod tests {
         for key in every_key() {
             let reads_them = NODE_KEYS.iter().any(|(bound, _)| *bound == key);
             let bare = action_for(key, Node::Camera);
-            for node in MODIFIERS {
+            for node in Node::ALL.into_iter().filter(|n| prefix(*n).is_some()) {
                 match reads_them {
                     true => assert_ne!(action_for(key, node), bare, "{key:?} {node:?}"),
                     false => assert_eq!(action_for(key, node), bare, "{key:?} {node:?}"),
@@ -594,9 +600,9 @@ mod tests {
                 format!("{} {}", node.short(), index + 1)
             );
         }
-        // Past the keys there is no label to write, which is what stops a
-        // surface being built for a node nothing could focus.
-        assert_eq!(node_label(Node::Camera, KEYED_NODES), None);
+        // The list stops at the keys, which is what stops a surface being
+        // built for a node nothing could focus.
+        assert_eq!(node_labels(Node::Camera).count(), KEYED_NODES);
     }
 
     #[test]
@@ -664,7 +670,7 @@ mod tests {
                 .find(|line| line.contains(&format!("focus {} 1 to 8", node.name())))
                 .unwrap_or_else(|| panic!("no {} line", node.name()));
             assert!(
-                line.contains(&node_label(node, 0).unwrap()),
+                line.contains(&node_labels(node).next().unwrap()),
                 "{}: {line}",
                 node.name()
             );

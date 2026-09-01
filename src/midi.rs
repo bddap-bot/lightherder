@@ -206,7 +206,7 @@ impl Map {
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         let map: Map = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        map.validate()
+        map.validate(params)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(map)
     }
@@ -214,7 +214,7 @@ impl Map {
     /// Everything about a map that has to be true before a note of it is
     /// played, checked once at load — the surface is read inside the frame
     /// loop and there is nothing to report an error to there.
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self, params: &Params) -> Result<(), String> {
         if self.device.is_empty() {
             return Err("device is empty, which every card's line contains".into());
         }
@@ -242,11 +242,11 @@ impl Map {
             if action_for_label(&b.key).is_none() {
                 let known: Vec<&str> = labels().collect();
                 return Err(format!(
-                    "cc {}: no key called {:?}; there are {}, each also with {} in front",
+                    "cc {}: no key called {:?}; there are {}, each also with \"shift \" \
+                     or \"ctrl \" in front",
                     b.cc,
                     b.key,
-                    known.join(", "),
-                    modifier_words()
+                    known.join(", ")
                 ));
             }
             // A modifier that changes nothing. Only the node keys read one,
@@ -255,8 +255,10 @@ impl Map {
             // that out mid-set is worse than a line at startup. Asked of the
             // tables rather than named here, so a key that starts reading a
             // modifier needs no second edit.
-            for node in crate::keys::MODIFIERS {
-                let modifier = crate::keys::prefix(node);
+            for node in Node::ALL {
+                let Some(modifier) = crate::keys::prefix(node) else {
+                    continue;
+                };
                 let Some(bare) = b.key.strip_prefix(modifier) else {
                     continue;
                 };
@@ -266,6 +268,23 @@ impl Map {
                         b.cc,
                         b.key,
                         modifier.trim_end()
+                    ));
+                }
+            }
+            // A button on equipment this rig has not got. The factory rows
+            // are built from the graph and cannot do it; a hand-written map
+            // can, and a lit button that selects a camera nobody owns is the
+            // lie the whole row law exists to refuse — so it is refused here
+            // rather than drawn dim and pressed once mid-piece.
+            if let Some(Action::Focus(node, index)) = action_for_label(&b.key) {
+                let have = params.count(node);
+                if index >= have {
+                    return Err(format!(
+                        "cc {}: {:?} focuses {} {}, and this graph has {have}",
+                        b.cc,
+                        b.key,
+                        node.name(),
+                        index + 1
                     ));
                 }
             }
@@ -397,16 +416,6 @@ pub(crate) fn nano_kontrol2(device: &str) -> bool {
     device.to_lowercase().contains("nanokontrol")
 }
 
-/// The modifiers a hand-written binding may put in front of a key, for the
-/// loader's listing of what it will take.
-fn modifier_words() -> String {
-    let words: Vec<String> = crate::keys::MODIFIERS
-        .iter()
-        .map(|node| format!("{:?}", crate::keys::prefix(*node)))
-        .collect();
-    words.join(" or ")
-}
-
 fn button(cc: u8, key: impl Into<String>) -> Button {
     Button {
         cc,
@@ -418,7 +427,7 @@ fn button(cc: u8, key: impl Into<String>) -> Button {
 /// that is what a hand off a mixer reaches for it to do; the other two rows
 /// follow it downward in the order the light travels — the cameras that film
 /// the glass, the glass, then what arrives from outside.
-const fn row_of(node: Node) -> u8 {
+pub(crate) const fn row_of(node: Node) -> u8 {
     match node {
         Node::Camera => S_ROW,
         Node::Monitor => M_ROW,
@@ -429,19 +438,24 @@ const fn row_of(node: Node) -> u8 {
 /// The nanoKONTROL2's buttons for the graph it is about to play: the three
 /// select rows, and the transport strip.
 ///
-/// A row stops where its kind of node does. A button past that would select
-/// equipment the rig has not got, so it is left unbound — dark, silent, and
-/// free for a `midi.toml` to claim — and the graph that would need one past
-/// the row's end is refused at load instead ([`crate::config::validate`]).
+/// **A row is the choice its kind of node offers, and nothing else.** One of
+/// a kind is no choice — a button selecting the only camera there is selects
+/// what is already selected — so that row is not built at all, and neither
+/// are the buttons past a kind's count. Everything unbuilt is a dead button:
+/// dark, silent, and free for a `midi.toml` to claim. A graph deeper than a
+/// row is the loud case instead, refused at load
+/// ([`crate::config::validate`]).
 ///
-/// Off the key tables rather than beside them, so a label is written once
-/// and a rebound key takes its button with it.
+/// Off the key tables rather than beside them, so a label is written once, a
+/// rebound key takes its button with it, and a row cannot run past the keys.
 fn nano_buttons(params: &Params) -> Vec<Button> {
     let mut out = Vec::new();
     for node in Node::ALL {
-        for index in 0..params.count(node) {
-            let key = crate::keys::node_label(node, index)
-                .expect("a validated graph has a key for every node");
+        let choices = match params.count(node) {
+            0 | 1 => 0,
+            have => have,
+        };
+        for (index, key) in crate::keys::node_labels(node).take(choices).enumerate() {
             out.push(button(row_of(node) + index as u8, key));
         }
     }
@@ -704,9 +718,10 @@ impl TestSurface {
 
 impl Midi {
     /// The one door: a `Midi` cannot exist over a map the instrument would
-    /// refuse, so nothing downstream has to handle one.
-    pub fn new(map: Map) -> Result<Midi, String> {
-        map.validate()?;
+    /// refuse — nor over a map that does not fit the graph it will play, so
+    /// nothing downstream has to handle either.
+    pub fn new(map: Map, params: &Params) -> Result<Midi, String> {
+        map.validate(params)?;
         let action: Vec<Action> = map
             .button
             .iter()
@@ -1313,7 +1328,7 @@ mod tests {
         // Off the map, so the factory rows and a `midi.toml` that moved them
         // both light the button a hand actually reaches for. One row per
         // kind, so a focus lights one lamp on each of the three.
-        let midi = Midi::new(Map::nano_kontrol2(&full())).unwrap();
+        let midi = Midi::new(Map::nano_kontrol2(&full()), &full()).unwrap();
         for index in 0..crate::config::MAX_INPUTS {
             let focus = Focus {
                 camera: index,
@@ -1336,7 +1351,7 @@ mod tests {
             .retain(|b| !matches!(action_for_label(&b.key), Some(Action::Focus(..))));
         map.button.push(button(90, "num2"));
         map.button.push(button(91, "shift num3"));
-        let midi = Midi::new(map).unwrap();
+        let midi = Midi::new(map, &full()).unwrap();
         assert_eq!(
             midi.wanted(at(1, 2), Seed::Dark, false, false),
             crate::lamps::lamp(90) | crate::lamps::lamp(91)
@@ -1357,7 +1372,7 @@ mod tests {
         // The first button that names a node wins, rather than the last.
         let mut map = Map::nano_kontrol2(&full());
         map.button.push(button(90, "num1"));
-        let midi = Midi::new(map).unwrap();
+        let midi = Midi::new(map, &full()).unwrap();
         assert_eq!(
             midi.wanted(at(0, 0), Seed::Dark, false, false),
             crate::lamps::lamp(S_ROW) | crate::lamps::lamp(M_ROW) | crate::lamps::lamp(R_ROW)
@@ -1413,7 +1428,7 @@ mod tests {
         // The one thing that says a mode is on to a performer looking at a
         // fullscreen display. Off the button's *action*, so a `midi.toml`
         // that moves a mode moves its lamp with it.
-        let midi = Midi::new(Map::nano_kontrol2(&full())).unwrap();
+        let midi = Midi::new(Map::nano_kontrol2(&full()), &full()).unwrap();
         let focus = at(0, 0);
         let base = midi.wanted(focus, Seed::Dark, false, false);
         assert_eq!(
@@ -1431,7 +1446,7 @@ mod tests {
         // rather than the button that number used to be.
         let mut map = Map::nano_kontrol2(&full());
         map.button.retain(|b| b.cc != 46);
-        let midi = Midi::new(map).unwrap();
+        let midi = Midi::new(map, &full()).unwrap();
         let base = midi.wanted(focus, Seed::Dark, false, false);
         assert_eq!(midi.wanted(focus, Seed::Dark, true, false), base);
     }
@@ -1442,7 +1457,7 @@ mod tests {
         // nothing alike on the glass, but which one a monitor is *on* is a
         // question a hand asks before it presses, and a toggle that answers
         // it only by changing the picture answers it too late.
-        let midi = Midi::new(Map::nano_kontrol2(&full())).unwrap();
+        let midi = Midi::new(Map::nano_kontrol2(&full()), &full()).unwrap();
         let focus = at(0, 0);
         let base = midi.wanted(focus, Seed::Dark, false, false);
         assert_eq!(
@@ -1464,7 +1479,7 @@ mod tests {
         // And a map that binds the seed nowhere lights nothing extra.
         let mut map = Map::nano_kontrol2(&full());
         map.button.retain(|b| b.cc != 41);
-        let midi = Midi::new(map).unwrap();
+        let midi = Midi::new(map, &full()).unwrap();
         let base = midi.wanted(focus, Seed::Dark, false, false);
         assert_eq!(midi.wanted(focus, Seed::BLOB, false, false), base);
     }
@@ -1606,19 +1621,33 @@ mod tests {
         // by one — or two kinds landing on one row — fails here rather than
         // under a hand mid-piece. This map is built for [`full`], so every
         // row runs its whole width.
-        let mut nodes: Vec<Button> = Vec::new();
-        for (first, modifier) in [(32, ""), (48, "shift "), (64, "ctrl ")] {
-            let width = match first {
-                64 => crate::config::MAX_INPUTS,
-                _ => crate::keys::KEYED_NODES,
-            };
-            for n in 1..=width {
-                nodes.push(button(first + n as u8 - 1, format!("{modifier}num{n}")));
-            }
-        }
-        assert_eq!(map.button[..nodes.len()], nodes[..]);
         assert_eq!(
-            map.button[nodes.len()..],
+            map.button[..20],
+            [
+                button(32, "num1"),
+                button(33, "num2"),
+                button(34, "num3"),
+                button(35, "num4"),
+                button(36, "num5"),
+                button(37, "num6"),
+                button(38, "num7"),
+                button(39, "num8"),
+                button(48, "shift num1"),
+                button(49, "shift num2"),
+                button(50, "shift num3"),
+                button(51, "shift num4"),
+                button(52, "shift num5"),
+                button(53, "shift num6"),
+                button(54, "shift num7"),
+                button(55, "shift num8"),
+                button(64, "ctrl num1"),
+                button(65, "ctrl num2"),
+                button(66, "ctrl num3"),
+                button(67, "ctrl num4"),
+            ]
+        );
+        assert_eq!(
+            map.button[20..],
             [
                 button(62, "space"),
                 button(43, "backspace"),
@@ -1646,6 +1675,65 @@ mod tests {
                 silkscreen(&map.device, cc)
             );
         }
+    }
+
+    #[test]
+    fn a_kind_the_rig_has_one_of_gets_no_row_at_all() {
+        // The ruling: a button is owed to equipment, and a button
+        // that selects the only camera there is selects what is already
+        // selected. So the row is not built — one camera and one input here,
+        // four monitors, and only the monitors are a choice to make.
+        let map = Map::nano_kontrol2(&crate::config::rig(1, 4, 1));
+        let rows: Vec<(u8, &str)> = map
+            .button
+            .iter()
+            .filter(|b| matches!(action_for_label(&b.key), Some(Action::Focus(..))))
+            .map(|b| (b.cc, b.key.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (48, "shift num1"),
+                (49, "shift num2"),
+                (50, "shift num3"),
+                (51, "shift num4"),
+            ]
+        );
+        // And a rig with nothing to choose anywhere has three dead rows,
+        // which is the rig's own: one camera, one monitor, one input.
+        let map = Map::nano_kontrol2(&crate::config::rig(1, 1, 1));
+        assert!(!map
+            .button
+            .iter()
+            .any(|b| matches!(action_for_label(&b.key), Some(Action::Focus(..)))));
+    }
+
+    #[test]
+    fn a_map_binding_a_node_the_graph_has_not_got_is_refused() {
+        // The factory rows cannot do this — they are built from the graph —
+        // but a hand-written map can, and a lit button that selects a camera
+        // nobody owns is the lie the row law exists to refuse.
+        let rig = crate::config::rig(2, 2, 0);
+        for (key, kind) in [
+            ("num3", "camera"),
+            ("shift num3", "monitor"),
+            ("ctrl num1", "input"),
+        ] {
+            let mut map = Map::nano_kontrol2(&rig);
+            map.button.push(button(90, key));
+            let why = Midi::new(map, &rig)
+                .err()
+                .expect("a map the instrument would refuse");
+            assert!(
+                why.contains(kind) && why.contains("this graph has"),
+                "{why}"
+            );
+        }
+        // A node the graph does have is not refused, so the check is the
+        // count and not the mere presence of a select binding.
+        let mut map = Map::nano_kontrol2(&rig);
+        map.button.push(button(90, "num2"));
+        assert!(Midi::new(map, &rig).is_ok());
     }
 
     #[test]
@@ -1684,7 +1772,7 @@ mod tests {
         {
             assert!(spot(cc).is_some(), "cc {cc} is nowhere on the panel");
         }
-        Midi::new(map).unwrap();
+        Midi::new(map, &full()).unwrap();
     }
 
     #[test]
@@ -1709,23 +1797,23 @@ mod tests {
         // Within one list...
         let mut map = Map::nano_kontrol2(&full());
         map.button.push(button(S_ROW, "esc"));
-        assert!(map.validate().unwrap_err().contains("bound twice"));
+        assert!(map.validate(&full()).unwrap_err().contains("bound twice"));
 
         // ...and across the two, which matters more: `action_for` looks at
         // the faders first, so a button sharing a fader's number is silently
         // dead rather than ambiguous.
         let mut map = Map::nano_kontrol2(&full());
         map.button.push(button(1, "r"));
-        assert!(map.validate().unwrap_err().contains("bound twice"));
+        assert!(map.validate(&full()).unwrap_err().contains("bound twice"));
 
         let mut map = Map::nano_kontrol2(&full());
         map.fader.push(fader(200, Knob::Hue));
-        let why = map.validate().unwrap_err();
+        let why = map.validate(&full()).unwrap_err();
         assert!(why.contains("200") && why.contains("127"), "{why}");
 
         let mut map = Map::nano_kontrol2(&full());
         map.button.push(button(90, "wiggle"));
-        let why = map.validate().unwrap_err();
+        let why = map.validate(&full()).unwrap_err();
         assert!(why.contains("wiggle"), "{why}");
         // The error lists what a key may be, because a config file is written
         // by hand and there are forty of them.
@@ -1733,13 +1821,13 @@ mod tests {
 
         let mut map = Map::nano_kontrol2(&full());
         map.device = String::new();
-        assert!(map.validate().is_err());
+        assert!(map.validate(&full()).is_err());
 
         // And the one door refuses all of it, so a `Midi` over a bad map is
         // unconstructable rather than quietly inert.
         let mut map = Map::nano_kontrol2(&full());
         map.button.push(button(90, "wiggle"));
-        assert!(Midi::new(map).is_err());
+        assert!(Midi::new(map, &full()).is_err());
     }
 
     #[test]
@@ -1821,7 +1909,10 @@ mod tests {
     }
 
     fn surface() -> (Midi, Params) {
-        (Midi::new(Map::nano_kontrol2(&full())).unwrap(), full())
+        (
+            Midi::new(Map::nano_kontrol2(&full()), &full()).unwrap(),
+            full(),
+        )
     }
 
     fn feed_at(midi: &mut Midi, params: &Params, focus: Focus, bytes: &[u8]) -> Vec<Action> {
@@ -1887,7 +1978,7 @@ mod tests {
         // just moved, and the rigid one throws all three channels at once.
         let mut map = Map::nano_kontrol2(&full());
         map.fader.push(fader(24, Knob::GainR));
-        let mut midi = Midi::new(map).unwrap();
+        let mut midi = Midi::new(map, &full()).unwrap();
         let params = Params::default();
         // Catch both: rotary 5 is the rigid gain, cc 24 is red. Both knobs
         // sit near 0.986 in a range of 0 to 1.2, so a sweep from the bottom
@@ -1938,11 +2029,14 @@ mod tests {
         // nothing — naming the wrong fault, and printing no list of the keys
         // that do exist. `shift num9` is the typo this block now invites.
         let refuse = |key: &str| {
-            Midi::new(Map {
-                device: "x".into(),
-                fader: Vec::new(),
-                button: vec![button(90, key)],
-            })
+            Midi::new(
+                Map {
+                    device: "x".into(),
+                    fader: Vec::new(),
+                    button: vec![button(90, key)],
+                },
+                &full(),
+            )
             .err()
             .expect("a map the instrument would refuse")
         };
@@ -2030,7 +2124,7 @@ mod tests {
             monitor: 1,
             input: 0,
         };
-        let mut midi = Midi::new(Map::nano_kontrol2(&full())).unwrap();
+        let mut midi = Midi::new(Map::nano_kontrol2(&full()), &full()).unwrap();
         assert_eq!(feed_at(&mut midi, &params, first, &cc(4, 0)).len(), 0);
         assert_eq!(feed_at(&mut midi, &params, first, &cc(4, 64)).len(), 1);
         midi.release();
@@ -2151,13 +2245,13 @@ mod tests {
         };
         // Fader 3 is saturation. At the top it is monitor 2's value, so it
         // catches there...
-        let mut midi = Midi::new(Map::nano_kontrol2(&full())).unwrap();
+        let mut midi = Midi::new(Map::nano_kontrol2(&full()), &full()).unwrap();
         assert!(matches!(
             feed_at(&mut midi, &params, far, &cc(2, 127))[..],
             [Action::Set(Knob::Saturation, _)]
         ));
         // ...and would not have on monitor 1, whose saturation is at zero.
-        let mut midi = Midi::new(Map::nano_kontrol2(&full())).unwrap();
+        let mut midi = Midi::new(Map::nano_kontrol2(&full()), &full()).unwrap();
         assert_eq!(
             feed_at(&mut midi, &params, Focus::default(), &cc(2, 127)),
             []
@@ -2172,7 +2266,7 @@ mod tests {
         let dir = scratch("hotplug");
         let cards = dir.join("cards");
         std::fs::write(&cards, SAMPLE_CARDS).unwrap();
-        let mut midi = Midi::new(Map::nano_kontrol2(&full()))
+        let mut midi = Midi::new(Map::nano_kontrol2(&full()), &full())
             .unwrap()
             .looking_in(dir.clone(), cards);
         let params = Params::default();
@@ -2240,7 +2334,7 @@ mod tests {
         // is the half of that claim which needs nothing but a descriptor, so
         // a machine with no display still fails a lamp that never leaves the
         // instrument.
-        let mut midi = Midi::new(Map::nano_kontrol2(&full())).unwrap();
+        let mut midi = Midi::new(Map::nano_kontrol2(&full()), &full()).unwrap();
         let mut surface = midi.plug_in_a_test_surface();
         surface.wire.handshake(0);
         // One row per kind: the first of each is S1, M1 and R1, which are

@@ -527,12 +527,6 @@ mod tests {
         )
     }
 
-    /// The factory map for a graph, which is the only way there is one: the
-    /// surface is built from the rig it will play.
-    fn factory(params: &Params) -> Map {
-        Map::nano_kontrol2(params)
-    }
-
     /// The texels that differ between two images — the overlay's whole claim
     /// is that the picture follows the map, which is a claim about texels.
     fn texels_differing(a: &Raster, b: &Raster) -> usize {
@@ -571,7 +565,7 @@ mod tests {
 
     #[test]
     fn the_left_cluster_is_arranged_the_way_the_surface_is() {
-        let raster = rasterize(&factory(&whole()));
+        let raster = rasterize(&Map::nano_kontrol2(&whole()));
         // Every expectation below is in the strip's own texels, so the
         // strip's own place has to be claimed outright: it starts at the
         // panel's edge and its widest row stops short of the channel
@@ -617,7 +611,7 @@ mod tests {
 
     #[test]
     fn the_factory_panel_is_drawn_and_captioned() {
-        let raster = rasterize(&factory(&whole()));
+        let raster = rasterize(&Map::nano_kontrol2(&whole()));
         assert_eq!(
             (raster.width, raster.height),
             (PANEL_W as u32, PANEL_H as u32)
@@ -633,8 +627,8 @@ mod tests {
         // The rule inherited from rl's controls display: a picture that
         // drifts from the map in force is disallowed. Move one knob in the
         // map and the picture must move with it.
-        let before = rasterize(&factory(&whole()));
-        let mut moved = factory(&whole());
+        let before = rasterize(&Map::nano_kontrol2(&whole()));
+        let mut moved = Map::nano_kontrol2(&whole());
         moved.fader[0].knob = crate::params::Knob::Noise;
         let moved = rasterize(&moved);
         assert!(texels_differing(&before, &moved) > 100);
@@ -642,7 +636,7 @@ mod tests {
 
     #[test]
     fn a_binding_off_the_panel_gets_a_line_rather_than_vanishing() {
-        let mut map = factory(&whole());
+        let mut map = Map::nano_kontrol2(&whole());
         map.button.push(crate::midi::Button {
             cc: 100,
             key: "space".into(),
@@ -656,7 +650,7 @@ mod tests {
         // A one-camera graph: the listing is the other way this help is
         // drawn, and it narrows with the rig too.
         let params = crate::config::single();
-        let mut map = factory(&params);
+        let mut map = Map::nano_kontrol2(&params);
         map.device = "Launchpad".into();
         let raster = rasterize(&map);
         // A listing is one line per binding plus the device's own, and
@@ -665,7 +659,7 @@ mod tests {
             raster.height,
             ((labels(&map).count() + 1) as i32 * LINE + 2 * PAD) as u32
         );
-        assert!(labels(&map).count() < labels(&factory(&whole())).count());
+        assert!(labels(&map).count() < labels(&Map::nano_kontrol2(&whole())).count());
         assert!(lit_texels(&raster) > 100);
     }
 
@@ -673,7 +667,7 @@ mod tests {
     fn every_factory_caption_keeps_to_two_words() {
         // The ceiling, held where the captions are made: no control
         // on the shipped panel may say more than two words.
-        let map = factory(&whole());
+        let map = Map::nano_kontrol2(&whole());
         for f in &map.fader {
             assert!(
                 f.knob.name().split_whitespace().count() <= 2,
@@ -687,12 +681,18 @@ mod tests {
         }
     }
 
-    /// Which row of the panel a kind of node selects on.
-    fn row_of(node: Node) -> (usize, fn(u8) -> Spot) {
-        match node {
-            Node::Camera => (0, Spot::S),
-            Node::Monitor => (1, Spot::M),
-            Node::Input => (2, Spot::R),
+    /// Where a kind of node's button `i` sits, off the panel's own table
+    /// rather than a second copy of it here.
+    fn spot_of(node: Node, i: u8) -> Spot {
+        spot(crate::midi::row_of(node) + i).expect("a select row is a block of spots")
+    }
+
+    fn row_index(node: Node) -> usize {
+        match spot_of(node, 0) {
+            Spot::S(_) => 0,
+            Spot::M(_) => 1,
+            Spot::R(_) => 2,
+            other => panic!("a select row landed on {other:?}"),
         }
     }
 
@@ -701,7 +701,14 @@ mod tests {
     /// leaves out its thumb, which crosses the middle row.
     fn band(pixels: &[u8], width: i32, node: Node, i: u8) -> Vec<[u8; 4]> {
         let w = track_x(i) - strip_x(i) - 1;
-        box_of(pixels, width, strip_x(i), ROWS_Y[row_of(node).0], w, SQUARE)
+        box_of(
+            pixels,
+            width,
+            strip_x(i),
+            ROWS_Y[row_index(node)],
+            w,
+            SQUARE,
+        )
     }
 
     /// The same band of a panel carrying nothing but `draw`.
@@ -719,7 +726,7 @@ mod tests {
         let caption = format!("{} {}", node.short(), i + 1);
         band_of(node, i, |c| {
             strip_chrome(c, i);
-            place(c, row_of(node).1(i), &caption);
+            place(c, spot_of(node, i), &caption);
         })
     }
 
@@ -727,14 +734,19 @@ mod tests {
     fn a_select_row_is_drawn_for_its_own_kind_and_stops_where_the_graph_does() {
         // Lopsided shapes on purpose: every graph this crate ships has as
         // many cameras as monitors, so a row drawn from another kind's count
-        // would read the same on all of them. Past the graph the strip is
-        // bare chrome, which is what a dead button looks like.
+        // would read the same on all of them. Past the choice the strip is
+        // bare chrome, which is what a dead button looks like — and a kind
+        // the rig has one of is no choice, so its whole row is chrome.
         for (cameras, monitors, inputs) in [(1, 1, 0), (4, 2, 1), (1, 8, 0), (8, 8, 4)] {
             let params = crate::config::rig(cameras, monitors, inputs);
-            let raster = rasterize(&factory(&params));
+            let raster = rasterize(&Map::nano_kontrol2(&params));
             for node in Node::ALL {
+                let bound = match params.count(node) {
+                    0 | 1 => 0,
+                    have => have,
+                };
                 for i in 0..crate::keys::KEYED_NODES as u8 {
-                    let want = match (i as usize) < params.count(node) {
+                    let want = match (i as usize) < bound {
                         true => selects(node, i),
                         false => asleep(node, i),
                     };
