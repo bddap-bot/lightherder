@@ -783,10 +783,7 @@ impl ApplicationHandler for App {
                     live.window.request_redraw();
                 }
             }
-            WindowEvent::ModifiersChanged(modifiers) => {
-                let state = modifiers.state();
-                self.node = node_of(state.shift_key(), state.control_key());
-            }
+            WindowEvent::ModifiersChanged(modifiers) => self.node = node_of(modifiers.state()),
             // A window that loses focus is a window whose held controls all
             // come up. On Wayland it is told so in no other way — winit
             // sends no release for a key held when focus goes — so without

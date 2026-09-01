@@ -1113,6 +1113,20 @@ mod tests {
     }
 
     #[test]
+    fn the_focus_moves_the_leg_it_names_and_no_other() {
+        // Each kind reads and writes its own index. A leg that quietly did
+        // nothing would leave its whole select row pressing buttons that
+        // change nothing, which is what the rows exist not to be.
+        for node in Node::ALL {
+            let moved = Focus::default().with(node, 3);
+            assert_eq!(moved.at(node), 3, "{node:?} did not move");
+            for other in Node::ALL.into_iter().filter(|o| *o != node) {
+                assert_eq!(moved.at(other), 0, "{node:?} moved {other:?}");
+            }
+        }
+    }
+
+    #[test]
     fn knobs_stop_at_their_limits() {
         let mut params = p();
         for _ in 0..10_000 {

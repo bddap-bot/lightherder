@@ -227,7 +227,9 @@ whose card is named in `/proc/asound/cards`, and when the cable comes out the
 read ends and it goes back to looking. ALSA raw MIDI and no library — a
 controller is `/dev/snd/midiC<card>D0`, and reading it gives the wire bytes.
 
-Out of the box, with no configuration:
+Out of the box, with no configuration. The select rows are the exception to
+"out of the box": they are the graph's, and on the default `single` rig — one
+camera, one monitor, no inputs — all three are dead.
 
 | control | is |
 |---|---|

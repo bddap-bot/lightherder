@@ -515,17 +515,7 @@ impl Overlay {
 mod tests {
     use super::*;
 
-    use crate::params::{Node, Params};
-
-    /// A graph filling every select row, so the factory map is built whole:
-    /// what a test about the drawing rather than about the graph wants.
-    fn whole() -> Params {
-        crate::config::rig(
-            crate::keys::KEYED_NODES,
-            crate::config::MAX_MONITORS,
-            crate::config::MAX_INPUTS,
-        )
-    }
+    use crate::params::Node;
 
     /// The texels that differ between two images — the overlay's whole claim
     /// is that the picture follows the map, which is a claim about texels.
@@ -565,7 +555,7 @@ mod tests {
 
     #[test]
     fn the_left_cluster_is_arranged_the_way_the_surface_is() {
-        let raster = rasterize(&Map::nano_kontrol2(&whole()));
+        let raster = rasterize(&Map::nano_kontrol2(&crate::config::widest()));
         // Every expectation below is in the strip's own texels, so the
         // strip's own place has to be claimed outright: it starts at the
         // panel's edge and its widest row stops short of the channel
@@ -611,7 +601,7 @@ mod tests {
 
     #[test]
     fn the_factory_panel_is_drawn_and_captioned() {
-        let raster = rasterize(&Map::nano_kontrol2(&whole()));
+        let raster = rasterize(&Map::nano_kontrol2(&crate::config::widest()));
         assert_eq!(
             (raster.width, raster.height),
             (PANEL_W as u32, PANEL_H as u32)
@@ -627,8 +617,8 @@ mod tests {
         // The rule inherited from rl's controls display: a picture that
         // drifts from the map in force is disallowed. Move one knob in the
         // map and the picture must move with it.
-        let before = rasterize(&Map::nano_kontrol2(&whole()));
-        let mut moved = Map::nano_kontrol2(&whole());
+        let before = rasterize(&Map::nano_kontrol2(&crate::config::widest()));
+        let mut moved = Map::nano_kontrol2(&crate::config::widest());
         moved.fader[0].knob = crate::params::Knob::Noise;
         let moved = rasterize(&moved);
         assert!(texels_differing(&before, &moved) > 100);
@@ -636,7 +626,7 @@ mod tests {
 
     #[test]
     fn a_binding_off_the_panel_gets_a_line_rather_than_vanishing() {
-        let mut map = Map::nano_kontrol2(&whole());
+        let mut map = Map::nano_kontrol2(&crate::config::widest());
         map.button.push(crate::midi::Button {
             cc: 100,
             key: "space".into(),
@@ -659,7 +649,9 @@ mod tests {
             raster.height,
             ((labels(&map).count() + 1) as i32 * LINE + 2 * PAD) as u32
         );
-        assert!(labels(&map).count() < labels(&Map::nano_kontrol2(&whole())).count());
+        assert!(
+            labels(&map).count() < labels(&Map::nano_kontrol2(&crate::config::widest())).count()
+        );
         assert!(lit_texels(&raster) > 100);
     }
 
@@ -667,7 +659,7 @@ mod tests {
     fn every_factory_caption_keeps_to_two_words() {
         // The ceiling, held where the captions are made: no control
         // on the shipped panel may say more than two words.
-        let map = Map::nano_kontrol2(&whole());
+        let map = Map::nano_kontrol2(&crate::config::widest());
         for f in &map.fader {
             assert!(
                 f.knob.name().split_whitespace().count() <= 2,

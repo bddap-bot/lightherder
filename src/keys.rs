@@ -1,7 +1,7 @@
 //! The keyboard mapped onto the knobs. One table per shape, driving both the
 //! lookup and the printed help, so the two cannot drift apart.
 
-use winit::keyboard::KeyCode;
+use winit::keyboard::{KeyCode, ModifiersState};
 
 use crate::params::{Knob, Node};
 
@@ -301,11 +301,12 @@ const fn axis(
     }
 }
 
-/// What a node key held under these modifiers names. Ctrl beats shift so the
-/// pair held together is one answer rather than an order the hand has to
-/// know.
-pub const fn node_of(shift: bool, ctrl: bool) -> Node {
-    match (ctrl, shift) {
+/// What a node key held under these modifiers names. Off the modifier state
+/// itself rather than a pair of `bool`s, which a call site can hand over in
+/// the wrong order and no type would notice. Ctrl beats shift, so the pair
+/// held together is one answer rather than an order the hand has to know.
+pub fn node_of(modifiers: ModifiersState) -> Node {
+    match (modifiers.control_key(), modifiers.shift_key()) {
         (true, _) => Node::Input,
         (false, true) => Node::Monitor,
         (false, false) => Node::Camera,
@@ -576,10 +577,13 @@ mod tests {
             action_for(NODE_KEYS[0].0, Node::Monitor),
             action_for(NODE_KEYS[0].0, Node::Input)
         );
-        assert_eq!(node_of(false, false), Node::Camera);
-        assert_eq!(node_of(true, false), Node::Monitor);
-        assert_eq!(node_of(false, true), Node::Input);
-        assert_eq!(node_of(true, true), Node::Input);
+        assert_eq!(node_of(ModifiersState::empty()), Node::Camera);
+        assert_eq!(node_of(ModifiersState::SHIFT), Node::Monitor);
+        assert_eq!(node_of(ModifiersState::CONTROL), Node::Input);
+        assert_eq!(
+            node_of(ModifiersState::CONTROL | ModifiersState::SHIFT),
+            Node::Input
+        );
     }
 
     #[test]
@@ -813,14 +817,11 @@ mod tests {
     }
 
     #[test]
-    fn a_node_key_selects_the_node_it_is_numbered_for() {
+    fn the_kinds_are_named_in_the_words_the_card_and_the_overlay_print() {
+        // The one place the actual words are pinned: every other node test
+        // builds its expectation out of `Node::name`, `Node::short` and
+        // `prefix`, so a rename would move expectation and reality together.
         // Numbered from one on the key and from zero in the graph.
-        for (camera, (key, _)) in NODE_KEYS.iter().enumerate() {
-            assert_eq!(
-                action_for(*key, Node::Camera),
-                Some(Action::Focus(Node::Camera, camera))
-            );
-        }
         let third = NODE_KEYS[2].1;
         assert_eq!(describes(third).as_deref(), Some("focus camera 3"));
         assert_eq!(short(third).as_deref(), Some("cam 3"));
@@ -829,5 +830,10 @@ mod tests {
             Some("focus input 3")
         );
         assert_eq!(short(&format!("ctrl {third}")).as_deref(), Some("in 3"));
+        assert_eq!(
+            describes(&format!("shift {third}")).as_deref(),
+            Some("focus monitor 3")
+        );
+        assert_eq!(short(&format!("shift {third}")).as_deref(), Some("mon 3"));
     }
 }

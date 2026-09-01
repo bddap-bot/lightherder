@@ -17,6 +17,13 @@ pub const MAX_MONITORS: usize = 8;
 /// a switcher has spare inputs for.
 pub const MAX_INPUTS: usize = 4;
 
+/// The widest graph the board reaches, which is the map a test about the
+/// *surface* rather than about any rig means by "the factory layout".
+#[cfg(test)]
+pub(crate) fn widest() -> Params {
+    rig(crate::keys::KEYED_NODES, MAX_MONITORS, MAX_INPUTS)
+}
+
 /// A graph of a named shape, for the tests that are about the *surface* a
 /// graph builds rather than about any light it makes. One-hot looks and a
 /// switcher left off, so even the widest rig stays inside the tap bound.
@@ -363,23 +370,10 @@ pub fn validate(params: &Params) -> Result<(), String> {
         params.cameras.len(),
         params.inputs.len(),
     );
-    // The reach: a node past the keys would play forever at whatever the
-    // file left its knobs on, since nothing could bring the focus to it.
-    // The board's row is eight wide whichever row it is, so one bound.
-    for node in Node::ALL {
-        let have = params.count(node);
-        if have > KEYED_NODES {
-            return Err(format!(
-                "{have} {}s; at most {KEYED_NODES} — one button and one key per \
-                 node, and a {} past those could never be turned live",
-                node.name(),
-                node.name()
-            ));
-        }
-    }
-    // What the two kinds that cost something are held to besides, in their
-    // own words: these are bank layers and threads, not buttons, and a
-    // refusal that named the board would send a performer to the wrong fix.
+    // What the two kinds that cost something are held to, first, because a
+    // rig over one of these cannot be had at all: a refusal naming the board
+    // would send a performer to rebind buttons over a bank the GPU will not
+    // hold. Cameras cost nothing of their own and appear here not at all.
     if m > MAX_MONITORS {
         return Err(format!(
             "{m} monitors; at most {MAX_MONITORS} — the uniform buffer, the \
@@ -391,6 +385,21 @@ pub fn validate(params: &Params) -> Result<(), String> {
             "{n} inputs; at most {MAX_INPUTS} — each one is a bank layer of its \
              own, and a file or a device is a process and a thread besides"
         ));
+    }
+    // Then the reach, which every kind answers to: a node past the keys
+    // would play forever at whatever the file left its knobs on, since
+    // nothing could bring the focus to it. The board's row is eight wide
+    // whichever row it is, so one bound.
+    for node in Node::ALL {
+        let have = params.count(node);
+        if have > KEYED_NODES {
+            return Err(format!(
+                "{have} {}s; at most {KEYED_NODES} — one button and one key per \
+                 node, and a {} past those could never be turned live",
+                node.name(),
+                node.name()
+            ));
+        }
     }
     if m == 0 {
         return Err("no monitors; a rig with none has no glass to draw to".into());
@@ -1101,30 +1110,29 @@ mod tests {
             Node::Monitor => rig(1, n, 1),
             Node::Input => rig(1, 1, n),
         };
-        for node in Node::ALL {
-            let why = validate(&shaped(node, KEYED_NODES + 1)).unwrap_err();
-            assert!(
-                why.contains("one button and one key per node"),
-                "{}: refused for the wrong reason: {why}",
-                node.name()
-            );
-            assert!(
-                why.contains(&format!("{} {}s", KEYED_NODES + 1, node.name())),
-                "{why}"
-            );
-        }
+        // The reach is the camera's whole bound, so it is the kind that
+        // shows the reach's own words.
+        let why = validate(&shaped(Node::Camera, KEYED_NODES + 1)).unwrap_err();
+        assert!(
+            why.contains("one button and one key per node")
+                && why.contains(&format!("{} cameras", KEYED_NODES + 1)),
+            "refused for the wrong reason: {why}"
+        );
         // The two kinds that cost something are refused past their own cap
-        // for their own reason — a refusal naming the board would send a
-        // performer to rebind buttons over a bank the GPU cannot hold.
+        // for their own reason, whether or not the reach would also have
+        // caught them — a refusal naming the board would send a performer to
+        // rebind buttons over a bank the GPU cannot hold.
         for (node, cap, says) in [
             (Node::Monitor, MAX_MONITORS, "texture array"),
             (Node::Input, MAX_INPUTS, "bank layer"),
         ] {
-            if cap >= KEYED_NODES {
-                continue;
-            }
             let why = validate(&shaped(node, cap + 1)).unwrap_err();
             assert!(why.contains(says), "{}: {why}", node.name());
+            assert!(
+                !why.contains("one button"),
+                "{}: sent to the board over a cost: {why}",
+                node.name()
+            );
         }
         // And exactly at each cap, well-shaped, a graph loads: every bound
         // is the node past the last legal one, not the last legal one.

@@ -1,2 +1,5 @@
 /target
 web/dist/
+
+# Build logs left by a worker; the build itself lives in /target.
+*.log
