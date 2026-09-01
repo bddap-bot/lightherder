@@ -3,7 +3,7 @@
 
 use winit::keyboard::KeyCode;
 
-use crate::params::Knob;
+use crate::params::{Knob, Node};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
@@ -13,11 +13,10 @@ pub enum Action {
     /// the instrument's.
     Set(Knob, f32),
     Nudge(Knob, f32),
-    /// Put the camera knobs' focus on one camera outright, by its place in
-    /// the graph. A select rather than a step: a hand that means "that one"
-    /// should not have to walk past the ones it does not mean.
-    FocusCamera(usize),
-    FocusMonitor(usize),
+    /// Put the knobs' focus on one node of one kind outright, by its place
+    /// in the graph. A select rather than a step: a hand that means "that
+    /// one" should not have to walk past the ones it does not mean.
+    Focus(Node, usize),
     Reset,
     /// Put the last knob that moved back to its identity, and nothing else.
     /// Named by having been turned rather than by a control of its own: the
@@ -69,24 +68,23 @@ pub fn released(action: Action) -> Option<Action> {
     }
 }
 
-/// How many nodes of each side of the focus have a key of their own. Eight
-/// because that is the keypad, and because it is a control surface's channel
-/// strips. It is also as deep as any graph goes: a node past the keys could
-/// never be turned live, so [`crate::config::MAX_CAMERAS`] is this by
-/// definition and [`crate::config::MAX_MONITORS`] happens to match.
-pub(crate) const KEYED_NODES: usize = 8;
+/// How many nodes of a kind have a key of their own, and so how deep any
+/// graph may go: eight, because that is the keypad and a control surface's
+/// channel strips alike. A node past this has no key and no button, which is
+/// what [`crate::config::validate`] refuses a graph for.
+pub const KEYED_NODES: usize = 8;
 
-/// The nodes a key reaches outright: a camera bare, and the monitor of the
-/// same number with `shift` in front. The numeric keypad because it is
-/// already numbered the way the graph is, because it is the last block of
-/// eight the board has left, and because these are physical key codes — so a
-/// board with NumLock off still sends them. A slip onto one moves the focus
-/// and nothing else on the glass.
+/// The nodes a key reaches outright, one kind per modifier — a camera bare,
+/// the monitor of the same number under `shift`, the input under `ctrl`. The
+/// numeric keypad because it is already numbered the way the graph is,
+/// because it is the last block of eight the board has left, and because
+/// these are physical key codes — so a board with NumLock off still sends
+/// them. A slip onto one moves the focus and nothing else on the glass.
 ///
-/// `shift` for the monitor rather than a second block of eight keys: the
-/// board has no second block, and the camera and the monitor are the same
-/// question asked of the two sides of the graph — which is the shape a
-/// modifier has, not the shape two unrelated tables have.
+/// Modifiers rather than three blocks of eight keys: the board has no second
+/// block, let alone a third, and the three kinds are the same question asked
+/// of the graph's three sides — which is the shape a modifier has, not the
+/// shape three unrelated tables have.
 pub(crate) const NODE_KEYS: [(KeyCode, &str); KEYED_NODES] = [
     (KeyCode::Numpad1, "num1"),
     (KeyCode::Numpad2, "num2"),
@@ -303,13 +301,41 @@ const fn axis(
     }
 }
 
-pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
-    if let Some(node) = NODE_KEYS.iter().position(|(bound, _)| *bound == key) {
-        return Some(if shift {
-            Action::FocusMonitor(node)
-        } else {
-            Action::FocusCamera(node)
-        });
+/// What a node key held under these modifiers names. Ctrl beats shift so the
+/// pair held together is one answer rather than an order the hand has to
+/// know.
+pub const fn node_of(shift: bool, ctrl: bool) -> Node {
+    match (ctrl, shift) {
+        (true, _) => Node::Input,
+        (false, true) => Node::Monitor,
+        (false, false) => Node::Camera,
+    }
+}
+
+/// What a label writes in front of a node key to name `node`.
+pub(crate) const fn prefix(node: Node) -> &'static str {
+    match node {
+        Node::Camera => "",
+        Node::Monitor => "shift ",
+        Node::Input => "ctrl ",
+    }
+}
+
+/// The kinds a label names with a modifier in front. [`Node::Camera`] is not
+/// one: it is what is left when none of these matched.
+pub(crate) const MODIFIERS: [Node; 2] = [Node::Monitor, Node::Input];
+
+/// How a MIDI map spells the key that focuses `node` number `index`, and
+/// `None` past the keys. The one place a modifier is written into a label,
+/// so a surface built from this and a key press cannot disagree.
+pub fn node_label(node: Node, index: usize) -> Option<String> {
+    let (_, key) = NODE_KEYS.get(index)?;
+    Some(format!("{}{key}", prefix(node)))
+}
+
+pub fn action_for(key: KeyCode, node: Node) -> Option<Action> {
+    if let Some(index) = NODE_KEYS.iter().position(|(bound, _)| *bound == key) {
+        return Some(Action::Focus(node, index));
     }
     for axis in AXES {
         if axis.down.0 == key {
@@ -326,7 +352,7 @@ pub fn action_for(key: KeyCode, shift: bool) -> Option<Action> {
 /// [`action_for_label`], [`describes`] and [`short`], so their wordings can
 /// differ but what a label reaches cannot.
 enum Binding {
-    Node { node: usize, shift: bool },
+    Node { node: Node, index: usize },
     Axis { axis: &'static Axis, up: bool },
     Command(&'static Command),
 }
@@ -334,12 +360,12 @@ enum Binding {
 /// Exactly as [`action_for`] reads the physical key, so a label cannot reach
 /// what a key press cannot.
 fn binding(label: &str) -> Option<Binding> {
-    let (shift, bare) = match label.strip_prefix("shift ") {
-        Some(rest) => (true, rest),
-        None => (false, label),
-    };
-    if let Some(node) = NODE_KEYS.iter().position(|(_, bound)| *bound == bare) {
-        return Some(Binding::Node { node, shift });
+    let (node, bare) = MODIFIERS
+        .iter()
+        .find_map(|node| Some((*node, label.strip_prefix(prefix(*node))?)))
+        .unwrap_or((Node::Camera, label));
+    if let Some(index) = NODE_KEYS.iter().position(|(_, bound)| *bound == bare) {
+        return Some(Binding::Node { node, index });
     }
     for axis in AXES {
         if axis.down.1 == bare {
@@ -379,8 +405,7 @@ pub fn command_labels() -> impl Iterator<Item = &'static str> {
 /// is caught at load rather than in the middle of a performance.
 pub fn action_for_label(label: &str) -> Option<Action> {
     Some(match binding(label)? {
-        Binding::Node { node, shift: true } => Action::FocusMonitor(node),
-        Binding::Node { node, shift: false } => Action::FocusCamera(node),
+        Binding::Node { node, index } => Action::Focus(node, index),
         Binding::Axis { axis, up } => {
             let step = axis.knob.increment();
             Action::Nudge(axis.knob, if up { step } else { -step })
@@ -394,10 +419,7 @@ pub fn action_for_label(label: &str) -> Option<Action> {
 /// the key it presses cannot be described two different ways.
 pub fn describes(label: &str) -> Option<String> {
     Some(match binding(label)? {
-        Binding::Node { node, shift } => {
-            let side = if shift { "monitor" } else { "camera" };
-            format!("focus {side} {}", node + 1)
-        }
+        Binding::Node { node, index } => format!("focus {} {}", node.name(), index + 1),
         Binding::Axis { axis, up } => {
             format!("{} {}", axis.knob.name(), if up { "up" } else { "down" })
         }
@@ -411,10 +433,7 @@ pub fn describes(label: &str) -> Option<String> {
 /// on the card. `None` for a label no table claims.
 pub fn short(label: &str) -> Option<String> {
     Some(match binding(label)? {
-        Binding::Node { node, shift } => {
-            let side = if shift { "mon" } else { "cam" };
-            format!("{side} {}", node + 1)
-        }
+        Binding::Node { node, index } => format!("{} {}", node.short(), index + 1),
         Binding::Axis { axis, up } => {
             format!("{} {}", axis.knob.name(), if up { "+" } else { "-" })
         }
@@ -435,10 +454,13 @@ pub fn help() -> String {
     // must not leave the help naming the old one.
     let nodes = NODE_KEYS.len();
     let (first, last) = (NODE_KEYS[0].1, NODE_KEYS[nodes - 1].1);
-    let keys = format!("{first} / {last}");
-    out.push_str(&format!("  {keys:<12} focus camera 1 to {nodes}\n"));
-    let keys = format!("shift {first} / {last}");
-    out.push_str(&format!("  {keys:<12} focus monitor 1 to {nodes}\n"));
+    for node in Node::ALL {
+        let keys = format!("{}{first} / {last}", prefix(node));
+        out.push_str(&format!(
+            "  {keys:<12} focus {} 1 to {nodes}\n",
+            node.name()
+        ));
+    }
     out
 }
 
@@ -446,6 +468,15 @@ pub fn help() -> String {
 mod tests {
     use super::*;
     use crate::params::{Focus, Params};
+
+    /// Every node key under every modifier, which is the whole node
+    /// vocabulary a map or a hand may reach.
+    fn every_node_label() -> Vec<(Node, usize, String)> {
+        Node::ALL
+            .into_iter()
+            .flat_map(|node| (0..KEYED_NODES).map(move |i| (node, i, node_label(node, i).unwrap())))
+            .collect()
+    }
 
     fn every_key() -> Vec<KeyCode> {
         AXES.iter()
@@ -473,10 +504,10 @@ mod tests {
     #[test]
     fn the_two_keys_of_an_axis_push_it_opposite_ways() {
         for axis in AXES {
-            let Some(Action::Nudge(down_knob, down)) = action_for(axis.down.0, false) else {
+            let Some(Action::Nudge(down_knob, down)) = action_for(axis.down.0, Node::Camera) else {
                 panic!("{:?} should nudge", axis.down)
             };
-            let Some(Action::Nudge(up_knob, up)) = action_for(axis.up.0, false) else {
+            let Some(Action::Nudge(up_knob, up)) = action_for(axis.up.0, Node::Camera) else {
                 panic!("{:?} should nudge", axis.up)
             };
             assert_eq!(down_knob, axis.knob);
@@ -489,7 +520,7 @@ mod tests {
     fn a_key_press_reaches_the_value_it_names() {
         let mut p = Params::default();
         let before = p.cameras[0].framing.zoom;
-        let Some(Action::Nudge(knob, delta)) = action_for(KeyCode::Equal, false) else {
+        let Some(Action::Nudge(knob, delta)) = action_for(KeyCode::Equal, Node::Camera) else {
             panic!("= should nudge a knob")
         };
         p.nudge(knob, delta, Focus::default());
@@ -499,58 +530,73 @@ mod tests {
 
     #[test]
     fn the_commands_do_what_they_say() {
-        assert_eq!(action_for(KeyCode::Space, false), Some(Action::Clear));
-        assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
-        assert_eq!(action_for(KeyCode::Escape, false), Some(Action::Quit));
-        assert_eq!(action_for(KeyCode::Semicolon, false), Some(Action::Seed));
-        assert_eq!(action_for(KeyCode::Enter, false), Some(Action::Solo));
-        assert_eq!(action_for(KeyCode::F12, false), None);
+        assert_eq!(
+            action_for(KeyCode::Space, Node::Camera),
+            Some(Action::Clear)
+        );
+        assert_eq!(action_for(KeyCode::KeyR, Node::Camera), Some(Action::Reset));
+        assert_eq!(
+            action_for(KeyCode::Escape, Node::Camera),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            action_for(KeyCode::Semicolon, Node::Camera),
+            Some(Action::Seed)
+        );
+        assert_eq!(action_for(KeyCode::Enter, Node::Camera), Some(Action::Solo));
+        assert_eq!(action_for(KeyCode::F12, Node::Camera), None);
         assert_eq!(action_for_label("f12"), None);
     }
 
     #[test]
-    fn shift_is_the_node_keys_business_and_nobody_else_s() {
-        // Held shift must not make a knob key mean something else: on a
-        // physical layout it is held for all sorts of reasons. The one table
-        // that does read it reads it as the same shape — the other side of
-        // the focus — and never as a different value of the same thing.
+    fn a_modifier_is_the_node_keys_business_and_nobody_else_s() {
+        // A held modifier must not make a knob key mean something else: on a
+        // physical layout one is held for all sorts of reasons. The one
+        // table that does read them reads them as the same shape — another
+        // side of the focus — and never as a different value of one thing.
         for key in every_key() {
-            let reads_shift = NODE_KEYS.iter().any(|(bound, _)| *bound == key);
-            if !reads_shift {
-                assert_eq!(action_for(key, true), action_for(key, false), "{key:?}");
-                continue;
+            let reads_them = NODE_KEYS.iter().any(|(bound, _)| *bound == key);
+            let bare = action_for(key, Node::Camera);
+            for node in MODIFIERS {
+                match reads_them {
+                    true => assert_ne!(action_for(key, node), bare, "{key:?} {node:?}"),
+                    false => assert_eq!(action_for(key, node), bare, "{key:?} {node:?}"),
+                }
             }
-            assert_ne!(action_for(key, true), action_for(key, false), "{key:?}");
         }
+        // And the two modifiers do not collapse onto each other: three keys
+        // sharing one action would be a surface that cannot reach a kind.
+        assert_ne!(
+            action_for(NODE_KEYS[0].0, Node::Monitor),
+            action_for(NODE_KEYS[0].0, Node::Input)
+        );
+        assert_eq!(node_of(false, false), Node::Camera);
+        assert_eq!(node_of(true, false), Node::Monitor);
+        assert_eq!(node_of(false, true), Node::Input);
+        assert_eq!(node_of(true, true), Node::Input);
     }
 
     #[test]
-    fn a_node_key_is_a_camera_bare_and_a_monitor_shifted() {
-        for (node, (key, label)) in NODE_KEYS.iter().enumerate() {
-            assert_eq!(action_for(*key, false), Some(Action::FocusCamera(node)));
-            assert_eq!(action_for(*key, true), Some(Action::FocusMonitor(node)));
+    fn a_node_key_names_one_kind_per_modifier() {
+        for (node, index, label) in every_node_label() {
+            let key = NODE_KEYS[index].0;
+            assert_eq!(action_for(key, node), Some(Action::Focus(node, index)));
             // And the same through the label, which is the whole of what a
-            // MIDI map may say — a button that reaches one and not the other
-            // is a surface with a vocabulary the keys have not got.
-            assert_eq!(action_for_label(label), Some(Action::FocusCamera(node)));
+            // MIDI map may say — a button that reaches one kind and not
+            // another is a surface with a vocabulary the keys have not got.
+            assert_eq!(action_for_label(&label), Some(Action::Focus(node, index)));
             assert_eq!(
-                action_for_label(&format!("shift {label}")),
-                Some(Action::FocusMonitor(node))
+                describes(&label).unwrap(),
+                format!("focus {} {}", node.name(), index + 1)
             );
             assert_eq!(
-                describes(label).unwrap(),
-                format!("focus camera {}", node + 1)
-            );
-            assert_eq!(
-                describes(&format!("shift {label}")).unwrap(),
-                format!("focus monitor {}", node + 1)
-            );
-            assert_eq!(short(label).unwrap(), format!("cam {}", node + 1));
-            assert_eq!(
-                short(&format!("shift {label}")).unwrap(),
-                format!("mon {}", node + 1)
+                short(&label).unwrap(),
+                format!("{} {}", node.short(), index + 1)
             );
         }
+        // Past the keys there is no label to write, which is what stops a
+        // surface being built for a node nothing could focus.
+        assert_eq!(node_label(Node::Camera, KEYED_NODES), None);
     }
 
     #[test]
@@ -560,25 +606,26 @@ mod tests {
         // command's own code — so it is true whatever code that is, and a
         // binding moved to another key would still agree with itself.
         assert_eq!(
-            action_for(KeyCode::Backspace, false),
+            action_for(KeyCode::Backspace, Node::Camera),
             Some(Action::ResetLastKnob)
         );
-        assert_eq!(action_for(KeyCode::KeyR, false), Some(Action::Reset));
-        assert_eq!(
-            action_for(KeyCode::Numpad1, false),
-            Some(Action::FocusCamera(0))
-        );
-        assert_eq!(
-            action_for(KeyCode::Numpad1, true),
-            Some(Action::FocusMonitor(0))
-        );
+        assert_eq!(action_for(KeyCode::KeyR, Node::Camera), Some(Action::Reset));
+        for node in Node::ALL {
+            assert_eq!(
+                action_for(KeyCode::Numpad1, node),
+                Some(Action::Focus(node, 0))
+            );
+        }
     }
 
     #[test]
     fn the_capture_controls_are_a_press_and_a_hold() {
-        assert_eq!(action_for(KeyCode::F7, false), Some(Action::Screencap));
         assert_eq!(
-            action_for(KeyCode::F8, false),
+            action_for(KeyCode::F7, Node::Camera),
+            Some(Action::Screencap)
+        );
+        assert_eq!(
+            action_for(KeyCode::F8, Node::Camera),
             Some(Action::Record(Edge::Down))
         );
         assert_eq!(action_for_label("f7"), Some(Action::Screencap));
@@ -603,20 +650,25 @@ mod tests {
     #[test]
     fn the_help_names_every_binding() {
         let help = help();
-        // The header and the two lines the node keys share.
-        assert_eq!(help.lines().count(), AXES.len() + COMMANDS.len() + 3);
-        assert!(help.contains("focus camera 1 to 8") && help.contains("focus monitor 1 to 8"));
-        // And that the monitor half needs shift, in the key range rather
-        // than only in the words: two identical ranges meaning two different
-        // things is a card that teaches the wrong gesture.
-        let monitors = help
-            .lines()
-            .find(|line| line.contains("focus monitor"))
-            .expect("no monitor line");
-        assert!(
-            monitors.contains(&format!("shift {}", NODE_KEYS[0].1)),
-            "{monitors}"
+        // The header, and one line per kind the node keys share.
+        assert_eq!(
+            help.lines().count(),
+            AXES.len() + COMMANDS.len() + 1 + Node::ALL.len()
         );
+        // Each kind's line names its own modifier in the key range rather
+        // than only in the words: three identical ranges meaning three
+        // different things is a card that teaches the wrong gesture.
+        for node in Node::ALL {
+            let line = help
+                .lines()
+                .find(|line| line.contains(&format!("focus {} 1 to 8", node.name())))
+                .unwrap_or_else(|| panic!("no {} line", node.name()));
+            assert!(
+                line.contains(&node_label(node, 0).unwrap()),
+                "{}: {line}",
+                node.name()
+            );
+        }
         for axis in AXES {
             assert!(help.contains(axis.down.1), "{} missing", axis.down.1);
             assert!(help.contains(axis.up.1), "{} missing", axis.up.1);
@@ -647,9 +699,14 @@ mod tests {
     fn every_label_is_described() {
         // `Map::card` prints a control by what its key does, so a label with
         // no description is a blank line on the performer's card. Every
-        // label, and every label under a shift, since the map may write one.
+        // label, and every label under each modifier, since a map may write
+        // one.
         for label in labels() {
-            for label in [label.to_string(), format!("shift {label}")] {
+            for label in [
+                label.to_string(),
+                format!("shift {label}"),
+                format!("ctrl {label}"),
+            ] {
                 let what = describes(&label).unwrap_or_else(|| panic!("{label}: no description"));
                 assert!(!what.is_empty(), "{label}: an empty description");
             }
@@ -669,7 +726,11 @@ mod tests {
         // axes are exempt only where the knob's own name already spends two,
         // and the sign rides along.
         for label in labels() {
-            for label in [label.to_string(), format!("shift {label}")] {
+            for label in [
+                label.to_string(),
+                format!("shift {label}"),
+                format!("ctrl {label}"),
+            ] {
                 let short = short(&label).unwrap_or_else(|| panic!("{label}: no caption"));
                 assert!(!short.is_empty(), "{label}: an empty caption");
             }
@@ -684,8 +745,14 @@ mod tests {
 
     #[test]
     fn the_overlay_toggle_is_reachable_from_keyboard_and_label_alike() {
-        assert_eq!(action_for(KeyCode::Backquote, false), Some(Action::Overlay));
-        assert_eq!(action_for(KeyCode::Backquote, true), Some(Action::Overlay));
+        assert_eq!(
+            action_for(KeyCode::Backquote, Node::Camera),
+            Some(Action::Overlay)
+        );
+        assert_eq!(
+            action_for(KeyCode::Backquote, Node::Monitor),
+            Some(Action::Overlay)
+        );
         assert_eq!(action_for_label("`"), Some(Action::Overlay));
     }
 
@@ -699,10 +766,11 @@ mod tests {
         );
         assert_eq!(action_for_label("wiggle"), None);
 
-        // "shift" in front of a key that does not read it is that key; the
-        // MIDI map refuses such a binding rather than letting it look like
-        // it means something.
+        // A modifier in front of a key that does not read one is that key;
+        // the MIDI map refuses such a binding rather than letting it look
+        // like it means something.
         assert_eq!(action_for_label("shift r"), Some(Action::Reset));
+        assert_eq!(action_for_label("ctrl r"), Some(Action::Reset));
     }
 
     #[test]
@@ -727,25 +795,33 @@ mod tests {
         // rather than the handful spelled out above.
         for axis in AXES {
             for (key, label) in [axis.down, axis.up] {
-                assert_eq!(action_for_label(label), action_for(key, false));
+                assert_eq!(action_for_label(label), action_for(key, Node::Camera));
             }
         }
         for c in COMMANDS {
-            assert_eq!(action_for_label(c.label), action_for(c.key, false));
+            assert_eq!(action_for_label(c.label), action_for(c.key, Node::Camera));
         }
         for (key, label) in NODE_KEYS {
-            assert_eq!(action_for_label(label), action_for(key, false));
+            assert_eq!(action_for_label(label), action_for(key, Node::Camera));
         }
     }
 
     #[test]
-    fn a_camera_key_selects_the_camera_it_is_numbered_for() {
+    fn a_node_key_selects_the_node_it_is_numbered_for() {
         // Numbered from one on the key and from zero in the graph.
         for (camera, (key, _)) in NODE_KEYS.iter().enumerate() {
-            assert_eq!(action_for(*key, false), Some(Action::FocusCamera(camera)));
+            assert_eq!(
+                action_for(*key, Node::Camera),
+                Some(Action::Focus(Node::Camera, camera))
+            );
         }
         let third = NODE_KEYS[2].1;
         assert_eq!(describes(third).as_deref(), Some("focus camera 3"));
         assert_eq!(short(third).as_deref(), Some("cam 3"));
+        assert_eq!(
+            describes(&format!("ctrl {third}")).as_deref(),
+            Some("focus input 3")
+        );
+        assert_eq!(short(&format!("ctrl {third}")).as_deref(), Some("in 3"));
     }
 }

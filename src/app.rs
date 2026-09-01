@@ -15,10 +15,10 @@ use crate::cli::Cli;
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
-use crate::keys::{action_for, Action, Edge};
+use crate::keys::{action_for, node_of, Action, Edge};
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
-use crate::params::{Focus, Knob, Params, Seed};
+use crate::params::{Focus, Knob, Node, Params, Seed};
 use crate::present::Present;
 use crate::tempo::Tempo;
 
@@ -66,7 +66,9 @@ pub struct App {
     /// instrument runs rather than at startup, so plugging one in mid-piece
     /// is the whole of setting it up.
     midi: Midi,
-    shift: bool,
+    /// Which kind of node the keypad is currently naming, off the held
+    /// modifiers. A camera bare, and the modifiers say the other two.
+    node: Node,
     /// The last knob that moved, which is the one [`Action::ResetLastKnob`] puts
     /// back. `None` until something is turned — on a panel nothing has
     /// touched there is no "that one" to mean.
@@ -178,7 +180,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     // out to be playing the wrong knobs once there is light on the glass.
     let map_path = crate::midi::map_path();
     log::info!("surface map: {}", map_path.display());
-    let map = Map::load(&map_path)?;
+    let map = Map::load(&map_path, &params)?;
     // The controls, off the map that is about to be played rather than off a
     // second read of the same file. Fullscreen this scrolls past behind the
     // instrument; it is here for the terminal it was started from, which is
@@ -200,7 +202,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             focus: Focus::default(),
             sources,
             midi,
-            shift: false,
+            node: Node::Camera,
             last_knob: None,
             resolution: cli.resolution,
             fullscreen: cli.fullscreen,
@@ -297,7 +299,7 @@ impl Live {
         // an explicit clear.
         let feedback = Feedback::new(&gpu.device, resolution.0, resolution.1, params);
         let present = Present::new(&gpu.device, &feedback, format);
-        let overlay = Overlay::new(&gpu.device, &gpu.queue, format, map, params);
+        let overlay = Overlay::new(&gpu.device, &gpu.queue, format, map);
 
         Ok(Live {
             window,
@@ -403,38 +405,21 @@ impl App {
         log::info!("reset: {}", self.params.describe(self.focus));
     }
 
-    /// Point the camera knobs at one camera by its place in the graph. A
-    /// select row is wider than most graphs, so a press past the end does
-    /// nothing: sliding to the last camera instead would make every button
-    /// past the end the same button. It says so rather than going quiet —
-    /// the button really is dead on this graph, and a performer who cannot
-    /// read the panel can at least read the log afterwards.
-    fn focus_camera(&mut self, camera: usize) {
-        match camera < self.params.cameras.len() {
-            true => self.refocus(Focus {
-                camera,
-                ..self.focus
-            }),
+    /// Point the knobs at one node by its kind and its place in the graph.
+    /// No button reaches past the graph — the select rows are built as wide
+    /// as it is — but the keys are a fixed block of eight, so a press past
+    /// the end does nothing: sliding to the last node instead would make
+    /// every key past the end the same key. It says so rather than going
+    /// quiet, so a performer who cannot read the panel can read the log
+    /// afterwards.
+    fn focus(&mut self, node: Node, index: usize) {
+        match index < self.params.count(node) {
+            true => self.refocus(self.focus.with(node, index)),
             false => log::info!(
-                "no camera {}: the graph has {}",
-                camera + 1,
-                self.params.cameras.len()
-            ),
-        }
-    }
-
-    /// The same for the monitor the faders turn, and past the end for the
-    /// same reason.
-    fn focus_monitor(&mut self, monitor: usize) {
-        match monitor < self.params.monitors.len() {
-            true => self.refocus(Focus {
-                monitor,
-                ..self.focus
-            }),
-            false => log::info!(
-                "no monitor {}: the graph has {}",
-                monitor + 1,
-                self.params.monitors.len()
+                "no {} {}: the graph has {}",
+                node.name(),
+                index + 1,
+                self.params.count(node)
             ),
         }
     }
@@ -554,8 +539,7 @@ impl App {
         match action {
             Action::Nudge(knob, delta) => self.turned(knob, |p, f| p.nudge(knob, delta, f)),
             Action::Set(knob, value) => self.turned(knob, |p, f| p.set(knob, value, f)),
-            Action::FocusCamera(camera) => self.focus_camera(camera),
-            Action::FocusMonitor(monitor) => self.focus_monitor(monitor),
+            Action::Focus(node, index) => self.focus(node, index),
             Action::Reset => self.reset(),
             Action::ResetLastKnob => self.reset_knob(),
             // The focused monitor's, because the seed is the monitor's: the
@@ -799,7 +783,12 @@ impl ApplicationHandler for App {
                     live.window.request_redraw();
                 }
             }
-            WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
+            // Which kind of node a press on the keypad names — the one thing
+            // the instrument reads a modifier for.
+            WindowEvent::ModifiersChanged(modifiers) => {
+                let state = modifiers.state();
+                self.node = node_of(state.shift_key(), state.control_key());
+            }
             // A window that loses focus is a window whose held controls all
             // come up. On Wayland it is told so in no other way — winit
             // sends no release for a key held when focus goes — so without
@@ -855,7 +844,7 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
-                let Some(action) = action_for(code, self.shift) else {
+                let Some(action) = action_for(code, self.node) else {
                     return;
                 };
                 // A held key repeats, and a repeat sweeps the controls that
@@ -925,11 +914,11 @@ mod tests {
         Some(App {
             gpu,
             initial: params.clone(),
-            params,
             focus: Focus::default(),
             sources,
-            midi: Midi::new(Map::nano_kontrol2()).unwrap(),
-            shift: false,
+            midi: Midi::new(Map::nano_kontrol2(&params)).unwrap(),
+            params,
+            node: Node::Camera,
             last_knob: None,
             resolution,
             fullscreen: false,
@@ -954,7 +943,7 @@ mod tests {
         };
         let started = app.params.clone();
         play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
-        play(&mut app, Action::FocusMonitor(0));
+        play(&mut app, Action::Focus(Node::Monitor, 0));
         play(&mut app, Action::Nudge(Knob::Gamma, 0.5));
         assert_ne!(app.params, started);
         // The bars are handed over exactly once, so a rig rebuilt or replayed
@@ -976,7 +965,7 @@ mod tests {
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
-        app.focus_monitor(1);
+        app.focus(Node::Monitor, 1);
         assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
 
         play(&mut app, Action::Seed);
@@ -985,12 +974,13 @@ mod tests {
         // What the panel reads, which is the focused monitor's and follows
         // the focus rather than the press.
         assert_eq!(app.seed(), Seed::Dark);
-        app.focus_monitor(0);
+        app.focus(Node::Monitor, 0);
         assert_eq!(app.seed(), Seed::BLOB);
 
         // And back, on the key a hand actually presses.
-        app.focus_monitor(1);
-        let Some(action) = crate::keys::action_for(winit::keyboard::KeyCode::Semicolon, false)
+        app.focus(Node::Monitor, 1);
+        let Some(action) =
+            crate::keys::action_for(winit::keyboard::KeyCode::Semicolon, Node::Camera)
         else {
             panic!("; should do something")
         };
@@ -1007,11 +997,11 @@ mod tests {
         };
         assert_eq!(app.params.cameras.len(), 2);
 
-        app.focus_camera(1);
+        app.focus(Node::Camera, 1);
         assert_eq!(app.focus.camera, 1);
         // Past the end the focus stays where the hand left it, rather than
         // sliding to the last camera — which would make six buttons one.
-        app.focus_camera(7);
+        app.focus(Node::Camera, 7);
         assert_eq!(app.focus.camera, 1);
     }
 
@@ -1132,7 +1122,7 @@ mod tests {
         app.params.monitors[0].seed = Seed::Dark;
         // The factory layout binds nothing to quit; a performer's map may,
         // and whether the run loop goes on is what a frame's answer *is*.
-        let mut map = Map::nano_kontrol2();
+        let mut map = Map::nano_kontrol2(&app.params);
         map.button.push(crate::midi::Button {
             cc: 61,
             key: "esc".into(),
@@ -1141,11 +1131,12 @@ mod tests {
         let mut surface = app.midi.plug_in_a_test_surface();
         surface.wire.handshake(0);
 
-        // The Solo row splits down the middle, four nodes to a hand: camera
-        // 1 is Solo 1 and monitor 1 is Solo 5, which are controls 32 and 36.
+        // One row per kind, each as wide as this graph: camera 1 is S1 and
+        // monitor 1 is M1, which are controls 32 and 48. The graph has no
+        // input, so the Record row is dark and owed nothing.
         assert_eq!(app.surface_frame(), Flow::Play);
         assert!(
-            surface.wire.panel_becomes(lamp(32) | lamp(36)),
+            surface.wire.panel_becomes(lamp(32) | lamp(48)),
             "the focus the instrument started on never reached the surface"
         );
         // Solo 2 selects camera 2 — pressed on the surface rather than acted
@@ -1154,7 +1145,7 @@ mod tests {
         assert_eq!(app.surface_frame(), Flow::Play);
         assert_eq!(app.focus.camera, 1, "the press was never played");
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(36)),
+            surface.wire.panel_becomes(lamp(33) | lamp(48)),
             "the lamp did not follow the focus its own frame moved"
         );
         // Record is held rather than pressed, and its lamp is lit for as
@@ -1162,13 +1153,13 @@ mod tests {
         surface.press(45);
         assert_eq!(app.surface_frame(), Flow::Play);
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(36) | lamp(45)),
+            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(45)),
             "the record button never lit under the finger"
         );
         surface.release(45);
         assert_eq!(app.surface_frame(), Flow::Play);
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(36)),
+            surface.wire.panel_becomes(lamp(33) | lamp(48)),
             "the record button stayed lit after the finger left"
         );
         // And the press that ends the run loop ends it, which only the
@@ -1250,7 +1241,7 @@ mod tests {
         };
 
         play(&mut app, Action::Nudge(Knob::Zoom, 0.5));
-        play(&mut app, Action::FocusCamera(1));
+        play(&mut app, Action::Focus(Node::Camera, 1));
         let moved = app.params.clone();
         play(&mut app, Action::ResetLastKnob);
         assert_eq!(app.params, moved, "a focus change left the knob named");
@@ -1296,7 +1287,7 @@ mod tests {
         surface(&mut app, 4, 127);
         assert_eq!(app.params.monitors[0].colour.contrast, 4.0);
 
-        play(&mut app, Action::FocusMonitor(1));
+        play(&mut app, Action::Focus(Node::Monitor, 1));
         surface(&mut app, 4, 126);
         assert_eq!(
             app.params.monitors[1].colour.contrast,
@@ -1321,12 +1312,12 @@ mod tests {
         };
         assert_eq!(app.params.cameras.len(), 2);
         assert_eq!(app.params.monitors.len(), 3);
-        play(&mut app, Action::FocusMonitor(2));
+        play(&mut app, Action::Focus(Node::Monitor, 2));
         assert_eq!(
             app.focus.monitor, 2,
             "monitor 3 is a monitor this graph has"
         );
-        play(&mut app, Action::FocusMonitor(3));
+        play(&mut app, Action::Focus(Node::Monitor, 3));
         assert_eq!(app.focus.monitor, 2);
     }
 
@@ -1339,11 +1330,11 @@ mod tests {
             return;
         };
         assert_eq!(app.soloed(), None);
-        play(&mut app, Action::FocusMonitor(1));
+        play(&mut app, Action::Focus(Node::Monitor, 1));
         assert_eq!(app.soloed(), None);
         play(&mut app, Action::Solo);
         assert_eq!(app.soloed(), Some(1));
-        play(&mut app, Action::FocusMonitor(0));
+        play(&mut app, Action::Focus(Node::Monitor, 0));
         assert_eq!(app.soloed(), Some(0));
         play(&mut app, Action::Solo);
         assert_eq!(app.soloed(), None);
@@ -1380,7 +1371,7 @@ mod tests {
         let started = app.tempo.rate();
         play(
             &mut app,
-            action_for(winit::keyboard::KeyCode::Digit8, false).unwrap(),
+            action_for(winit::keyboard::KeyCode::Digit8, Node::Camera).unwrap(),
         );
         assert!(
             app.tempo.rate() > started,
@@ -1389,7 +1380,7 @@ mod tests {
         );
         play(
             &mut app,
-            action_for(winit::keyboard::KeyCode::Digit7, false).unwrap(),
+            action_for(winit::keyboard::KeyCode::Digit7, Node::Camera).unwrap(),
         );
         assert!(
             (app.tempo.rate() - started).abs() < 1e-3,
@@ -1407,10 +1398,10 @@ mod tests {
             return;
         };
         assert_eq!(app.params.monitors.len(), 2);
-        play(&mut app, Action::FocusMonitor(1));
+        play(&mut app, Action::Focus(Node::Monitor, 1));
         assert_eq!(app.focus.monitor, 1);
         assert_eq!(app.focus.camera, 0, "the other hand moved");
-        play(&mut app, Action::FocusMonitor(7));
+        play(&mut app, Action::Focus(Node::Monitor, 7));
         assert_eq!(app.focus.monitor, 1);
     }
 }

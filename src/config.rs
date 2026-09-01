@@ -5,25 +5,55 @@
 use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
-use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Params, Seed, Side};
+use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Node, Params, Seed, Side};
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
 pub const MAX_MONITORS: usize = 8;
 
-/// One camera per key, by definition rather than by assertion so the tie
-/// cannot drift: a ninth camera has no key to bring the focus to it, so it
-/// would play forever at whatever the file left its knobs on. Monitors make
-/// the same promise, so their independently-motivated cap must stay inside
-/// the keys too.
-pub const MAX_CAMERAS: usize = crate::keys::KEYED_NODES;
-const _: () = assert!(MAX_MONITORS <= crate::keys::KEYED_NODES);
-
-/// Inputs get their own cap because what [`MAX_TAPS`] bounds is not what
-/// they cost: one tap each, against a bank layer each plus — for a file or a
-/// device — a process and a thread of its own. Four is what a switcher has
-/// spare inputs for.
+/// Inputs cost what [`MAX_TAPS`] does not bound: one bank layer each, plus —
+/// for a file or a device — a process and a thread of its own. Four is what
+/// a switcher has spare inputs for.
 pub const MAX_INPUTS: usize = 4;
+
+/// Cameras have no cost of their own to cap, so the reach in [`validate`] is
+/// the whole of their bound. These two do, and both must stay inside it: a
+/// node the surface cannot reach is what that check exists to refuse, so a
+/// cap that let one through would make the check a lie the compiler could
+/// have caught.
+const _: () = assert!(MAX_MONITORS <= crate::keys::KEYED_NODES);
+const _: () = assert!(MAX_INPUTS <= crate::keys::KEYED_NODES);
+
+/// Every kind of node and the cap it is held to. One table so the law is
+/// stated once for all three: a graph is refused unless the surface reaches
+/// every node in it.
+const CAPS: [(Node, usize); 3] = [
+    (Node::Camera, crate::keys::KEYED_NODES),
+    (Node::Monitor, MAX_MONITORS),
+    (Node::Input, MAX_INPUTS),
+];
+
+/// A graph of a named shape, for the tests that are about the *surface* a
+/// graph builds rather than about any light it makes. One-hot looks and a
+/// switcher left off, so even the widest rig stays inside the tap bound.
+#[cfg(test)]
+pub(crate) fn rig(cameras: usize, monitors: usize, inputs: usize) -> Params {
+    Params {
+        cameras: (0..cameras)
+            .map(|c| Camera {
+                framing: Framing::identity(),
+                gain: [0.9; 3],
+                character: Character::CLEAN,
+                key: Key::OFF,
+                look: (0..monitors).map(|m| f32::from(m == c)).collect(),
+            })
+            .collect(),
+        monitors: (0..monitors).map(|_| Monitor::default()).collect(),
+        inputs: vec![Input::Pattern(Pattern::Bars); inputs],
+        routing: (0..monitors).map(|_| vec![0.0; cameras]).collect(),
+        routing_inputs: (0..inputs).map(|_| vec![0.0; monitors]).collect(),
+    }
+}
 
 /// The classic rig: one camera aimed straight at the one monitor it draws to.
 /// The values are the bootstrap stage's defaults — the camera pulls back a
@@ -349,8 +379,23 @@ pub fn validate(params: &Params) -> Result<(), String> {
         params.cameras.len(),
         params.inputs.len(),
     );
-    if !(1..=MAX_MONITORS).contains(&m) {
-        return Err(format!("{m} monitors; needs between 1 and {MAX_MONITORS}"));
+    // Every node gets a button, so every node has to have one to get: the
+    // surface is built from the graph and stops where the graph does, and a
+    // node past the row it would sit on would play forever at whatever the
+    // file left its knobs on. Loud here rather than dark on the panel.
+    for (node, cap) in CAPS {
+        let have = params.count(node);
+        if have > cap {
+            return Err(format!(
+                "{have} {}s; at most {cap} — one button per node, and a {} past \
+                 the board's row could never be turned live",
+                node.name(),
+                node.name()
+            ));
+        }
+    }
+    if m == 0 {
+        return Err("no monitors; a rig with none has no glass to draw to".into());
     }
     if c == 0 {
         return Err(
@@ -358,15 +403,6 @@ pub fn validate(params: &Params) -> Result<(), String> {
              panel's camera knobs would have nothing to point at"
                 .into(),
         );
-    }
-    if c > MAX_CAMERAS {
-        return Err(format!(
-            "{c} cameras; at most {MAX_CAMERAS} — one per focus key, and a camera \
-             past the keys could never be turned live"
-        ));
-    }
-    if n > MAX_INPUTS {
-        return Err(format!("{n} inputs; at most {MAX_INPUTS}"));
     }
     // The switcher's shape, before anything reads a crosspoint out of it:
     // `Params::knob` indexes `routing[monitor][camera]` directly, so a short
@@ -1056,25 +1092,33 @@ mod tests {
     }
 
     #[test]
-    fn a_camera_past_the_keys_is_refused_at_load() {
-        let mut params = external();
-        let spare = params.cameras[0].clone();
-        while params.cameras.len() <= MAX_CAMERAS {
-            params.cameras.push(spare.clone());
-        }
-        let why = validate(&params).unwrap_err();
-        assert!(
-            why.contains("focus key"),
-            "refused for the wrong reason: {why}"
-        );
+    fn a_node_past_its_row_is_refused_at_load() {
+        // Every kind, not the cameras alone: the law is that the surface
+        // reaches every node, and a kind exempted from it is a kind that
+        // could play at whatever the file left its knobs on.
+        // One of every other kind, so only the count under test can be what
+        // the refusal is about.
+        let shaped = |node, n| match node {
+            Node::Camera => rig(n, 1, 1),
+            Node::Monitor => rig(1, n, 1),
+            Node::Input => rig(1, 1, n),
+        };
+        for (node, cap) in CAPS {
+            let why = validate(&shaped(node, cap + 1)).unwrap_err();
+            assert!(
+                why.contains("one button per node"),
+                "{}: refused for the wrong reason: {why}",
+                node.name()
+            );
+            assert!(
+                why.contains(&format!("{} {}s", cap + 1, node.name())),
+                "{why}"
+            );
 
-        // And exactly at the cap, well-shaped, it loads: the bound is the
-        // ninth camera, not the eighth.
-        params.cameras.pop();
-        for row in &mut params.routing {
-            row.resize(params.cameras.len(), 0.0);
+            // And exactly at the cap, well-shaped, it loads: the bound is
+            // the node past the row, not the last one on it.
+            validate(&shaped(node, cap)).unwrap_or_else(|why| panic!("{}: {why}", node.name()));
         }
-        validate(&params).unwrap();
     }
 
     #[test]

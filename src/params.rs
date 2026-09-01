@@ -450,18 +450,67 @@ impl Default for Params {
     }
 }
 
+/// A kind of node the focus points at: a row of select buttons, and one of
+/// the three readings of a node key. Three because the graph has three kinds
+/// of thing to be on — the loops' cameras, their monitors, and the light
+/// arriving from outside.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Node {
+    Camera,
+    Monitor,
+    Input,
+}
+
+impl Node {
+    /// Every `for node in ALL` walk is silently vacuous for a kind missing
+    /// from this list, including the ones that exist to catch omissions.
+    pub const ALL: [Node; 3] = [Node::Camera, Node::Monitor, Node::Input];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Node::Camera => "camera",
+            Node::Monitor => "monitor",
+            Node::Input => "input",
+        }
+    }
+
+    /// The kind in the words the on-screen overlay's captions have room for.
+    pub const fn short(self) -> &'static str {
+        match self {
+            Node::Camera => "cam",
+            Node::Monitor => "mon",
+            Node::Input => "in",
+        }
+    }
+}
+
 /// Which camera, which monitor and which input the knobs act on. Named
 /// fields on purpose: bare `usize`s in a row would let a swapped pair compile
 /// and silently edit the wrong node.
-///
-/// The input leg is the first input and stays there: nothing on the board
-/// selects one, so the send is the crosspoint outside light enters on and
-/// the graph decides which source that is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Focus {
     pub camera: usize,
     pub monitor: usize,
     pub input: usize,
+}
+
+impl Focus {
+    pub fn at(self, node: Node) -> usize {
+        match node {
+            Node::Camera => self.camera,
+            Node::Monitor => self.monitor,
+            Node::Input => self.input,
+        }
+    }
+
+    pub fn with(mut self, node: Node, index: usize) -> Focus {
+        match node {
+            Node::Camera => self.camera = index,
+            Node::Monitor => self.monitor = index,
+            Node::Input => self.input = index,
+        }
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -784,6 +833,17 @@ impl<'de> Deserialize<'de> for Knob {
 }
 
 impl Params {
+    /// How many of `node` this graph has. The one walk over the three lists
+    /// by kind, so a control surface built from the graph and a check run
+    /// against it cannot count it two different ways.
+    pub fn count(&self, node: Node) -> usize {
+        match node {
+            Node::Camera => self.cameras.len(),
+            Node::Monitor => self.monitors.len(),
+            Node::Input => self.inputs.len(),
+        }
+    }
+
     /// The layers of the source bank: the monitors, then the inputs. An
     /// input's layer is its index past the monitors — which is why
     /// `Feedback::new` takes the graph rather than a count it could be handed

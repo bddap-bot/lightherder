@@ -234,8 +234,9 @@ Out of the box, with no configuration:
 | fader 1 | nothing: a control a `midi.toml` can claim |
 | faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
-| S 1–4 | focus camera 1–4 |
-| S 5–8 | focus monitor 1–4 |
+| S 1–8 | focus camera 1–8, as many as the graph has |
+| M 1–8 | focus monitor 1–8, as many as the graph has |
+| R 1–4 | focus input 1–4, as many as the graph has |
 | marker next | blank the monitors |
 | ◀◀ rewind | put the last knob turned back to its identity |
 | ■ stop | reset every knob |
@@ -245,20 +246,21 @@ Out of the box, with no configuration:
 | \|◀ track prev, ▶\| track next | the tempo: slower / faster, four presses to halve or double it |
 | ● marker set | write what the display is showing to a file |
 | ● record | record the display for as long as it is held down |
-| M 1–8, R 1–8, marker prev | nothing |
+| marker prev | nothing |
 
 So the left hand works one monitor, the right hand one camera, and the last
-fader is the switcher crosspoint joining the two the hands are on. The Solo
-row points the knobs at a node, and splits down the middle the way the two
-hands do: the left four name the camera the rotaries turn, the right four the
-monitor the faders turn. It used to name eight cameras, but no graph anyone
-plays has more than four, and spending half a row on cameras a graph has not
-got left the *monitor* — the node under all eight faders — with no outright
-address at all. The two rows below it are free now that nothing saves, and
-four a half is still every node anyone plays. A select past the end of the
-graph says so on the log rather than going quiet, since the button really is
-dead on that graph. Nothing is bound to quit, and seventeen buttons are bound
-to nothing at all — the Mute and Record rows whole, and marker prev. Nine of
+fader is the switcher crosspoint joining the two the hands are on. The three
+select rows point the knobs at a node, one kind of node each: Solo the
+cameras, Mute the monitors, Record the inputs.
+
+**A row stops where its kind of node does.** The surface is built for the
+graph about to be played, so a rig of one camera and two monitors binds S1,
+M1 and M2 and leaves the other twenty-one select buttons dead — unlit,
+silent, and free for a `midi.toml` to claim. Dead is the point: a button for
+equipment the rig has not got is a button that lies. The graph the board
+cannot reach is the loud case instead — more of any kind than a row is wide
+and the config is refused at load rather than played with a node no hand can
+bring the knobs to. Nothing is bound to quit. Nine of
 the twenty-four knobs are not on the surface, which has sixteen controls and
 binds fifteen of them: the three per-channel gain offsets, which colour a
 rigid gain that is itself on a rotary; the bloom radius, which sizes a halo
@@ -380,8 +382,8 @@ cc = 41
 key = "space"       # any key label the printed help uses
 
 [[button]]
-cc = 48
-key = "shift num1"      # M1, which the factory map leaves free
+cc = 90
+key = "shift num1"      # focus monitor 1, off a control the surface has spare
 ```
 
 A fader names a **knob** and spans its whole travel — for the two knobs that
@@ -588,9 +590,10 @@ below assumes a US layout.
 | `q` `w` | gamma |
 | `e` `t` | headroom, i.e. where the amplifier's rails are |
 | `/` `\` | the crosspoint: how much of the focused camera the focused monitor shows |
-| `9` `0` | the send: how much of the first input the focused monitor shows |
+| `9` `0` | the send: how much of the focused input the focused monitor shows |
 | `num1`…`num8` | focus camera 1–8 outright |
 | shift `num1`…`num8` | focus monitor 1–8 outright |
+| ctrl `num1`…`num8` | focus input 1–8 outright |
 | space | blank every monitor |
 | `r` | reset every knob |
 | `;` | the focused monitor's seed: a white blob or dark glass |
@@ -602,24 +605,22 @@ below assumes a US layout.
 | `f8` | record the display for as long as it is held down |
 | esc | quit |
 
-The knobs act on the focused camera (framing, gain and character) and the
-focused monitor (colour and headroom); `num1`…`num8` pick a node of either
-side outright, and the log line names them. Those eight are keypad keys and
-they are the keyboard's only way to the nodes, so a board with no keypad and
-no surface plays camera one and monitor one, on the knobs the config gave
-them. The send acts on the first input and nothing selects another: no
-button on the board reaches one, and a control the board cannot reach is not
-a control.
+The knobs act on the focused camera (framing, gain and character), the
+focused monitor (colour and headroom) and the focused input (the send);
+`num1`…`num8` pick a node of any of the three outright, and the log line
+names them. Those eight are keypad keys and they are the keyboard's only way
+to the nodes, so a board with no keypad and no surface plays camera one,
+monitor one and input one, on the knobs the config gave them.
 
 Splitter weights are config; the two crosspoints are not — `/` and `\` sweep
 the camera one, which is fader 8 on the surface, and `9` and `0` sweep the
 send, which is on the keys alone because a graph without inputs has no send
 for a fixed fader to be holding.
 
-Shift is read by the keypad keys and no others: which side of the focus is
-meant, camera bare and monitor shifted. The board has no second block of
-eight, and the camera and the monitor are the same question asked of the two
-sides of the graph.
+The modifiers are read by the keypad keys and no others: which kind of node
+is meant, camera bare, monitor shifted, input under ctrl. The board has no
+second block of eight, let alone a third, and the three are the same question
+asked of the graph's three sides.
 
 The colour and character knobs start neutral, so the instrument out of the box
 is the loop described above and nothing else. Turn one against it: `s` held
