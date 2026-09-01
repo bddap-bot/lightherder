@@ -29,10 +29,8 @@ pub const fn cap(node: Node) -> usize {
 }
 
 const _: () = assert!(
-    cap(Node::Camera) <= ROW_BUTTONS
-        && cap(Node::Monitor) <= ROW_BUTTONS
-        && cap(Node::Input) <= ROW_BUTTONS,
-    "a kind whose cap runs past the select row would name selects no button can carry"
+    MAX_MONITORS <= ROW_BUTTONS && MAX_INPUTS <= ROW_BUTTONS,
+    "a cap past the select row would name selects no button can carry"
 );
 
 /// The widest graph the board reaches, which is the map a test about the
@@ -1139,11 +1137,11 @@ mod tests {
         // for their own reason, whether or not the reach would also have
         // caught them — a refusal naming the board would send a performer to
         // rebind buttons over a bank the GPU cannot hold.
-        for (node, cap, says) in [
-            (Node::Monitor, MAX_MONITORS, "texture array"),
-            (Node::Input, MAX_INPUTS, "bank layer"),
+        for (node, says) in [
+            (Node::Monitor, "texture array"),
+            (Node::Input, "bank layer"),
         ] {
-            let why = validate(&shaped(node, cap + 1)).unwrap_err();
+            let why = validate(&shaped(node, cap(node) + 1)).unwrap_err();
             assert!(why.contains(says), "{}: {why}", node.name());
             assert!(
                 !why.contains("one button"),
@@ -1152,13 +1150,12 @@ mod tests {
             );
         }
         // And exactly at each cap, well-shaped, a graph loads: every bound
-        // is the node past the last legal one, not the last legal one.
-        for (node, cap) in [
-            (Node::Camera, ROW_BUTTONS),
-            (Node::Monitor, MAX_MONITORS),
-            (Node::Input, MAX_INPUTS),
-        ] {
-            validate(&shaped(node, cap)).unwrap_or_else(|why| panic!("{}: {why}", node.name()));
+        // is the node past the last legal one, not the last legal one. Off
+        // `cap` rather than a second copy of the three numbers, so the bound
+        // the vocabulary is cut to is the bound a graph is refused past.
+        for node in Node::ALL {
+            validate(&shaped(node, cap(node)))
+                .unwrap_or_else(|why| panic!("{}: {why}", node.name()));
         }
     }
 

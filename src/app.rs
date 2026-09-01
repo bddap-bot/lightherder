@@ -1180,11 +1180,11 @@ mod tests {
     }
 
     #[test]
-    fn the_monitor_half_of_the_select_row_reaches_a_monitor_no_camera_matches() {
-        // A square graph cannot tell the two counts apart, so the row is
-        // checked on one that has more monitors than cameras: monitor 3
-        // exists and camera 3 does not, so a row read off the wrong count
-        // could not reach it.
+    fn a_monitor_select_moves_the_monitor_and_not_the_camera() {
+        // A square graph cannot tell the two sides of the focus apart, so
+        // this runs on one with more monitors than cameras: monitor 3 exists
+        // and camera 3 does not, so a select that wrote the wrong side of the
+        // focus could not land at all.
         let mut wider = config::crossed();
         wider.monitors.push(wider.monitors[0].clone());
         wider.routing = vec![vec![1.0, 0.0]; 3];
@@ -1244,17 +1244,5 @@ mod tests {
             "a press each way left {}",
             app.tempo.rate()
         );
-    }
-
-    #[test]
-    fn the_select_row_reaches_both_halves_of_the_focus() {
-        // One row per kind, and a press on one must not move the other's.
-        let Some(mut app) = playing(config::crossed()) else {
-            return;
-        };
-        assert_eq!(app.params.monitors.len(), 2);
-        app.act(Action::Focus(Node::Monitor, 1));
-        assert_eq!(app.focus.monitor, 1);
-        assert_eq!(app.focus.camera, 0, "the other hand moved");
     }
 }

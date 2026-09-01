@@ -13,6 +13,10 @@ pub enum Action {
     /// Put the knobs' focus on one node of one kind outright, by its place
     /// in the graph. A select rather than a step: a hand that means "that
     /// one" should not have to walk past the ones it does not mean.
+    ///
+    /// The index is in range for the graph the map was validated against —
+    /// [`crate::midi::Map::validate`] refuses a binding past it — so nothing
+    /// downstream checks it a second time.
     Focus(Node, usize),
     Reset,
     /// Put the last knob that moved back to its identity, and nothing else.

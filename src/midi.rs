@@ -1653,7 +1653,8 @@ mod tests {
         // And the buttons it leaves alone even on the widest rig: one bound
         // here is one a blind slip can find. The Record row runs out past
         // the inputs, which is what a row as wide as its kind looks like.
-        let spare = (R_ROW + crate::config::MAX_INPUTS as u8..R_ROW + 8).chain([61]);
+        let spare =
+            (R_ROW + crate::config::cap(Node::Input) as u8..R_ROW + ROW_BUTTONS as u8).chain([61]);
         for cc in spare {
             assert!(
                 !map.button.iter().any(|b| b.cc == cc),

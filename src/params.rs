@@ -261,9 +261,9 @@ fn unity_gain() -> [f32; 3] {
 /// the graph [`Knob::identity`] reads each knob's neutral value out of.
 ///
 /// A whole `Params` rather than the handful of constants it is made of, so a
-/// knob's identity is read by the same [`Params::knob`] the surface and the
-/// keys read its value by: a knob that later moves to another field cannot
-/// be neutral here and live there.
+/// knob's identity is read by the same [`Params::knob`] the surface reads its
+/// value by: a knob that later moves to another field cannot be neutral here
+/// and live there.
 fn identity_graph() -> Params {
     Params {
         cameras: vec![Camera {
@@ -1755,7 +1755,7 @@ mod tests {
     fn a_knob_past_its_rail_is_refused_rather_than_snapped_later() {
         // The bug one range per knob closes: a file loading at a value the
         // first press would clamp away, leaving the instrument showing a
-        // state neither a key nor a fader can put it back into. Over
+        // state no control can put it back into. Over
         // `Knob::ALL` rather than a list of the knobs that had the bug, so a
         // knob added later is covered the day it joins it.
         //

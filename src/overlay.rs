@@ -4,9 +4,9 @@
 //! transport strip, each control captioned with what it does in two words at
 //! most.
 //!
-//! Drawn from the [`Map`] in force and the keys' own short captions, the way
-//! [`Map::card`] prints its card — never from a picture kept beside them, so
-//! a `midi.toml` that moves a knob moves it here too. The image is rasterized
+//! Drawn from the [`Map`] in force, the way [`Map::card`] prints its card —
+//! never from a picture kept beside it, so a `midi.toml` that moves a knob
+//! moves it here too. The image is rasterized
 //! once on the CPU into a texture, and the present pass blits it over a
 //! corner: a dozen captions do not justify a text-shaping stack or a second
 //! render architecture, and a texture built at startup works the same in a
@@ -649,9 +649,10 @@ mod tests {
     }
 
     #[test]
-    fn every_factory_caption_keeps_to_two_words() {
-        // The ceiling, held where the captions are made: no control
-        // on the shipped panel may say more than two words.
+    fn every_fader_caption_keeps_to_two_words() {
+        // The ceiling, on the half of the panel that is captioned by
+        // a knob's name. The button half is every command's own name, held
+        // to the same two words by `command::a_name_is_two_words_at_most`.
         let map = Map::nano_kontrol2(&crate::config::widest());
         for f in &map.fader {
             assert!(
@@ -659,9 +660,6 @@ mod tests {
                 "{:?}",
                 f.knob
             );
-        }
-        for b in &map.button {
-            assert!(b.command.split_whitespace().count() <= 2, "{:?}", b.command);
         }
     }
 

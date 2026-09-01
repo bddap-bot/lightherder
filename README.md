@@ -323,10 +323,9 @@ is the readout. Nothing latches: a tempo is heard, not held.
 **The Solo button of the focused camera is lit, and so is the focused
 monitor's**, so the panel says where each hand's knobs are without anyone
 reading the log line. They follow the focus wherever it moves and go out when
-the instrument does. A node past the
-fourth of its half has no button to light, and lights none: a graph may run
-deeper than the surface, and a lamp on the wrong button is worse than no
-lamp. A latched mode lights the button holding it by the same rule, off that
+the instrument does. A node the map bound no button to has none to light, and
+lights none: a lamp on the wrong button is worse than no lamp. A latched mode
+lights the button holding it by the same rule, off that
 button's *action*, so a `midi.toml` that moves the overlay moves its lamp with
 it.
 
@@ -397,7 +396,8 @@ A fader names a **knob** and spans its whole travel — for the two knobs that
 wrap, rotation and hue, that is one full revolution from bottom to top. A
 button names a **command**, spelled the way the overlay captions it: `blank`,
 `reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `rate -`,
-`rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 8` for the focus.
+`rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
+as many of each as a graph may legally hold.
 
 Every channel is listened to, so a surface set to some other MIDI channel
 still works. A control number may only be bound once, and a command name that
