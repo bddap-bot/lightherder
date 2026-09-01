@@ -267,9 +267,10 @@ owed to equipment, not spent on it. Dead is the point.
 The loud cases are the other way round. More of a kind than a row is wide and
 the config is refused at load rather than played with a node no hand can
 bring the knobs to; a `midi.toml` that binds a select button on a node the
-graph has not got is refused the same way, rather than lighting a button that
-lies. Nothing is bound to quit — the window manager ends the instrument, and a
-slipped finger on the surface must not be able to. Eight of the twenty-four
+graph has not got — or the send on a rig with no input to send — is refused
+the same way, rather than lighting a button that lies or spending a fader on
+silence. Nothing is bound to quit — the window manager ends the instrument,
+and a slipped finger on the surface must not be able to. Eight of the twenty-four
 knobs are not on the factory map: the three per-channel gain offsets, which
 colour a rigid gain that is itself on a rotary; the bloom radius, which sizes
 a halo whose amount is; and the keyer's four, which wait for a hand that keys
@@ -401,7 +402,9 @@ as many of each as a graph may legally hold.
 
 Every channel is listened to, so a surface set to some other MIDI channel
 still works. A control number may only be bound once, and a command name that
-nothing answers to is refused at load with the list of the ones that do.
+nothing answers to is refused at load with the list of the ones that do. So
+is a binding on equipment the graph has not got — a select on a camera
+nobody owns, or the send on a rig with no input to send.
 
 ## Run it
 
@@ -649,8 +652,9 @@ dump that must not read as a hundred knob moves, and notes and bends that are
 not knobs. The pickup against a fader that has to reach its knob before it
 moves it, one already standing on it, and one that loses its grip on an
 unplug. The map against a duplicate binding, a command nothing
-answers to, and a literal file rather than a round trip, because a round trip
-agrees with itself whatever the fields are called. The card search against a `/proc/asound/cards`
+answers to, a fader and a button on equipment the graph has not got, and a
+literal file rather than a round trip, because a round trip agrees with
+itself whatever the fields are called. The card search against a `/proc/asound/cards`
 with two other cards that also have raw MIDI devices. And the whole path —
 discovery, the open, the reader thread, the decode, the map and the pickup —
 against a device that is not there when the instrument starts, appears, sends

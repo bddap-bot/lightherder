@@ -453,21 +453,6 @@ impl App {
         self.metered = Instant::now();
     }
 
-    /// A turn of `knob`, and what the panel owes it. A knob whose graph has
-    /// no node for it — a send with no input — moved nothing, so it must not
-    /// become the knob the rewind button takes back: that button would then
-    /// reset a knob the hand never turned, and report a panel it did not
-    /// change.
-    fn turned(&mut self, knob: Knob, turn: impl FnOnce(&mut Params, Focus) -> bool) {
-        match turn(&mut self.params, self.focus) {
-            true => {
-                self.last_knob = Some(knob);
-                log::info!("{}", self.params.describe(self.focus));
-            }
-            false => log::info!("no {}: the graph has no inputs", knob.name()),
-        }
-    }
-
     /// Put the last knob that moved back to its identity, and nothing else.
     ///
     /// Only that knob's own faders let go — [`Midi::release_knob`] rather
@@ -499,7 +484,11 @@ impl App {
     /// control surface must not be able to.
     fn act(&mut self, action: Action) {
         match action {
-            Action::Set(knob, value) => self.turned(knob, |p, f| p.set(knob, value, f)),
+            Action::Set(knob, value) => {
+                self.params.set(knob, value, self.focus);
+                self.last_knob = Some(knob);
+                log::info!("{}", self.params.describe(self.focus));
+            }
             // Never past the graph: the factory rows are built as wide as it
             // is, and `Map::validate` refuses a hand-written select on a node
             // the rig has not got.
@@ -900,29 +889,18 @@ mod tests {
     }
 
     #[test]
-    fn a_send_on_a_graph_with_no_inputs_is_a_knob_that_holds_nothing() {
-        // A `midi.toml` may bind the send whatever graph is playing, and
-        // most graphs have no input under it. A turn that moved nothing must
-        // not become the knob the reset button takes back — that button
-        // would then put a knob the hand never turned back to its identity,
-        // and report a panel it did not change.
+    fn the_send_is_a_knob_like_any_other() {
+        // Only ever on a graph that has an input to send. Fader 1 is the
+        // send's control number and it is bound to nothing on a rig with
+        // none, so the message the panel would have logged 127 times a
+        // sweep never reaches a knob at all.
         let Some(mut app) = playing(config::single()) else {
             return;
         };
         assert!(app.params.inputs.is_empty());
+        surface(&mut app, 0, 100);
+        assert_eq!(app.last_knob, None);
 
-        turn(&mut app, Knob::Zoom, 0.1);
-        let zoom = app.params.knob(Knob::Zoom, app.focus);
-        turn(&mut app, Knob::Send, -0.005);
-        assert_eq!(app.last_knob, Some(Knob::Zoom), "the send took the button");
-        app.act(Action::ResetLastKnob);
-        assert_eq!(
-            app.params.knob(Knob::Zoom, app.focus),
-            Knob::Zoom.identity()
-        );
-        assert_ne!(zoom, Knob::Zoom.identity(), "the zoom was never off it");
-
-        // And on a graph that has one, the send is a knob like any other.
         let Some(mut app) = playing(config::external()) else {
             return;
         };

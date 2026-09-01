@@ -123,9 +123,11 @@ impl Map {
     ///
     /// Fader 1 is the send, and only on a rig that has an input to send: it
     /// is the level outside light enters the graph at, so on a rig with no
-    /// inputs there is nothing for it to move and it is left dead. A dead
-    /// control is a control a `midi.toml` can claim, and one nobody's hand
-    /// throws by accident.
+    /// inputs there is nothing for it to move and it is left dead — free for
+    /// a `midi.toml` to claim for another knob, and one nobody's hand throws
+    /// by accident. Not for the send: [`Map::validate`] refuses that binding
+    /// on a rig with none, the same as a select on a node the graph has not
+    /// got.
     ///
     /// Eight knobs are deliberately not here. The three per-channel gain
     /// offsets and the bloom radius are trims of knobs that are on the
@@ -139,7 +141,8 @@ impl Map {
     pub(crate) fn nano_kontrol2(params: &Params) -> Map {
         Map {
             device: "nanoKONTROL".into(),
-            fader: (!params.inputs.is_empty())
+            fader: Knob::Send
+                .is_on(params)
                 .then(|| fader(0, Knob::Send))
                 .into_iter()
                 .chain([
@@ -234,6 +237,18 @@ impl Map {
                 return Err(format!("cc {cc} is bound twice"));
             }
             seen.push(cc);
+        }
+        for f in &self.fader {
+            // At load and not at play: the only other place to say it is
+            // inside the frame loop, where one sweep says it 127 times.
+            if !f.knob.is_on(params) {
+                return Err(format!(
+                    "cc {}: {:?} is a level on an input, and this graph has {}",
+                    f.cc,
+                    f.knob.name(),
+                    params.count(Node::Input)
+                ));
+            }
         }
         for b in &self.button {
             let Some(action) = action_for_name(&b.command) else {
@@ -1737,6 +1752,25 @@ mod tests {
         let mut map = Map::nano_kontrol2(&rig);
         map.button.push(button(90, "cam 2"));
         assert!(Midi::new(map, &rig).is_ok());
+
+        // The faders answer to it too: the send is the one knob a graph can
+        // be without, and the factory row leaves it out on this rig.
+        let mut map = Map::nano_kontrol2(&rig);
+        assert!(!map.fader.iter().any(|f| f.knob == Knob::Send));
+        map.fader.push(fader(24, Knob::Send));
+        let why = Midi::new(map, &rig)
+            .err()
+            .expect("a map the instrument would refuse");
+        assert!(
+            why.contains(r#""send" is a level on an input, and this graph has 0"#),
+            "{why}"
+        );
+
+        // And the same map plays the moment the rig has an input to send.
+        let plugged = crate::config::rig(2, 2, 1);
+        let mut map = Map::nano_kontrol2(&rig);
+        map.fader.push(fader(24, Knob::Send));
+        assert!(Midi::new(map, &plugged).is_ok());
     }
 
     #[test]

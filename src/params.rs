@@ -714,6 +714,15 @@ impl Knob {
         }
     }
 
+    /// Whether the graph has the node this knob acts on. Only a send can be
+    /// missing — [`crate::config::validate`] refuses a graph with no camera
+    /// or no monitor. The factory map leaves out a knob that is not on and
+    /// [`crate::midi::Map`] refuses a hand-written binding of one, off this
+    /// one answer.
+    pub fn is_on(self, params: &Params) -> bool {
+        self.side() != Side::InputEdge || params.count(Node::Input) > 0
+    }
+
     /// Where this knob stands with its stage doing nothing to the light:
     /// zoom 1, no turn, no pan, unity gain, a clean path, the keys off and a
     /// neutral front panel. This is what one knob is put back to
@@ -818,9 +827,8 @@ impl Params {
     /// where it is standing rather than which way it moved.
     ///
     /// Through a delta rather than by writing the field, so the rails, the
-    /// wrap and the rigid three-channel step live in one place. Its answer,
-    /// too: false where there was no field.
-    pub fn set(&mut self, knob: Knob, value: f32, focus: Focus) -> bool {
+    /// wrap and the rigid three-channel step live in one place.
+    pub fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
         self.nudge(knob, value - self.knob(knob, focus), focus)
     }
 
@@ -849,11 +857,8 @@ impl Params {
     /// three channels, which is the number its step slides: setting it to
     /// that mean is what leaves the colour offsets alone.
     ///
-    /// A send on a graph with no inputs reads as the connection not made,
-    /// which is what it is: there is no crosspoint, so no light comes over
-    /// one. That is the only reading here that is not a field — every other
-    /// index is one the caller has already landed inside this graph, which
-    /// is why they are read straight out.
+    /// Every index is one the caller has already landed inside this graph,
+    /// the send's included — see [`Knob::is_on`].
     pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
@@ -881,19 +886,11 @@ impl Params {
             Knob::Gamma => mon.colour.gamma,
             Knob::Headroom => mon.headroom,
             Knob::Route => self.routing[focus.monitor][focus.camera],
-            Knob::Send => self
-                .routing_inputs
-                .get(focus.input)
-                .map_or(0.0, |into| into[focus.monitor]),
+            Knob::Send => self.routing_inputs[focus.input][focus.monitor],
         }
     }
 
-    /// Move `knob` by `delta` on the node its side of the graph names, and
-    /// say whether there was one: a send is the one knob a graph can be
-    /// without, and a turn that landed on nothing must not be reported as a
-    /// move — the button that takes back the last knob turned would
-    /// otherwise be holding one that never turned.
-    fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) -> bool {
+    fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
         // The rigid gain knob is the one that is not a single value: clamp its
         // step once against the tightest channel, so hitting the rail slides
         // all three together instead of flattening the colour offsets.
@@ -902,27 +899,23 @@ impl Params {
             for channel in [Knob::GainR, Knob::GainG, Knob::GainB] {
                 self.nudge(channel, step, focus);
             }
-            return true;
+            return;
         }
-        let Some(field) = self.knob_mut(knob, focus) else {
-            return false;
-        };
+        let field = self.knob_mut(knob, focus);
         *field = match knob.limit() {
             Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
             Limit::Wrap => wrap_pi(*field + delta),
         };
-        true
     }
 
-    /// The value a knob turns, for the knobs that are a single number, or
-    /// `None` where the graph has no such node — a send on a graph with no
-    /// inputs, and nothing else.
-    fn knob_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut f32> {
+    /// Every index is one the caller has already landed inside this graph,
+    /// the send's included — see [`Knob::is_on`].
+    fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
         // One match rather than a branch on the side and a match inside each:
         // the crosspoint reads both indices, so there is no side to branch on
         // first, and the two `unreachable!` arms that split cost bought are
         // gone with it.
-        Some(match knob {
+        match knob {
             Knob::Zoom => &mut self.cameras[focus.camera].framing.zoom,
             Knob::Rotation => &mut self.cameras[focus.camera].framing.rotation,
             Knob::TranslateX => &mut self.cameras[focus.camera].framing.translate[0],
@@ -945,13 +938,10 @@ impl Params {
             Knob::Gamma => &mut self.monitors[focus.monitor].colour.gamma,
             Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
             Knob::Route => &mut self.routing[focus.monitor][focus.camera],
-            Knob::Send => match self.routing_inputs.get_mut(focus.input) {
-                Some(into) => &mut into[focus.monitor],
-                None => return None,
-            },
+            Knob::Send => &mut self.routing_inputs[focus.input][focus.monitor],
             // `owns_a_field` is the same fact, said where a walk can read it.
             Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
-        })
+        }
     }
 
     /// The focused nodes and every knob's value: the only readout the
@@ -999,11 +989,9 @@ impl Params {
             self.routing[focus.monitor][focus.camera],
             focus.camera + 1,
             focus.monitor + 1,
-            // Only where the switcher has an input half. A rig without one
-            // would otherwise read out a level for a source it has not got.
-            match self.inputs.is_empty() {
-                true => String::new(),
-                false => format!(
+            match Knob::Send.is_on(self) {
+                false => String::new(),
+                true => format!(
                     "\n{} {:.3}: how much of input {}/{} mon {} shows",
                     Knob::Send.name(),
                     self.knob(Knob::Send, focus),
@@ -1793,9 +1781,7 @@ mod tests {
                 let mut params = crate::config::insanity();
                 params.inputs = vec![Input::Pattern(crate::input::Pattern::Bars)];
                 params.routing_inputs = vec![vec![0.0; params.monitors.len()]];
-                *params
-                    .knob_mut(knob, focus)
-                    .expect("every field-owning knob has a field on this graph") = past;
+                *params.knob_mut(knob, focus) = past;
                 let why = crate::config::validate(&params)
                     .expect_err(&format!("{name} loaded at {past}"));
                 assert_eq!(why, format!("{node} is {past}; it runs {low} to {high}"));
