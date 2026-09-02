@@ -767,9 +767,8 @@ impl Feedback {
                 analog: [
                     grain,
                     monitor.headroom,
-                    // The last integer f32 holds exactly, and the grain is
-                    // the only thing that reads it: the wrap costs a repeat
-                    // nobody will see.
+                    // Past 2^24 an f32 skips integers. This copy is the grain's
+                    // alone, so its wrap costs a repeat nobody will see.
                     (self.pass % (1 << 24)) as f32,
                     monitor.sharpness,
                 ],
@@ -880,7 +879,6 @@ mod tests {
         // an input is one layer past the ring, delayed or not.
         single.delay = 3;
         assert_eq!(single.history(), 5);
-        // A hold is more slabs of the ring past the reach, the longest one.
         single.cameras[0].divider = 3;
         assert_eq!(single.history(), 7);
         assert_eq!(layers(&single), 7);

@@ -1172,8 +1172,6 @@ mod tests {
             validate(&with(Camera::MAX_DIVIDER + 1)).unwrap_err(),
             "camera 0's divider is 4; it runs 1 to 3"
         );
-        // Absent from a file: every pass. The ring grows by the longest
-        // hold, and a divided camera's delay still runs to the reach.
         let p: Params = toml::from_str(
             "cameras = [{ look = [1.0], divider = 3, delay = 4 }, { look = [1.0], divider = 2 }]\n\
              monitors = [{}]\n\
