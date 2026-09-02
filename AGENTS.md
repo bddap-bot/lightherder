@@ -1,0 +1,14 @@
+# Landing contract
+
+Every push to `main` has two deploy targets, and a landing is complete only when both hold:
+
+1. The TV binary at `/home/a/lightherder/lightherder` equals `cargo build --release` of `main` HEAD
+   (same sha256). Install by rename swap: write `lightherder.new`, move the old binary to
+   `lightherder.prev`, rename `.new` into place, `root:root` `755`. Launch nothing;
+   `run-lightherder.sh` picks the binary up on its next start.
+2. The `pages` workflow is green on that same sha. It runs on push; if it is red, say so
+   rather than re-triggering blindly.
+
+Both or neither: a push whose TV binary lags is an unfinished landing, not a done one.
+
+No code comments. Prose lives here or in the README.
