@@ -58,7 +58,6 @@ controls are therefore the two crosspoints: fader 8 against upper A and
 camera B is switcher A's crossfade as that monitor sees it, and fader 1
 against a B monitor is the seed's share at the end of the chain. One shape
 worth knowing before writing your own:
-
 rotations in a mixed loop should all turn the same way, since paths whose
 rotations cancel never wind away from the seed, and light that cannot leave
 the seed spot piles up on it until the display clips.
