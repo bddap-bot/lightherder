@@ -859,7 +859,7 @@ mod tests {
         assert_eq!(bank_bytes(&insanity, (3840, 2160)), 4 * 2 * 3840 * 2160 * 8);
         // A frame of delay is another slab of every monitor in the ring, and
         // an input is one layer past the ring, delayed or not.
-        single.cameras[0].delay = 3;
+        single.delay = 3;
         assert_eq!(single.history(), 5);
         assert_eq!(layers(&single), 5);
         assert_eq!(bank_bytes(&single, (1920, 1080)), 5 * 1920 * 1080 * 8);
@@ -895,7 +895,7 @@ mod tests {
         // The ring counts: ten frames deep, eighty-four layers: past the cap by bytes, and the
         // refusal says how deep the ring is, which is what the file can
         // change.
-        most.cameras[0].delay = 8;
+        most.delay = 8;
         let why = bank_fits(&most, (3840, 2160)).unwrap_err();
         assert!(
             why.contains("84 bank layers (10 frames of 8 monitors, and 4 inputs)")
@@ -904,7 +904,7 @@ mod tests {
         );
         // The full delay is 260 layers, more than a texture array holds
         // however small the monitors — refused by depth, not by bytes.
-        most.cameras[0].delay = crate::params::Camera::MAX_DELAY;
+        most.delay = crate::params::Camera::MAX_DELAY;
         let why = bank_fits(&most, (640, 480)).unwrap_err();
         assert!(
             why.contains("260 bank layers") && why.contains("256 layers"),

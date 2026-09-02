@@ -64,6 +64,7 @@ fn graph(s: &Single) -> Params {
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
         routing_inputs: Vec::new(),
+        delay: 0,
     }
 }
 
@@ -1143,6 +1144,7 @@ fn the_routing_matrix_sends_each_camera_across() {
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
         routing_inputs: Vec::new(),
+        delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1214,6 +1216,7 @@ fn mix_weights_scale_each_camera_s_contribution() {
         inputs: Vec::new(),
         routing: vec![vec![0.0, 0.0]],
         routing_inputs: Vec::new(),
+        delay: 0,
     };
     h.step_graph(&p);
     let seed = h.feedback.blob_uv();
@@ -1253,6 +1256,7 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
         inputs: Vec::new(),
         routing: vec![vec![1.0], vec![0.0]],
         routing_inputs: Vec::new(),
+        delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1294,6 +1298,7 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
         inputs: Vec::new(),
         routing: vec![vec![0.25; 4]; 4],
         routing_inputs: Vec::new(),
+        delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
         return;
@@ -1337,6 +1342,7 @@ fn a_solo_puts_one_monitor_on_the_whole_target() {
         inputs: Vec::new(),
         routing: vec![vec![0.0; 4]; 4],
         routing_inputs: Vec::new(),
+        delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
         return;
@@ -1666,6 +1672,7 @@ fn each_camera_carries_its_own_character() {
         inputs: Vec::new(),
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
         routing_inputs: Vec::new(),
+        delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -1838,6 +1845,7 @@ fn one_input_on_one_monitor() -> Params {
         inputs: vec![Input::Pattern(Pattern::Bars)],
         routing: vec![vec![0.0]],
         routing_inputs: vec![vec![1.0]],
+        delay: 0,
     }
 }
 
@@ -1899,6 +1907,7 @@ fn each_input_lands_on_its_own_layer() {
         inputs: vec![Input::Pattern(Pattern::Bars); 2],
         routing: vec![vec![0.0], vec![0.0]],
         routing_inputs: vec![one_hot(2, 0), one_hot(2, 1)],
+        delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;
@@ -2035,6 +2044,7 @@ fn keyed_camera_watching_a_picture(key: Key) -> Params {
         inputs: vec![Input::Pattern(Pattern::Bars)],
         routing: vec![vec![0.0], vec![1.0]],
         routing_inputs: vec![vec![1.0, 0.0]],
+        delay: 0,
     }
 }
 
@@ -2299,26 +2309,20 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
     // an undelayed camera shows on pass 1 — a delay moves when a frame
     // arrives, never what arrives. The camera zooms and dims so that a frame
     // held for the delay and a frame sent round the camera that many more
-    // times come out different. A second camera, routed nowhere, holds the
-    // longest delay so that every ring is the deepest one: the short delays
-    // then read from its middle, and the longest from the slab just after
-    // the one being written.
+    // times come out different. The reach is the full thirty frames so that
+    // every ring is the deepest one: the short delays then read from its
+    // middle, and the longest from the slab just after the one being
+    // written.
     let flash = |delay: u32| Params {
-        cameras: vec![
-            Camera {
-                delay,
-                gain: [0.9; 3],
-                framing: Framing {
-                    zoom: 0.9,
-                    ..Framing::identity()
-                },
-                ..plain_camera(one_hot(2, 0))
+        cameras: vec![Camera {
+            delay,
+            gain: [0.9; 3],
+            framing: Framing {
+                zoom: 0.9,
+                ..Framing::identity()
             },
-            Camera {
-                delay: Camera::MAX_DELAY,
-                ..plain_camera(one_hot(2, 1))
-            },
-        ],
+            ..plain_camera(one_hot(2, 0))
+        }],
         monitors: vec![
             Monitor {
                 seed: Seed::WhiteBlob(1.0),
@@ -2327,8 +2331,9 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
             silent_monitor(),
         ],
         inputs: Vec::new(),
-        routing: vec![vec![0.0, 0.0], vec![1.0, 0.0]],
+        routing: vec![vec![0.0], vec![1.0]],
         routing_inputs: Vec::new(),
+        delay: Camera::MAX_DELAY,
     };
     let mut undelayed: Option<Vec<u8>> = None;
     for delay in [0, 1, 2, Camera::MAX_DELAY] {
@@ -2380,6 +2385,7 @@ fn an_input_lands_past_the_whole_ring() {
         inputs: vec![Input::Pattern(Pattern::Bars)],
         routing: vec![vec![0.0]],
         routing_inputs: vec![vec![1.0]],
+        delay: 5,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
@@ -2419,6 +2425,7 @@ fn blanking_the_monitors_empties_the_whole_ring() {
         inputs: Vec::new(),
         routing: vec![vec![0.0], vec![1.0]],
         routing_inputs: Vec::new(),
+        delay,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
         return;

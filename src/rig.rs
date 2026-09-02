@@ -195,6 +195,9 @@ impl Rig {
             inputs: vec![Input::Pattern(Pattern::Bars)],
             routing: feeds.iter().map(|feed| feed.cameras.to_vec()).collect(),
             routing_inputs: vec![feeds.iter().map(|feed| feed.seed).collect()],
+            // Two frames, not the original's thirty: a frame of reach is a copy
+            // of all five monitors, and the bank cap at 4K holds about four.
+            delay: 2,
         }
     }
 }

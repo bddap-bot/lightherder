@@ -61,6 +61,7 @@ pub(crate) fn shaped(cameras: usize, monitors: usize, inputs: usize) -> Params {
         inputs: vec![Input::Pattern(Pattern::Bars); inputs],
         routing: (0..monitors).map(|_| vec![0.0; cameras]).collect(),
         routing_inputs: (0..inputs).map(|_| vec![0.0; monitors]).collect(),
+        delay: 0,
     }
 }
 
@@ -90,6 +91,7 @@ pub fn single() -> Params {
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
         routing_inputs: Vec::new(),
+        delay: 0,
     }
 }
 
@@ -154,6 +156,7 @@ pub fn crossed() -> Params {
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
         routing_inputs: Vec::new(),
+        delay: 0,
     }
 }
 
@@ -196,6 +199,7 @@ pub fn insanity() -> Params {
         inputs: Vec::new(),
         routing: vec![vec![1.0 / N as f32; N]; N],
         routing_inputs: Vec::new(),
+        delay: 0,
     }
 }
 
@@ -231,6 +235,7 @@ pub fn external() -> Params {
         // since nothing frames what the switcher hands over — everything
         // that happens to it afterwards is the loop's doing.
         routing_inputs: vec![vec![0.014]],
+        delay: 0,
     }
 }
 
@@ -289,6 +294,7 @@ pub fn webcam() -> Params {
         // The device onto the window, whole. Its level is the keyed camera's
         // gain, one stage further on, so this end of it stays at full.
         routing_inputs: vec![vec![1.0, 0.0]],
+        delay: 0,
     }
 }
 
@@ -512,7 +518,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // differ on, which is how a config used to load a bloom the bloom knob
     // could not reach.
     for knob in Knob::ALL.into_iter().filter(|knob| knob.owns_a_field()) {
-        let (low, high) = knob.limit().ends();
+        let (low, high) = knob.limit(params).ends();
         for focus in focuses(knob.side(), params) {
             let value = params.knob(knob, focus);
             if !(low..=high).contains(&value) {
@@ -536,16 +542,16 @@ pub fn validate(params: &Params) -> Result<(), String> {
             }
         }
     }
-    // Bought in bank rather than in taps: a frame of delay is a copy of every
-    // monitor, and the ring is sized from the longest one at load.
-    for (c, camera) in params.cameras.iter().enumerate() {
-        if camera.delay > Camera::MAX_DELAY {
-            return Err(format!(
-                "camera {c} asks for {} frames of delay; at most {}",
-                camera.delay,
-                Camera::MAX_DELAY
-            ));
-        }
+    // Bought in bank rather than in taps: a frame of reach is a copy of
+    // every monitor, and the ring is sized from it at load. A camera past
+    // the reach is caught by the walk over the knobs above, since the reach
+    // is the delay knob's rail.
+    if params.delay > Camera::MAX_DELAY {
+        return Err(format!(
+            "the delay units reach {} frames; at most {}",
+            params.delay,
+            Camera::MAX_DELAY
+        ));
     }
     // The flattened routing-times-look products are what the shader iterates,
     // and its uniform array is a fixed size. Bounded against every crosspoint
@@ -888,7 +894,7 @@ mod tests {
         // The send's own rail, which the walk over the knobs reads for it
         // like every other: a graph the panel could not put in this state is
         // a graph the loader refuses.
-        let (_, high) = Knob::Send.limit().ends();
+        let (_, high) = Knob::Send.limit(&external()).ends();
         for level in [high + 0.1, -0.1, f32::NAN] {
             let mut params = external();
             params.routing_inputs[0][0] = level;
@@ -1020,10 +1026,12 @@ mod tests {
              \x20 colour = { hue = 0.1, saturation = 1.1, brightness = 0.02, contrast = 1.05, gamma = 1.2 } }]\n\
              routing = [[0.7]]\n\
              routing_inputs = [[0.3]]\n\
-             inputs = [{ pattern = \"bars\" }]\n",
+             inputs = [{ pattern = \"bars\" }]\n\
+             delay = 6\n",
         )
         .unwrap();
         let params = load(path.to_str().unwrap()).unwrap();
+        assert_eq!(params.delay, 6);
 
         let camera = &params.cameras[0];
         assert_eq!(camera.look, [0.5]);
@@ -1092,20 +1100,26 @@ mod tests {
     }
 
     #[test]
-    fn a_delay_past_the_units_range_is_refused() {
-        let with = |delay: u32| {
+    fn a_delay_past_the_units_reach_is_refused() {
+        let with = |reach: u32, delay: u32| {
             let mut p = single();
+            p.delay = reach;
             p.cameras[0].delay = delay;
             p
         };
-        assert!(validate(&with(Camera::MAX_DELAY)).is_ok());
-        let why = validate(&with(Camera::MAX_DELAY + 1)).unwrap_err();
-        assert!(why.contains("camera 0") && why.contains("31"), "{why}");
+        assert!(validate(&with(Camera::MAX_DELAY, Camera::MAX_DELAY)).is_ok());
+        let why = validate(&with(Camera::MAX_DELAY + 1, 0)).unwrap_err();
+        assert!(why.contains("reach 31"), "{why}");
+        assert_eq!(
+            validate(&with(3, 4)).unwrap_err(),
+            "camera 0's delay is 4; it runs 0 to 3"
+        );
         // Read from a file, and absent from one: no delay unit on the cable.
         let p: Params = toml::from_str(
             "cameras = [{ look = [1.0], delay = 4 }, { look = [1.0] }]\n\
              monitors = [{}]\n\
-             routing = [[1.0, 0.0]]\n",
+             routing = [[1.0, 0.0]]\n\
+             delay = 4\n",
         )
         .unwrap();
         assert_eq!(p.cameras[0].delay, 4);
@@ -1225,6 +1239,7 @@ mod tests {
             monitors: (0..MAX_MONITORS).map(|_| Monitor::default()).collect(),
             inputs: Vec::new(),
             routing_inputs: Vec::new(),
+            delay: 0,
             // One camera per monitor switched on: well under the bound as it
             // stands, and over it the moment a crosspoint is swept.
             routing: (0..MAX_MONITORS)

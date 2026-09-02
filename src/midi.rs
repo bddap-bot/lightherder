@@ -181,7 +181,11 @@ impl Map {
     ///
     /// Page 2 keeps the rotaries the camera's: the three per-channel gain
     /// offsets and the bloom radius, trims of knobs on page 1, and then the
-    /// keyer's four. Its faders are free for a `midi.toml` to claim.
+    /// keyer's four. Its fader 8 is the focused camera's delay — where page
+    /// 1's fader 8 is how much of that camera the monitor shows, page 2's is
+    /// how late — on a graph whose delay units have any reach, and dead
+    /// otherwise, like the send. The other page-2 faders are free for a
+    /// `midi.toml` to claim.
     ///
     /// `params` decides the rest of the layout: the send is bound only where
     /// there is one, and the select rows are as wide as the graph and no
@@ -218,6 +222,7 @@ impl Map {
                     page_two(22, Knob::KeyHue),
                     page_two(23, Knob::KeyTolerance),
                 ])
+                .chain(Knob::Delay.is_on(params).then(|| page_two(7, Knob::Delay)))
                 .collect(),
             button: nano_buttons(params),
         }
@@ -313,10 +318,10 @@ impl Map {
             // inside the frame loop, where one sweep says it 127 times.
             if !f.knob.is_on(params) {
                 return Err(format!(
-                    "cc {}: {:?} is a level on an input, and this graph has {}",
+                    "cc {}: {:?} is {}",
                     f.cc,
                     f.knob.name(),
-                    params.count(Node::Input)
+                    f.knob.why_off(params)
                 ));
             }
         }
@@ -694,8 +699,8 @@ impl Stream {
 /// would take. The travel is the knob's own, read off [`Limit::ends`] — a
 /// phase's is one full turn, and this is not the place that decides how long
 /// a turn is.
-fn value_at(knob: Knob, position: f32) -> f32 {
-    let (low, high) = knob.limit().ends();
+fn value_at(knob: Knob, position: f32, params: &Params) -> f32 {
+    let (low, high) = knob.limit(params).ends();
     low + position * (high - low)
 }
 
@@ -704,8 +709,8 @@ fn value_at(knob: Knob, position: f32) -> f32 {
 /// `Params::nudge` or loaded through `config::validate` and both hold it
 /// inside the very same [`Limit`] — the two ends of a fader are the two ends
 /// of the knob, with nothing past either.
-fn position_of(knob: Knob, value: f32) -> f32 {
-    let (low, high) = knob.limit().ends();
+fn position_of(knob: Knob, value: f32, params: &Params) -> f32 {
+    let (low, high) = knob.limit(params).ends();
     (value - low) / (high - low)
 }
 
@@ -731,14 +736,15 @@ const STEP: f32 = 1.0 / 127.0;
 
 impl Pickup {
     /// Whether this move of the fader reaches its knob, which is at `value`.
-    fn catches(&mut self, fader: f32, knob: Knob, value: f32) -> bool {
+    fn catches(&mut self, fader: f32, knob: Knob, params: &Params, focus: Focus) -> bool {
+        let value = params.knob(knob, focus);
         let was = self.was.replace(fader).unwrap_or(fader);
         let reaches = |target: f32| {
             let (from, to) = (was - target, fader - target);
             from.min(to) <= STEP && from.max(to) >= -STEP
         };
-        let at = position_of(knob, value);
-        self.caught |= match knob.limit() {
+        let at = position_of(knob, value, params);
+        self.caught |= match knob.limit(params) {
             // A phase's two fader ends are the same angle, so a knob sitting
             // on the seam is reachable from either — and `wrap_pi` puts it
             // there exactly, at +PI, which is position 1.0 while the fader
@@ -1098,8 +1104,8 @@ impl Midi {
             let knob = self.map.fader[i].knob;
             let fader = f32::from(message.value) / 127.0;
             return self.pickup[i]
-                .catches(fader, knob, params.knob(knob, focus))
-                .then(|| Action::Set(knob, value_at(knob, fader)));
+                .catches(fader, knob, params, focus)
+                .then(|| Action::Set(knob, value_at(knob, fader, params)));
         }
         let i = self
             .map
@@ -1886,6 +1892,27 @@ mod tests {
     }
 
     #[test]
+    fn the_delay_is_page_two_s_last_fader_where_the_graph_has_reach() {
+        let none = crate::config::widest();
+        assert!(!Map::nano_kontrol2(&none)
+            .fader
+            .iter()
+            .any(|f| f.knob == Knob::Delay));
+        let mut reach = crate::config::widest();
+        reach.delay = 4;
+        let map = Map::nano_kontrol2(&reach);
+        assert_eq!(map.fader.last(), Some(&page_two(7, Knob::Delay)));
+        assert!(Midi::new(map.clone(), &reach).is_ok());
+        let why = Midi::new(map, &none)
+            .err()
+            .expect("a delay fader on a graph with no reach");
+        assert!(
+            why.contains(r#""delay" is a frame delay unit"#) && why.contains("reach is 0"),
+            "{why}"
+        );
+    }
+
+    #[test]
     fn a_kind_the_rig_has_one_of_gets_no_row_at_all() {
         // The ruling: a button is owed to equipment, and a button
         // that selects the only camera there is selects what is already
@@ -1981,7 +2008,10 @@ mod tests {
 
     #[test]
     fn the_factory_map_covers_the_surface_it_names() {
-        let map = Map::nano_kontrol2(&crate::config::widest());
+        // With a reach, so the delay is a knob this graph has.
+        let mut params = crate::config::widest();
+        params.delay = 1;
+        let map = Map::nano_kontrol2(&params);
         // Naming the ones that are missing is what makes a knob added later
         // show up as a failure rather than as a knob nobody can reach.
         let missing: Vec<&str> = Knob::ALL
@@ -2002,7 +2032,7 @@ mod tests {
         {
             assert!(spot(cc).is_some(), "cc {cc} is nowhere on the panel");
         }
-        Midi::new(map, &crate::config::widest()).unwrap();
+        Midi::new(map, &params).unwrap();
     }
 
     #[test]
@@ -2249,33 +2279,46 @@ mod tests {
 
     #[test]
     fn a_fader_spans_exactly_its_knob_s_travel() {
+        let mut params = crate::config::widest();
+        params.delay = 4;
         for knob in Knob::ALL {
-            let (low, high) = knob.limit().ends();
+            let (low, high) = knob.limit(&params).ends();
             // The ends and the middle: two points fix any straight line, and
             // the third is what a square law would miss.
-            assert!((value_at(knob, 0.0) - low).abs() < 1e-6, "{}", knob.name());
-            assert!((value_at(knob, 1.0) - high).abs() < 1e-6, "{}", knob.name());
+            assert!(
+                (value_at(knob, 0.0, &params) - low).abs() < 1e-6,
+                "{}",
+                knob.name()
+            );
+            assert!(
+                (value_at(knob, 1.0, &params) - high).abs() < 1e-6,
+                "{}",
+                knob.name()
+            );
             let middle = (low + high) / 2.0;
             assert!(
-                (value_at(knob, 0.5) - middle).abs() < 1e-6,
+                (value_at(knob, 0.5, &params) - middle).abs() < 1e-6,
                 "{}: {} not {middle}",
                 knob.name(),
-                value_at(knob, 0.5)
+                value_at(knob, 0.5, &params)
             );
             for step in 0..=127 {
                 let position = step as f32 / 127.0;
-                let round = position_of(knob, value_at(knob, position));
+                let round = position_of(knob, value_at(knob, position, &params), &params);
                 assert!((round - position).abs() < 1e-5, "{}", knob.name());
             }
         }
         // Against numbers worked out by hand rather than by the inverse, so a
         // curve and its own inverse cannot agree their way past this.
-        assert!((position_of(Knob::Contrast, 1.0) - 0.25).abs() < 1e-6);
-        assert!((value_at(Knob::Contrast, 0.75) - 3.0).abs() < 1e-6);
+        assert!((position_of(Knob::Contrast, 1.0, &params) - 0.25).abs() < 1e-6);
+        assert!((value_at(Knob::Contrast, 0.75, &params) - 3.0).abs() < 1e-6);
         // A phase makes one full revolution, ending where it set out.
-        assert!(value_at(Knob::Hue, 0.5).abs() < 1e-6);
+        assert!(value_at(Knob::Hue, 0.5, &params).abs() < 1e-6);
         assert!(
-            (value_at(Knob::Hue, 1.0) - value_at(Knob::Hue, 0.0) - std::f32::consts::TAU).abs()
+            (value_at(Knob::Hue, 1.0, &params)
+                - value_at(Knob::Hue, 0.0, &params)
+                - std::f32::consts::TAU)
+                .abs()
                 < 1e-5
         );
     }

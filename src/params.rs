@@ -252,8 +252,8 @@ pub struct Camera {
     /// camera recursive by construction rather than by convention.
     pub look: Vec<f32>,
     /// The frame delay unit on this camera's cable: how many passes old the
-    /// frames it hands on are, past the one pass every camera is behind by.
-    /// Zero is the cable alone. What it does to the picture is the
+    /// frames it hands on are, past the one pass every camera is behind by,
+    /// at most the graph's reach. Zero is the cable alone. What it does to the picture is the
     /// original's: a sudden movement comes back as an echoing pulse, a
     /// smooth one as a frozen smear.
     #[serde(default)]
@@ -261,9 +261,9 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// The most delay a camera may be given: the thirty frames the
-    /// original's delay units dial up to. A bound because the delay is
-    /// bought in bank: every frame of it is another copy of every monitor.
+    /// The most reach a graph's delay units may have: the thirty frames the
+    /// original's dial up to. A bound because the reach is bought in bank:
+    /// every frame of it is another copy of every monitor.
     pub const MAX_DELAY: u32 = 30;
 }
 
@@ -305,6 +305,7 @@ fn identity_graph() -> Params {
         // same weight and gets the same reading.
         routing: vec![vec![0.0]],
         routing_inputs: vec![vec![0.0]],
+        delay: 0,
     }
 }
 
@@ -457,6 +458,13 @@ pub struct Params {
     /// is no empty-means-nothing case for a loader to get wrong.
     #[serde(default)]
     pub routing_inputs: Vec<Vec<f32>>,
+    /// The frame delay units' reach: how many frames a camera's `delay` may
+    /// be dialled up to, and so how deep a ring of the monitors the bank
+    /// keeps. Bought at load, since a frame of it is another copy of every
+    /// monitor, so the knob runs to here and no further. Zero is a rig with
+    /// no delay unit, and no delay knob.
+    #[serde(default)]
+    pub delay: u32,
 }
 
 impl Default for Params {
@@ -552,6 +560,8 @@ pub enum Knob {
     BloomRadius,
     ChromaBleed,
     Noise,
+    /// The frame delay unit on the camera's cable, in whole frames.
+    Delay,
     /// The keyer: the luma it demands, the edge both keys blend over, and
     /// the colour the chroma key cuts with how much of it to tolerate.
     KeyThreshold,
@@ -614,7 +624,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 24] = [
+    pub const ALL: [Knob; 25] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -627,6 +637,7 @@ impl Knob {
         Knob::BloomRadius,
         Knob::ChromaBleed,
         Knob::Noise,
+        Knob::Delay,
         Knob::KeyThreshold,
         Knob::KeySoftness,
         Knob::KeyHue,
@@ -658,6 +669,7 @@ impl Knob {
             Knob::BloomRadius => "bloom radius",
             Knob::ChromaBleed => "chroma bleed",
             Knob::Noise => "noise",
+            Knob::Delay => "delay",
             Knob::KeyThreshold => "key threshold",
             Knob::KeySoftness => "key softness",
             Knob::KeyHue => "key hue",
@@ -724,6 +736,7 @@ impl Knob {
             | Knob::BloomRadius
             | Knob::ChromaBleed
             | Knob::Noise
+            | Knob::Delay
             | Knob::KeyThreshold
             | Knob::KeySoftness
             | Knob::KeyHue
@@ -739,13 +752,30 @@ impl Knob {
         }
     }
 
-    /// Whether the graph has the node this knob acts on. Only a send can be
+    /// Whether the graph has what this knob acts on: an input for the send,
+    /// a delay unit with any reach for the delay. Nothing else can be
     /// missing — [`crate::config::validate`] refuses a graph with no camera
     /// or no monitor. The factory map leaves out a knob that is not on and
     /// [`crate::midi::Map`] refuses a hand-written binding of one, off this
     /// one answer.
     pub fn is_on(self, params: &Params) -> bool {
-        self.side() != Side::InputEdge || params.count(Node::Input) > 0
+        match self {
+            Knob::Send => params.count(Node::Input) > 0,
+            Knob::Delay => params.delay > 0,
+            _ => true,
+        }
+    }
+
+    /// Why [`Knob::is_on`] said no, for the refusal.
+    pub fn why_off(self, params: &Params) -> String {
+        match self {
+            Knob::Send => format!(
+                "a level on an input, and this graph has {}",
+                params.count(Node::Input)
+            ),
+            Knob::Delay => "a frame delay unit, and this graph's reach is 0".to_string(),
+            _ => unreachable!("{:?} is on every graph", self),
+        }
     }
 
     /// Where this knob stands with its stage doing nothing to the light:
@@ -761,8 +791,10 @@ impl Knob {
         identity_graph().knob(self, Focus::default())
     }
 
-    pub const fn limit(self) -> Limit {
+    pub fn limit(self, params: &Params) -> Limit {
         match self {
+            // Whole frames, as far as the ring the graph bought goes.
+            Knob::Delay => Limit::Clamp(0.0, params.delay as f32),
             // Zero would divide by zero in the sampling transform.
             Knob::Zoom => Limit::Clamp(0.25, 4.0),
             // Spinning one way for long enough must not run the number away.
@@ -839,12 +871,7 @@ impl Params {
     /// pass is drawing, the one every camera reads, and one more per frame
     /// of the longest delay any camera asks for.
     pub fn history(&self) -> usize {
-        2 + self
-            .cameras
-            .iter()
-            .map(|camera| camera.delay as usize)
-            .max()
-            .unwrap_or(0)
+        2 + self.delay as usize
     }
 
     /// The switcher's cut: the focused monitor shows the focused input whole
@@ -930,6 +957,7 @@ impl Params {
             Knob::BloomRadius => cam.character.bloom_radius,
             Knob::ChromaBleed => cam.character.chroma_bleed,
             Knob::Noise => cam.character.noise,
+            Knob::Delay => cam.delay as f32,
             Knob::KeyThreshold => cam.key.threshold,
             Knob::KeySoftness => cam.key.softness,
             Knob::KeyHue => cam.key.hue,
@@ -956,8 +984,17 @@ impl Params {
             }
             return;
         }
+        // The delay is a count of frames: the nearest whole one, inside the
+        // reach the graph bought.
+        if knob == Knob::Delay {
+            let (low, high) = knob.limit(self).ends();
+            let camera = &mut self.cameras[focus.camera];
+            camera.delay = (camera.delay as f32 + delta).round().clamp(low, high) as u32;
+            return;
+        }
+        let limit = knob.limit(self);
         let field = self.knob_mut(knob, focus);
-        *field = match knob.limit() {
+        *field = match limit {
             Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
             Limit::Wrap => wrap_pi(*field + delta),
         };
@@ -994,8 +1031,8 @@ impl Params {
             Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
             Knob::Route => &mut self.routing[focus.monitor][focus.camera],
             Knob::Send => &mut self.routing_inputs[focus.input][focus.monitor],
-            // `owns_a_field` is the same fact, said where a walk can read it.
             Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
+            Knob::Delay => unreachable!("nudge() rounds the delay to whole frames"),
         }
     }
 
@@ -1010,7 +1047,7 @@ impl Params {
             // consecutive presses stop lining up — which was the only thing
             // a single line was buying.
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
-             bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  \
+             bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  delay {}/{}  \
              key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
              gamma {:.3}  headroom {:.3}  seed {}\n\
@@ -1028,6 +1065,8 @@ impl Params {
             cam.character.bloom_radius,
             cam.character.chroma_bleed,
             cam.character.noise,
+            cam.delay,
+            self.delay,
             cam.key.threshold,
             cam.key.softness,
             cam.key.hue,
@@ -1060,7 +1099,7 @@ impl Params {
 }
 
 fn rigid_gain_step(gain: &[f32; 3], delta: f32) -> f32 {
-    let (low, high) = Knob::Gain.limit().ends();
+    let (low, high) = Knob::Gain.limit(&identity_graph()).ends();
     let travel = gain
         .iter()
         .map(|c| if delta >= 0.0 { high - c } else { c - low })
@@ -1081,14 +1120,16 @@ mod tests {
     use super::*;
     use core::f32::consts::PI;
 
-    /// The single-loop preset with an input sent onto its monitor, which is
-    /// where one of every knob lives: the send is the one knob a graph can
-    /// be without, so a walk over `Knob::ALL` on a rig without one is a walk
-    /// with a hole in it.
+    /// The single-loop preset with an input sent onto its monitor and a
+    /// delay unit with reach, which is where one of every knob lives: the
+    /// send and the delay are the two knobs a graph can be without, so a
+    /// walk over `Knob::ALL` on a rig without them is a walk with holes in
+    /// it.
     fn p() -> Params {
         let params = Params {
             inputs: vec![Input::Pattern(crate::input::Pattern::Bars)],
             routing_inputs: vec![vec![0.5]],
+            delay: 4,
             ..Params::default()
         };
         crate::config::validate(&params).unwrap();
@@ -1099,6 +1140,15 @@ mod tests {
         p.nudge(knob, delta, Focus::default());
     }
 
+    /// A step every knob can take: the delay moves by whole frames and
+    /// nothing else, so a fraction of one is a turn it rounds away.
+    fn step_for(knob: Knob, step: f32) -> f32 {
+        match knob {
+            Knob::Delay => step.signum(),
+            _ => step,
+        }
+    }
+
     #[test]
     fn every_knob_moves_something() {
         for knob in Knob::ALL {
@@ -1107,7 +1157,7 @@ mod tests {
             // only, and a knob that moves in neither is the broken one.
             let moved = [0.01f32, -0.01].map(|delta| {
                 let mut params = p();
-                nudge(&mut params, knob, delta);
+                nudge(&mut params, knob, step_for(knob, delta));
                 params != p()
             });
             assert!(moved.iter().any(|m| *m), "{knob:?} did nothing");
@@ -1312,11 +1362,11 @@ mod tests {
             let before = params.describe(Focus::default());
             // Away from whichever rail the default is on, so a knob with no
             // room upward is still moved.
-            let delta = match knob.limit() {
+            let delta = match knob.limit(&params) {
                 Limit::Clamp(_, high) if params.knob(knob, Focus::default()) >= high => -0.05,
                 _ => 0.05,
             };
-            nudge(&mut params, knob, delta);
+            nudge(&mut params, knob, step_for(knob, delta));
             assert_ne!(
                 params.describe(Focus::default()),
                 before,
@@ -1386,7 +1436,7 @@ mod tests {
     /// the constant [`identity_graph`] is built from. Read off the same
     /// constant the code reads and a knob wired to the wrong field would
     /// agree with itself: this table is the independent word.
-    const IDENTITIES: [(Knob, f32); 24] = [
+    const IDENTITIES: [(Knob, f32); 25] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
         (Knob::TranslateX, 0.0),
@@ -1402,6 +1452,7 @@ mod tests {
         (Knob::BloomRadius, 0.03),
         (Knob::ChromaBleed, 0.0),
         (Knob::Noise, 0.0),
+        (Knob::Delay, 0.0),
         (Knob::KeyThreshold, 0.0),
         (Knob::KeySoftness, 0.05),
         (Knob::KeyHue, 0.0),
@@ -1442,11 +1493,35 @@ mod tests {
     }
 
     #[test]
+    fn the_delay_knob_lands_on_whole_frames_inside_the_reach() {
+        let mut params = crate::config::shaped(2, 2, 0);
+        params.delay = 4;
+        let focus = Focus::default();
+        assert_eq!(Knob::Delay.limit(&params), Limit::Clamp(0.0, 4.0));
+        params.set(Knob::Delay, 2.4, focus);
+        assert_eq!(params.cameras[0].delay, 2);
+        assert_eq!(params.knob(Knob::Delay, focus), 2.0);
+        params.set(Knob::Delay, 2.6, focus);
+        assert_eq!(params.cameras[0].delay, 3);
+        params.set(Knob::Delay, 9.0, focus);
+        assert_eq!(params.cameras[0].delay, 4, "the reach is the rail");
+        assert_eq!(params.cameras[1].delay, 0, "the other cable is its own");
+        assert!(params.describe(focus).contains("delay 4/4"));
+        params.reset(Knob::Delay, focus);
+        assert_eq!(params.cameras[0].delay, 0);
+        // With no reach there is nothing to dial, and the knob says so.
+        params.delay = 0;
+        assert!(!Knob::Delay.is_on(&params));
+        params.delay = 1;
+        assert!(Knob::Delay.is_on(&params));
+    }
+
+    #[test]
     fn every_identity_is_somewhere_its_own_knob_can_stand() {
         // An identity outside the travel is one the reset can never land on,
         // and `nudge` would quietly clamp it to a rail instead of saying so.
         for knob in Knob::ALL {
-            let (low, high) = knob.limit().ends();
+            let (low, high) = knob.limit(&identity_graph()).ends();
             let at = knob.identity();
             assert!(at >= low && at <= high, "{} is {at}", knob.name());
         }
@@ -1679,6 +1754,7 @@ mod tests {
             let mut params = crate::config::crossed();
             params.inputs = vec![Input::Pattern(crate::input::Pattern::Bars)];
             params.routing_inputs = vec![vec![0.0, 0.5]];
+            params.delay = 4;
             let focus = Focus {
                 camera: 1,
                 monitor: 1,
@@ -1693,10 +1769,11 @@ mod tests {
             // down. Inside the tightest knob's travel, so every knob can
             // take it.
             const STEP: f32 = 0.002;
-            let step = match knob.limit() {
+            let step = match knob.limit(&params) {
                 Limit::Clamp(_, high) if params.knob(knob, focus) >= high => -STEP,
                 _ => STEP,
             };
+            let step = step_for(knob, step);
             params.nudge(knob, step, focus);
             for (other, was) in Knob::ALL.into_iter().zip(before) {
                 let now = params.knob(other, focus);
@@ -1828,15 +1905,23 @@ mod tests {
                     focus.input, focus.monitor
                 ),
             };
-            let (low, high) = knob.limit().ends();
-            for past in [low - 1.0, high + 1.0] {
+            let (low, high) = knob.limit(&crate::config::insanity()).ends();
+            // A count of frames has no field below zero to poison.
+            let pasts = match knob {
+                Knob::Delay => vec![high + 1.0],
+                _ => vec![low - 1.0, high + 1.0],
+            };
+            for past in pasts {
                 // `insanity` with an input plugged in, so the send has a
                 // field on this walk like every other knob; without one it
                 // would be the one knob whose refusal nothing here reads.
                 let mut params = crate::config::insanity();
                 params.inputs = vec![Input::Pattern(crate::input::Pattern::Bars)];
                 params.routing_inputs = vec![vec![0.0; params.monitors.len()]];
-                *params.knob_mut(knob, focus) = past;
+                match knob {
+                    Knob::Delay => params.cameras[focus.camera].delay = past as u32,
+                    _ => *params.knob_mut(knob, focus) = past,
+                }
                 let why = crate::config::validate(&params)
                     .expect_err(&format!("{name} loaded at {past}"));
                 assert_eq!(why, format!("{node} is {past}; it runs {low} to {high}"));
