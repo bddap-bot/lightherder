@@ -1,5 +1,5 @@
 //! Dave Blair's 4K Light Herder as one graph: the nodes his schematic names,
-//! the four switchers and the router selects between them, and the
+//! the four switchers and the router selects in front of them, and the
 //! flattening of a setting of those into the one switcher this instrument
 //! has.
 //!
@@ -8,10 +8,9 @@
 //! the three cameras and the seed input — which is what [`Params::routing`]
 //! and [`Params::routing_inputs`] already are. So the rig gets no mixer of
 //! its own: [`Rig::params`] multiplies the chain out and writes the products
-//! into the matrix, and from then on only the matrix exists. What survives
-//! the multiplication is switcher A and the four selects, each a crosspoint
-//! of its own; switchers B, C and D reach a monitor only as products of one
-//! another, so a control on one of those would have to hold a [`Rig`] beside
+//! into the matrix, and from then on only the matrix exists. Switcher A and
+//! the four selects land on the matrix directly; switchers B, C and D reach
+//! a monitor only as products of one another, so a control on one of those would have to hold a [`Rig`] beside
 //! the matrix and re-flatten — a second state to drift, which is why none is
 //! held here.
 
@@ -129,9 +128,10 @@ impl Rig {
     /// would feed nothing — with both cross-links a quarter open, so each
     /// structure is made of the other (Blair's "insanity mode") yet keeps
     /// a shape of its own; switcher C half open and D a tenth, which puts
-    /// the seed on a B monitor at 0.0125, near the 0.014 `external` injects
-    /// and for the same reason — a loop this close to unity settles at the
-    /// trickle divided by its distance from unity.
+    /// the seed on a B monitor at 0.0125 — an injection like `external`'s
+    /// 0.014, though these coupled loops sit farther from unity, so the seed
+    /// settles at about a third of its own brightness rather than nine
+    /// tenths.
     pub const PERFORMANCE: Rig = Rig {
         switchers: [0.25, 0.25, 0.5, 0.1],
         upper_a: Select::Program,
@@ -254,9 +254,7 @@ mod tests {
             ..all(Select::Program, [0.0; 4])
         };
         assert_feed(rig.shows(Screen::UpperA), [0.0, 1.0, 0.0], 0.0);
-        // The select is per monitor: the lower one stays on its camera.
         assert_feed(rig.shows(Screen::LowerA), [1.0, 0.0, 0.0], 0.0);
-        // Switcher B at In1 is camera B whole, wherever C and D stand.
         assert_feed(rig.shows(Screen::UpperB), [0.0, 1.0, 0.0], 0.0);
     }
 
@@ -268,7 +266,6 @@ mod tests {
         // Structure A takes camera B's feed, never the seed: on the rig the
         // seed reaches A only as light already round B's loop.
         assert_feed(all_the_way.shows(Screen::UpperA), [0.5, 0.5, 0.0], 0.0);
-        // D at In1 puts camera 3 where the seed was.
         let rotating_instead = Rig {
             switchers: [0.5, 1.0, 1.0, 0.0],
             ..all_the_way

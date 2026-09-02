@@ -57,9 +57,7 @@ direct or its switcher's program. The preset ships every monitor on program,
 both cross-links a quarter open, C half open and the seed a tenth of D. A
 crossfade is a weighted sum, so the whole chain multiplies out into the
 routing matrix (`src/rig.rs`) and there is no second mixer: switcher A and
-the four selects survive as crosspoints of their own, the rest as products.
-Its controls are the crosspoints — fader 8 for the cameras, fader 1 for the
-seed, against the focused monitor.
+the four selects land on the matrix directly, the rest only as products.
 
 Before that output is written, it passes the monitor's own front panel: the
 chroma decode, the video amplifier and the phosphor, in that order. The decode
