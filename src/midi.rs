@@ -87,6 +87,12 @@ pub struct Fader {
     pub(crate) knob: Knob,
     #[serde(default)]
     pub(crate) page: Page,
+    /// How much the middle of the travel is flattened: 0 is a straight line
+    /// from one end of the knob to the other, 1 puts the fader's middle
+    /// where a move barely tells, so the hand has a wider arc there and the
+    /// ends of the travel do the rest of the work. Blair's sensitivity knob.
+    #[serde(default)]
+    pub(crate) curve: f32,
 }
 
 /// Two and not N: the button that turns the page has one lamp, and
@@ -138,6 +144,7 @@ const fn fader(cc: u8, knob: Knob) -> Fader {
         cc,
         knob,
         page: Page::One,
+        curve: 0.0,
     }
 }
 
@@ -146,6 +153,20 @@ const fn page_two(cc: u8, knob: Knob) -> Fader {
         cc,
         knob,
         page: Page::Two,
+        curve: 0.0,
+    }
+}
+
+/// Half way to flat: the level knobs get finer near the middle without the
+/// dead band a fully flat middle leaves under seven bits of fader.
+const FLATTENED: f32 = 0.5;
+
+const fn flattened(cc: u8, knob: Knob) -> Fader {
+    Fader {
+        cc,
+        knob,
+        page: Page::One,
+        curve: FLATTENED,
     }
 }
 
@@ -201,8 +222,8 @@ impl Map {
                 .chain([
                     fader(1, Knob::Hue),
                     fader(2, Knob::Saturation),
-                    fader(3, Knob::Brightness),
-                    fader(4, Knob::Contrast),
+                    flattened(3, Knob::Brightness),
+                    flattened(4, Knob::Contrast),
                     fader(5, Knob::Gamma),
                     fader(6, Knob::Headroom),
                     fader(7, Knob::Route),
@@ -249,7 +270,12 @@ impl Map {
                 Page::One => String::new(),
                 Page::Two => format!(" (page {})", f.page),
             };
-            out.push_str(&format!("  {control:<12} {}{page}\n", f.knob.name()));
+            let curve = if f.curve == 0.0 {
+                String::new()
+            } else {
+                format!(", curve {}", f.curve)
+            };
+            out.push_str(&format!("  {control:<12} {}{curve}{page}\n", f.knob.name()));
         }
         for b in &self.button {
             let control = silkscreen(&self.device, b.cc);
@@ -313,6 +339,12 @@ impl Map {
             .iter()
             .any(|b| action_for_name(&b.command) == Some(Action::Page));
         for f in &self.fader {
+            if !(0.0..=1.0).contains(&f.curve) {
+                return Err(format!(
+                    "cc {}: curve {} is outside 0 (straight) to 1 (flat middle)",
+                    f.cc, f.curve
+                ));
+            }
             if f.page == Page::Two && !turns {
                 return Err(format!(
                     "cc {}: {:?} is on page 2, and no button turns the page",
@@ -705,9 +737,34 @@ impl Stream {
 /// would take. The travel is the knob's own, read off [`Limit::ends`] — a
 /// phase's is one full turn, and this is not the place that decides how long
 /// a turn is.
-fn value_at(knob: Knob, position: f32, params: &Params) -> f32 {
+fn value_at(knob: Knob, curve: f32, position: f32, params: &Params) -> f32 {
     let (low, high) = knob.limit(params).ends();
-    low + position * (high - low)
+    low + shape(curve, position) * (high - low)
+}
+
+/// A fader's travel bent by its `curve`: the ends and the middle stay put,
+/// and between them the line gives way to a cubic that is level at the
+/// middle. Both are monotone, so any mix of them is.
+fn shape(curve: f32, position: f32) -> f32 {
+    let x = position - 0.5;
+    0.5 + (1.0 - curve) * x + 4.0 * curve * x * x * x
+}
+
+/// The inverse of [`shape`] by bisection, which is all a monotone function
+/// needs and beats a cubic formula that has to pick its root. The curve's
+/// middle is level, so the inverse is steep there, and the answer is good to
+/// a fraction of a fader step rather than to the last bit.
+fn unshape(curve: f32, shaped: f32) -> f32 {
+    let (mut low, mut high) = (0.0f32, 1.0f32);
+    for _ in 0..32 {
+        let mid = (low + high) / 2.0;
+        if shape(curve, mid) < shaped {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    (low + high) / 2.0
 }
 
 /// The inverse: where a fader would have to stand for the knob to read
@@ -715,9 +772,9 @@ fn value_at(knob: Knob, position: f32, params: &Params) -> f32 {
 /// `Params::nudge` or loaded through `config::validate` and both hold it
 /// inside the very same [`Limit`] — the two ends of a fader are the two ends
 /// of the knob, with nothing past either.
-fn position_of(knob: Knob, value: f32, params: &Params) -> f32 {
+fn position_of(knob: Knob, curve: f32, value: f32, params: &Params) -> f32 {
     let (low, high) = knob.limit(params).ends();
-    (value - low) / (high - low)
+    unshape(curve, (value - low) / (high - low))
 }
 
 /// One fader's grip on its knob.
@@ -742,14 +799,15 @@ const STEP: f32 = 1.0 / 127.0;
 
 impl Pickup {
     /// Whether this move of the fader reaches its knob, which is at `value`.
-    fn catches(&mut self, fader: f32, knob: Knob, params: &Params, focus: Focus) -> bool {
+    fn catches(&mut self, fader: f32, wired: Fader, params: &Params, focus: Focus) -> bool {
+        let knob = wired.knob;
         let value = params.knob(knob, focus);
         let was = self.was.replace(fader).unwrap_or(fader);
         let reaches = |target: f32| {
             let (from, to) = (was - target, fader - target);
             from.min(to) <= STEP && from.max(to) >= -STEP
         };
-        let at = position_of(knob, value, params);
+        let at = position_of(knob, wired.curve, value, params);
         self.caught |= match knob.limit(params) {
             // A phase's two fader ends are the same angle, so a knob sitting
             // on the seam is reachable from either — and `wrap_pi` puts it
@@ -1107,11 +1165,13 @@ impl Midi {
             .iter()
             .position(|f| f.cc == message.control && f.page == self.page)
         {
-            let knob = self.map.fader[i].knob;
+            let wired = self.map.fader[i];
             let fader = f32::from(message.value) / 127.0;
             return self.pickup[i]
-                .catches(fader, knob, params, focus)
-                .then(|| Action::Set(knob, value_at(knob, fader, params)));
+                .catches(fader, wired, params, focus)
+                .then(|| {
+                    Action::Set(wired.knob, value_at(wired.knob, wired.curve, fader, params))
+                });
         }
         let i = self
             .map
@@ -1805,8 +1865,8 @@ mod tests {
                 fader(0, Knob::Send),
                 fader(1, Knob::Hue),
                 fader(2, Knob::Saturation),
-                fader(3, Knob::Brightness),
-                fader(4, Knob::Contrast),
+                flattened(3, Knob::Brightness),
+                flattened(4, Knob::Contrast),
                 fader(5, Knob::Gamma),
                 fader(6, Knob::Headroom),
                 fader(7, Knob::Route),
@@ -2174,15 +2234,15 @@ mod tests {
     fn the_page_button_turns_the_faders_over_and_lets_go_of_every_grip() {
         let params = crate::config::widest();
         let mut map = Map::nano_kontrol2(&params);
-        map.fader.push(page_two(4, Knob::Noise));
+        map.fader.push(page_two(2, Knob::Noise));
         let mut midi = Midi::new(map, &params).unwrap();
         assert_eq!(midi.page(), Page::One);
-        // Sweep up from the bottom past contrast (a quarter of the way up)
-        // and the fader is contrast's.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        // Sweep up from the bottom past saturation (a quarter of the way up)
+        // and the fader is saturation's.
+        assert_eq!(feed(&mut midi, &params, &cc(2, 0)), []);
         assert!(matches!(
-            feed(&mut midi, &params, &cc(4, 40))[..],
-            [Action::Set(Knob::Contrast, _)]
+            feed(&mut midi, &params, &cc(2, 40))[..],
+            [Action::Set(Knob::Saturation, _)]
         ));
         // The page button is a press like any other, and the turn is the
         // caller's to make, because the page is drawn and lit from here.
@@ -2192,22 +2252,22 @@ mod tests {
         assert_eq!(midi.page(), Page::Two);
         // The same fader is now noise's, and it is standing at 40 while
         // noise sits at zero — so it has to come down to it first.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 60)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 60)), []);
         assert!(matches!(
-            feed(&mut midi, &params, &cc(4, 0))[..],
+            feed(&mut midi, &params, &cc(2, 0))[..],
             [Action::Set(Knob::Noise, v)] if v.abs() < 1e-6
         ));
         // A page-1 knob on a control page 2 binds nothing to is dead there:
         // gamma's fader moves nothing rather than moving gamma.
         assert_eq!(feed(&mut midi, &params, &cc(5, 127)), []);
-        // And back: contrast's grip was let go with the turn, so the fader
+        // And back: saturation's grip was let go with the turn, so the fader
         // standing at the bottom has to pass a quarter again.
         midi.turn_page();
         assert_eq!(midi.page(), Page::One);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 10)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 10)), []);
         assert!(matches!(
-            feed(&mut midi, &params, &cc(4, 40))[..],
-            [Action::Set(Knob::Contrast, _)]
+            feed(&mut midi, &params, &cc(2, 40))[..],
+            [Action::Set(Knob::Saturation, _)]
         ));
     }
 
@@ -2281,37 +2341,37 @@ mod tests {
             // The ends and the middle: two points fix any straight line, and
             // the third is what a square law would miss.
             assert!(
-                (value_at(knob, 0.0, &params) - low).abs() < 1e-6,
+                (value_at(knob, 0.0, 0.0, &params) - low).abs() < 1e-6,
                 "{}",
                 knob.name()
             );
             assert!(
-                (value_at(knob, 1.0, &params) - high).abs() < 1e-6,
+                (value_at(knob, 0.0, 1.0, &params) - high).abs() < 1e-6,
                 "{}",
                 knob.name()
             );
             let middle = (low + high) / 2.0;
             assert!(
-                (value_at(knob, 0.5, &params) - middle).abs() < 1e-6,
+                (value_at(knob, 0.0, 0.5, &params) - middle).abs() < 1e-6,
                 "{}: {} not {middle}",
                 knob.name(),
-                value_at(knob, 0.5, &params)
+                value_at(knob, 0.0, 0.5, &params)
             );
             for step in 0..=127 {
                 let position = step as f32 / 127.0;
-                let round = position_of(knob, value_at(knob, position, &params), &params);
+                let round = position_of(knob, 0.0, value_at(knob, 0.0, position, &params), &params);
                 assert!((round - position).abs() < 1e-5, "{}", knob.name());
             }
         }
         // Against numbers worked out by hand rather than by the inverse, so a
         // curve and its own inverse cannot agree their way past this.
-        assert!((position_of(Knob::Contrast, 1.0, &params) - 0.25).abs() < 1e-6);
-        assert!((value_at(Knob::Contrast, 0.75, &params) - 3.0).abs() < 1e-6);
+        assert!((position_of(Knob::Saturation, 0.0, 1.0, &params) - 0.25).abs() < 1e-6);
+        assert!((value_at(Knob::Saturation, 0.0, 0.75, &params) - 3.0).abs() < 1e-6);
         // A phase makes one full revolution, ending where it set out.
-        assert!(value_at(Knob::Hue, 0.5, &params).abs() < 1e-6);
+        assert!(value_at(Knob::Hue, 0.0, 0.5, &params).abs() < 1e-6);
         assert!(
-            (value_at(Knob::Hue, 1.0, &params)
-                - value_at(Knob::Hue, 0.0, &params)
+            (value_at(Knob::Hue, 0.0, 1.0, &params)
+                - value_at(Knob::Hue, 0.0, 0.0, &params)
                 - std::f32::consts::TAU)
                 .abs()
                 < 1e-5
@@ -2343,26 +2403,26 @@ mod tests {
     #[test]
     fn a_fader_does_not_move_its_knob_until_it_reaches_it() {
         let (mut midi, params) = surface();
-        // Contrast is fader 5 and sits at 1.0 in a range of 0 to 4, so a
+        // Saturation is fader 3 and sits at 1.0 in a range of 0 to 4, so a
         // quarter of the way up. Everything below that is the fader in the
         // wrong place, and must do nothing at all.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 10)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 20)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 10)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 20)), []);
         // Sweeping past where the knob is catches it, and from then on the
         // fader is the knob wherever it goes.
-        let caught = feed(&mut midi, &params, &cc(4, 40));
+        let caught = feed(&mut midi, &params, &cc(2, 40));
         assert!(
-            matches!(caught[..], [Action::Set(Knob::Contrast, _)]),
+            matches!(caught[..], [Action::Set(Knob::Saturation, _)]),
             "{caught:?}"
         );
         assert!(matches!(
-            feed(&mut midi, &params, &cc(4, 0))[..],
-            [Action::Set(Knob::Contrast, v)] if v.abs() < 1e-6
+            feed(&mut midi, &params, &cc(2, 0))[..],
+            [Action::Set(Knob::Saturation, v)] if v.abs() < 1e-6
         ));
         assert!(matches!(
-            feed(&mut midi, &params, &cc(4, 127))[..],
-            [Action::Set(Knob::Contrast, v)] if (v - 4.0).abs() < 1e-6
+            feed(&mut midi, &params, &cc(2, 127))[..],
+            [Action::Set(Knob::Saturation, v)] if (v - 4.0).abs() < 1e-6
         ));
     }
 
@@ -2371,16 +2431,16 @@ mod tests {
         // The whole-panel release would charge every other fader a pickup
         // sweep for one knob moving.
         let (mut midi, params) = surface();
-        // Catch contrast (fader 5) and gamma (fader 6), each by sweeping up
+        // Catch saturation (fader 3) and gamma (fader 6), each by sweeping up
         // from the bottom past where it stands.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 0)), []);
         assert_eq!(feed(&mut midi, &params, &cc(5, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 40)).len(), 1);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 40)).len(), 1);
         assert_eq!(feed(&mut midi, &params, &cc(5, 40)).len(), 1);
-        midi.release_knob(Knob::Contrast);
-        // Contrast waits for a sweep back to where its knob now is; gamma is
+        midi.release_knob(Knob::Saturation);
+        // Saturation waits for a sweep back to where its knob now is; gamma is
         // untouched and still follows its fader anywhere.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 120)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 120)), []);
         assert_eq!(feed(&mut midi, &params, &cc(5, 120)).len(), 1);
     }
 
@@ -2414,10 +2474,10 @@ mod tests {
         assert_eq!(feed(&mut midi, &params, &cc(20, 60)), []);
         assert_eq!(feed(&mut midi, &params, &cc(24, 60)), []);
         // A knob that shares no field with either keeps its grip.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 40)).len(), 1);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 40)).len(), 1);
         midi.release_knob(Knob::Gain);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 100)).len(), 1);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 100)).len(), 1);
     }
 
     #[test]
@@ -2427,13 +2487,109 @@ mod tests {
         // last position would let one jump across the knob re-take it, which
         // is the reset undone by a fader that never swept anywhere.
         let (mut midi, params) = surface();
-        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(4, 40)).len(), 1);
-        midi.release_knob(Knob::Contrast);
-        // Contrast stands a quarter up, at 31 of 127. One message from 40
+        assert_eq!(feed(&mut midi, &params, &cc(2, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 40)).len(), 1);
+        midi.release_knob(Knob::Saturation);
+        // Saturation stands a quarter up, at 31 of 127. One message from 40
         // down to 20 spans it — and must still do nothing, because after a
         // release there is no "was" for it to have spanned from.
-        assert_eq!(feed(&mut midi, &params, &cc(4, 20)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 20)), []);
+    }
+
+    #[test]
+    fn the_curve_keeps_the_ends_and_the_middle_and_flattens_between() {
+        for curve in [0.0, FLATTENED, 1.0] {
+            assert!(shape(curve, 0.0).abs() < 1e-6, "{curve}");
+            assert!((shape(curve, 1.0) - 1.0).abs() < 1e-6, "{curve}");
+            assert!((shape(curve, 0.5) - 0.5).abs() < 1e-6, "{curve}");
+            // Monotone, or a fader could go up while its knob came down;
+            // and back through the inverse to within a fraction of a step.
+            for step in 1..=127 {
+                let position = step as f32 / 127.0;
+                let here = shape(curve, position);
+                assert!(
+                    here >= shape(curve, (step - 1) as f32 / 127.0),
+                    "{curve} at {step}"
+                );
+                assert!(
+                    (unshape(curve, here) - position).abs() < STEP / 8.0,
+                    "{curve} at {step}"
+                );
+            }
+        }
+        // By hand, not by the inverse: three quarters up.
+        assert!((shape(0.0, 0.75) - 0.75).abs() < 1e-6);
+        assert!((shape(FLATTENED, 0.75) - 0.65625).abs() < 1e-6);
+        assert!((shape(1.0, 0.75) - 0.5625).abs() < 1e-6);
+        // Level at the middle: one fader step from the centre moves the knob
+        // a straight step, or not at all.
+        assert!((shape(0.0, 0.5 + STEP) - 0.5 - STEP).abs() < 1e-6);
+        assert!((shape(1.0, 0.5 + STEP) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_curved_fader_is_caught_where_the_curve_puts_its_knob() {
+        // Contrast at 1.0 is a quarter of the way up on a straight line, at
+        // 31.75 of 127; through the factory curve the fader stands on it at
+        // 20.2. A sweep from the bottom to 25 spans the curved place and not
+        // the straight one.
+        let (mut midi, params) = surface();
+        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 15)), []);
+        let caught = feed(&mut midi, &params, &cc(4, 25));
+        // And what it sets is the curved value, not the straight 0.787.
+        assert!(
+            matches!(caught[..], [Action::Set(Knob::Contrast, v)] if (v - 1.171).abs() < 0.01),
+            "{caught:?}"
+        );
+        assert!(matches!(
+            feed(&mut midi, &params, &cc(4, 127))[..],
+            [Action::Set(Knob::Contrast, v)] if (v - 4.0).abs() < 1e-6
+        ));
+        assert!(matches!(
+            feed(&mut midi, &params, &cc(4, 0))[..],
+            [Action::Set(Knob::Contrast, v)] if v.abs() < 1e-6
+        ));
+    }
+
+    #[test]
+    fn a_curve_outside_straight_to_flat_is_refused_and_the_card_says_the_curve() {
+        let widest = crate::config::widest();
+        let bend = |curve: f32| Map {
+            device: "x".into(),
+            fader: vec![Fader {
+                curve,
+                ..fader(4, Knob::Contrast)
+            }],
+            button: Vec::new(),
+        };
+        for curve in [-0.1, 1.5, f32::NAN] {
+            let why = bend(curve).validate(&widest).unwrap_err();
+            assert!(why.contains("curve"), "{curve}: {why}");
+        }
+        bend(1.0).validate(&widest).unwrap();
+        let map: Map = toml::from_str(
+            "device = \"nanoKONTROL\"\n[[fader]]\ncc = 4\nknob = \"contrast\"\ncurve = 0.25\n",
+        )
+        .unwrap();
+        assert_eq!(
+            map.fader,
+            [Fader {
+                curve: 0.25,
+                ..fader(4, Knob::Contrast)
+            }]
+        );
+        assert!(
+            map.card().contains("  fader 5      contrast, curve 0.25\n"),
+            "{}",
+            map.card()
+        );
+        let card = Map::nano_kontrol2(&widest).card();
+        assert!(
+            card.contains("  fader 4      brightness, curve 0.5\n"),
+            "{card}"
+        );
+        assert!(card.contains("  fader 3      saturation\n"), "{card}");
     }
 
     #[test]
@@ -2468,19 +2624,19 @@ mod tests {
 
     #[test]
     fn a_fader_standing_on_its_knob_catches_it_at_once() {
-        // The other way a fader is caught. Contrast at 3.0 is three quarters
+        // The other way a fader is caught. Saturation at 3.0 is three quarters
         // of the way up a range that is not 0..1, so a pickup comparing the
         // raw value against the fader's own 0..1 would not call this standing
         // on it.
         let (mut midi, mut params) = surface();
-        params.monitors[0].colour.contrast = 3.0;
+        params.monitors[0].colour.saturation = 3.0;
         assert!(matches!(
-            feed(&mut midi, &params, &cc(4, 95))[..],
-            [Action::Set(Knob::Contrast, _)]
+            feed(&mut midi, &params, &cc(2, 95))[..],
+            [Action::Set(Knob::Saturation, _)]
         ));
         // A fader elsewhere on the same knob still has to sweep to it.
         let (mut midi, _) = surface();
-        assert_eq!(feed(&mut midi, &params, &cc(4, 10)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(2, 10)), []);
     }
 
     #[test]
@@ -2567,8 +2723,8 @@ mod tests {
         // the reason `App::refocus` exists: the fader is holding *this*
         // node's knob, and the next node's is somewhere else.
         let mut params = crate::config::crossed();
-        params.monitors[0].colour.contrast = 1.0;
-        params.monitors[1].colour.contrast = 4.0;
+        params.monitors[0].colour.saturation = 1.0;
+        params.monitors[1].colour.saturation = 4.0;
         let first = Focus::default();
         let second = Focus {
             camera: 0,
@@ -2580,12 +2736,12 @@ mod tests {
             &crate::config::widest(),
         )
         .unwrap();
-        assert_eq!(feed_at(&mut midi, &params, first, &cc(4, 0)).len(), 0);
-        assert_eq!(feed_at(&mut midi, &params, first, &cc(4, 64)).len(), 1);
+        assert_eq!(feed_at(&mut midi, &params, first, &cc(2, 0)).len(), 0);
+        assert_eq!(feed_at(&mut midi, &params, first, &cc(2, 64)).len(), 1);
         midi.release();
-        // Monitor 2's contrast is at the top; the fader is at half. Without
+        // Monitor 2's saturation is at the top; the fader is at half. Without
         // letting go it would drag that knob down to half on the next touch.
-        assert_eq!(feed_at(&mut midi, &params, second, &cc(4, 70)), []);
+        assert_eq!(feed_at(&mut midi, &params, second, &cc(2, 70)), []);
     }
 
     #[test]

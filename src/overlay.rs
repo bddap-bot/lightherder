@@ -747,6 +747,7 @@ mod tests {
             cc: 1,
             knob: crate::params::Knob::Noise,
             page: Page::Two,
+            curve: 0.0,
         });
         // Page 1 is untouched by a binding on page 2, texel for texel.
         assert_eq!(

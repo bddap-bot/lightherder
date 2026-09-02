@@ -248,7 +248,7 @@ reversal, the flips and the page on every rig.
 | control | is |
 |---|---|
 | fader 1 | the **send**, on a rig that has an input; nothing on one that has not |
-| faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
+| faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows. Brightness and contrast come through a half-flattened `curve`: finer near the middle of the travel, coarser at the ends |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
 | fader 7, page 2 | the focused **monitor**'s period: every this many passes its two strongest sources trade levels, as the reversal does; at the bottom the mode is off; nothing on a graph with one source |
 | fader 8, page 2 | the focused **camera**'s delay, in whole frames up to the graph's reach; nothing on a graph with none |
@@ -409,6 +409,11 @@ cc = 0
 knob = "noise"
 page = 2            # the same control, once the page button has turned the knobs over
 
+[[fader]]
+cc = 4
+knob = "contrast"
+curve = 0.5         # 0 is a straight line; 1 is level at the middle of the travel
+
 [[button]]
 cc = 71
 command = "page"
@@ -426,7 +431,13 @@ A fader names a **knob** and spans its whole travel — for the two knobs that
 wrap, rotation and hue, that is one full revolution from bottom to top. A
 fader is on `page` 1 unless it says 2; the buttons are on both pages, so a
 control may carry one knob a page and a button on no page; a map with a knob
-on page 2 and no `page` button is refused. A
+on page 2 and no `page` button is refused. A fader's `curve`, 0 unless it
+says otherwise, bends its travel the way the original's sensitivity knob does:
+the ends and the middle stay where they are, and at 1 the middle is level, so
+the hand has a wide arc of fine change there and the ends do the coarse work;
+outside 0 to 1 is refused. The factory map bends brightness and contrast half
+way. The pickup reads the fader through its curve, so a curved fader still
+catches its knob where the knob stands. A
 button names a **command**, spelled the way the overlay captions it: `blank`,
 `reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `reverse`, `page`, `flip x`, `flip y`, `rate -`,
 `rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
