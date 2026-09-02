@@ -806,9 +806,8 @@ impl Knob {
     /// are separate floats and a fader on one still agrees with its knob
     /// after the other moves.
     ///
-    /// The one place this crate says which knobs overlap. [`Params::reset`]
-    /// and [`crate::midi::Midi::release_knob`] both ask it, so the two cannot
-    /// disagree about what a reset touched.
+    /// The one place this crate says which knobs overlap, which is what
+    /// [`Params::reset`] asks.
     pub const fn shares_a_field_with(self, other: Knob) -> bool {
         use Knob::{Gain, GainB, GainG, GainR};
         self as u8 == other as u8

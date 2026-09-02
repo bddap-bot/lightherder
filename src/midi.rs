@@ -783,8 +783,9 @@ pub struct Midi {
     /// control number rather than by binding: a page turn puts another knob
     /// under the same fader, and the fader has not moved.
     standing: [Option<f32>; 128],
-    /// One per entry of `map.fader`: the part of a step a whole-frame knob has
-    /// not been paid yet, always less than one frame.
+    /// One per entry of `map.fader`: how much of a frame a whole-frame knob's
+    /// fader has moved since it last paid one, within half a frame either
+    /// way. It is the fader's motion, so it follows the fader, not the knob.
     owed: Vec<f32>,
     precision: Precision,
     page: Page,
@@ -875,6 +876,7 @@ impl Midi {
             Page::One => Page::Two,
             Page::Two => Page::One,
         };
+        self.owed.fill(0.0);
     }
 
     pub fn precision(&self) -> Precision {
@@ -1043,8 +1045,10 @@ impl Midi {
     /// about to press them, so it appends the releases after that backlog.
     fn drop_port(&mut self) {
         self.port = None;
-        // The next surface plugged in is standing wherever it was left.
+        // The next surface plugged in is standing wherever it was left, and
+        // owes nothing.
         self.standing = [None; 128];
+        self.owed.fill(0.0);
         // A fresh cable is a fresh chance for whatever went wrong last time
         // to have been the old one.
         self.complaint = None;
@@ -1096,6 +1100,11 @@ impl Midi {
 
     /// What one control change does to the panel as it stands, if anything.
     pub fn action_for(&mut self, message: ControlChange, params: &Params) -> Option<Action> {
+        // Where the control is, whatever it is bound to: a fader moved while
+        // its page is hidden has still moved, and the knob it turns on the
+        // other page must not be charged for that when the page comes back.
+        let position = f32::from(message.value) / 127.0;
+        let from = self.standing[usize::from(message.control)].replace(position);
         if let Some(i) = self
             .map
             .fader
@@ -1103,15 +1112,14 @@ impl Midi {
             .position(|f| f.cc == message.control && f.page == self.page)
         {
             let fader = self.map.fader[i];
-            let position = f32::from(message.value) / 127.0;
-            let from = self.standing[usize::from(message.control)].replace(position)?;
+            let from = from?;
             if self.clutched() {
                 return None;
             }
             let (low, high) = fader.knob.limit(params).ends();
             self.owed[i] += (position - from) * self.precision.gain() * (high - low);
             let paid = if fader.knob.is_whole() {
-                self.owed[i].trunc()
+                self.owed[i].round()
             } else {
                 self.owed[i]
             };
@@ -2363,8 +2371,8 @@ mod tests {
     #[test]
     fn a_whole_frame_knob_is_turned_a_frame_at_a_time() {
         // The delay counts frames, and at a quarter a full throw over a
-        // reach of four is one frame: the fader owes it a whole one before
-        // it turns, and never more than one at once.
+        // reach of four is one frame: the knob ticks over at the half, like
+        // a detent, and the fader is never more than half a frame in credit.
         let mut params = crate::config::widest();
         params.delay = 4;
         let mut midi = Midi::new(Map::nano_kontrol2(&params), &params).unwrap();
@@ -2396,10 +2404,17 @@ mod tests {
             feed(&mut midi, &params, &cc(2, 60))[..],
             [Action::Turn(Knob::Sharpness, by)] if (by - 20.0 / 127.0 * 0.5).abs() < 1e-6
         ));
-        // A page-1 knob on a control page 2 binds nothing to is dead there.
+        // A page-1 knob on a control page 2 binds nothing to is dead there —
+        // but the fader has still moved, and gamma is not charged for the
+        // whole of that when its page comes back: only for the step since.
+        assert_eq!(feed(&mut midi, &params, &cc(5, 0)), []);
         assert_eq!(feed(&mut midi, &params, &cc(5, 127)), []);
         midi.turn_page();
         assert!((turned(&mut midi, &params, 61).unwrap() - 1.0 / 127.0).abs() < 1e-6);
+        assert!(matches!(
+            feed(&mut midi, &params, &cc(5, 126))[..],
+            [Action::Turn(Knob::Gamma, by)] if (by + 3.75 / 4.0 / 127.0).abs() < 1e-6
+        ));
         // Unplugged, nothing can vouch for where the next surface's faders
         // stand, so its first word is where and not how far.
         midi.drop_port();

@@ -319,9 +319,9 @@ The rails clamp — a step past one is dropped, not owed — and a fader that ha
 run out of travel is brought back under the **clutch**: while S8 is held, every
 fader and rotary moves nothing, and letting go resumes from the new position.
 Rotation, hue and the key hue wrap instead of clamping. The two whole-number
-knobs, the delay and the period, are turned a frame at a time: the fader owes
-a whole one before the knob moves, and at a quarter a full throw over a reach
-of four is one frame.
+knobs, the delay and the period, are turned a frame at a time, ticking over
+at the half like a detent; at a quarter a full throw over a reach of four is
+one frame.
 
 The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.
