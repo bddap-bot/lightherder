@@ -1386,32 +1386,61 @@ mod tests {
             app.act(Action::Reverse);
             assert_eq!(app.params, before);
         }
-        app.params.routing = vec![vec![0.5, 0.5], vec![0.5, 0.5]];
-        let before = app.params.clone();
+        // And a reversal that moves nothing lets go of nothing: route,
+        // fader 8, caught at the middle keeps driving the crosspoint after
+        // a press on the one source, and after one on a tie.
+        surface(&mut app, 7, 0);
+        surface(&mut app, 7, 127);
+        surface(&mut app, 7, 64);
+        let held = app.params.routing[1][0];
+        assert!((held - 64.0 / 127.0).abs() < 1e-3, "the fader never caught");
         app.act(Action::Reverse);
-        assert_eq!(app.params, before);
+        surface(&mut app, 7, 65);
+        let followed = app.params.routing[1][0];
+        assert!(
+            (followed - 65.0 / 127.0).abs() < 1e-3,
+            "a press on one source let go of the fader: {followed}"
+        );
+        app.params.routing[1][1] = followed;
+        app.act(Action::Reverse);
+        surface(&mut app, 7, 66);
+        assert!(
+            (app.params.routing[1][0] - 66.0 / 127.0).abs() < 1e-3,
+            "a press on a tie let go of the fader"
+        );
     }
 
     #[test]
-    fn a_reversal_takes_the_crosspoint_out_of_the_hands_of_the_fader_holding_it() {
-        // As the cut does: route, fader 8, caught at the middle, then the
-        // reversal moves the crosspoint without it — so the next touch of
-        // that fader must not throw it back.
-        let mut params = config::shaped(2, 1, 0);
-        params.routing = vec![vec![0.5, 0.25]];
+    fn a_reversal_takes_the_crosspoints_out_of_the_hands_of_the_faders_holding_them() {
+        // As the cut does: the send, fader 1, and the route, fader 8, each
+        // caught at a level, then the reversal trades the two without their
+        // faders — so the next touch of either must not throw it back.
+        let mut params = config::shaped(2, 1, 1);
+        params.routing = vec![vec![0.0, 0.25]];
+        params.routing_inputs = vec![vec![0.0]];
         let Some(mut app) = playing(params) else {
             return;
         };
         surface(&mut app, 7, 0);
         surface(&mut app, 7, 64);
-        let held = app.params.routing[0][0];
-        assert!((held - 64.0 / 127.0).abs() < 1e-3, "the fader never caught");
+        surface(&mut app, 0, 0);
+        surface(&mut app, 0, 100);
+        let route = app.params.routing[0][0];
+        let send = app.params.routing_inputs[0][0];
+        assert!((route - 64.0 / 127.0).abs() < 1e-3, "route never caught");
+        assert!((send - 100.0 / 127.0).abs() < 1e-3, "send never caught");
         app.act(Action::Reverse);
-        assert_eq!(app.params.routing, vec![vec![0.25, held]]);
+        assert_eq!(app.params.routing, vec![vec![send, 0.25]]);
+        assert_eq!(app.params.routing_inputs, vec![vec![route]]);
         surface(&mut app, 7, 65);
+        surface(&mut app, 0, 101);
         assert_eq!(
-            app.params.routing[0][0], 0.25,
-            "the fader kept its grip through the reversal"
+            app.params.routing[0][0], send,
+            "the route fader kept its grip through the reversal"
+        );
+        assert_eq!(
+            app.params.routing_inputs[0][0], route,
+            "the send fader kept its grip through the reversal"
         );
     }
 
