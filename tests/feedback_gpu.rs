@@ -1856,10 +1856,10 @@ fn an_input_shows_on_the_monitor_the_switcher_sends_it_to() {
 }
 
 #[test]
-fn an_input_layer_is_current_in_whichever_bank_is_read() {
-    // The monitor bank swaps every step and an input layer is never rendered
-    // into, so a frame written to one bank only would show up on every other
-    // frame and be black on the rest. Six steps is three of each.
+fn an_input_layer_is_current_however_the_ring_turns() {
+    // An input layer is written once and never rendered into, so a frame
+    // that reached only the view of one pass would show up on some frames
+    // and be black on the rest. Six steps is three turns of a two-slab ring.
     let p = one_input_on_one_monitor();
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
@@ -1876,7 +1876,7 @@ fn an_input_layer_is_current_in_whichever_bank_is_read() {
 #[test]
 fn each_input_lands_on_its_own_layer() {
     // Two monitors and two inputs, so the arithmetic that puts input i on
-    // layer monitors + i has four distinct answers to get wrong instead of
+    // its layer past the ring has four distinct answers to get wrong instead of
     // the one a single monitor and a single input collapse it to.
     let p = Params {
         cameras: vec![plain_camera(vec![0.0; 2])],
@@ -2372,12 +2372,16 @@ fn an_input_lands_past_the_whole_ring() {
     };
     h.feedback
         .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [200; 3]));
-    h.step_graph(&p);
-    let shown = h.read().rgb_at(0.5, 0.5);
-    assert!(
-        shown.iter().all(|c| (c - 200.0).abs() <= 1.0),
-        "the monitor shows {shown:?}, not the input's flat 200"
-    );
+    // A whole turn of the ring, so the pass that draws the last slab — the
+    // one whose upper view is the input layers alone — is among them.
+    for pass in 0..p.history() {
+        h.step_graph(&p);
+        let shown = h.read().rgb_at(0.5, 0.5);
+        assert!(
+            shown.iter().all(|c| (c - 200.0).abs() <= 1.0),
+            "pass {pass}: the monitor shows {shown:?}, not the input's flat 200"
+        );
+    }
 }
 
 #[test]
@@ -2407,8 +2411,18 @@ fn blanking_the_monitors_empties_the_whole_ring() {
     };
     let (u0, v0) = tile(2, 1, 0.0, 0.0);
     let (u1, v1) = tile(2, 1, 1.0, 1.0);
+    // First the cable delivers, or the dark below proves nothing.
+    h.step_graph(&p);
+    p.monitors[0].seed = Seed::Dark;
+    for _ in 0..delay {
+        h.step_graph(&p);
+    }
+    h.step_graph(&p);
+    let lit = h.read().brightest_in(u0, v0, u1, v1);
+    assert!(lit > 200.0, "the flash never arrived: {lit}");
     // Two flashes, two passes apart, so that both the slab the blank sees as
     // newest and one further back hold light.
+    p.monitors[0].seed = Seed::WhiteBlob(1.0);
     h.step_graph(&p);
     p.monitors[0].seed = Seed::Dark;
     h.step_graph(&p);

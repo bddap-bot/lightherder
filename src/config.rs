@@ -1005,7 +1005,7 @@ mod tests {
         let path = scratch("every-field");
         std::fs::write(
             &path,
-            "cameras = [{ look = [0.5], gain = [0.9, 0.85, 0.8],\n\
+            "cameras = [{ look = [0.5], gain = [0.9, 0.85, 0.8], delay = 4,\n\
              \x20 framing = { zoom = 0.994, rotation = 0.05, translate = [0.01, -0.02] },\n\
              \x20 character = { bloom = 0.1, bloom_radius = 0.04, chroma_bleed = 0.02, noise = 0.01 },\n\
              \x20 key = { threshold = 0.2, softness = 0.06, hue = 1.2, tolerance = 0.3 } }]\n\
@@ -1020,6 +1020,7 @@ mod tests {
 
         let camera = &params.cameras[0];
         assert_eq!(camera.look, [0.5]);
+        assert_eq!(camera.delay, 4);
         assert_eq!(camera.gain, [0.9, 0.85, 0.8]);
         assert_eq!(camera.framing.zoom, 0.994);
         assert_eq!(camera.framing.rotation, 0.05);

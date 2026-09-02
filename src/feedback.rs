@@ -121,7 +121,6 @@ impl Shape {
         self.history * self.monitors + self.inputs
     }
 
-    /// Monitor `m` of ring slab `slab`.
     fn monitor(self, slab: usize, m: usize) -> usize {
         debug_assert!(slab < self.history && m < self.monitors);
         slab * self.monitors + m
@@ -659,8 +658,8 @@ impl Feedback {
         // fills the monitor, which is the identity framing carried through
         // the same transform every camera's is.
         let square_on = sample_transform(&Framing::identity(), aspect).rows();
-        // Where this pass draws: the slab after the newest, holding the one
-        // frame in the ring older than any delay reaches.
+        // The slab after the newest holds the one frame in the ring older
+        // than any delay reaches, so it is the one a pass may draw on.
         let next = (self.newest + 1) % self.shape.history;
         let (split, above) = (
             self.shape.monitor(next, 0),
@@ -893,10 +892,7 @@ mod tests {
             why.contains("20 bank layers") && why.contains("7680x4320"),
             "{why}"
         );
-        // The ring counts: the same graph at 4K, which fits undelayed, is
-        // refused once one camera asks for the full delay — thirty-two slabs
-        // of eight monitors and four inputs.
-        // Ten frames deep, eighty-four layers: past the cap by bytes, and the
+        // The ring counts: ten frames deep, eighty-four layers: past the cap by bytes, and the
         // refusal says how deep the ring is, which is what the file can
         // change.
         most.cameras[0].delay = 8;

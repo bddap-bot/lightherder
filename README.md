@@ -551,12 +551,12 @@ stepped and presented into a target the size of the display.
 
 | graph | 1920x1080 | 3840x2160 |
 | --- | --- | --- |
-| `single` | 0.13 ms | 0.39 ms |
-| `external` | 0.16 | 0.50 |
-| `analog` | 0.21 | 0.71 |
-| `webcam` (2 monitors) | 0.21 | 0.66 |
-| `crossed` (2 monitors) | 0.25 | 0.75 |
-| `insanity` (4 monitors, all-to-all) | 0.67 | 2.35 |
+| `single` | 0.16 ms | 0.48 ms |
+| `external` | 0.19 | 0.55 |
+| `analog` | 0.28 | 0.86 |
+| `webcam` (2 monitors) | 0.26 | 0.76 |
+| `crossed` (2 monitors) | 0.31 | 0.89 |
+| `insanity` (4 monitors, all-to-all) | 0.82 | 2.96 |
 
 A beat at sixty is 16.7 ms, so the heaviest graph that ships uses a seventh of
 one at 4K. Measured on an RTX 2080. What the numbers leave out is a frame's
@@ -568,7 +568,9 @@ nothing — so its row is the passes and not the wire.
 
 The bank itself is what grows: at eight bytes a texel, a ring holding every
 monitor twice plus once more per frame of the longest camera delay, and every
-input once — half a gigabyte for `insanity` at 4K, and refused past two.
+input once — half a gigabyte for `insanity` at 4K, refused past two, and
+refused past 256 layers whatever the resolution, which is what eight monitors
+at the full delay ask for.
 
 ## Playing it
 
@@ -631,7 +633,8 @@ onto the curve it claims while leaving everything under its knee alone, and
 two paths in one graph take their character separately. A camera with a
 frame delay hands on the frame it saw that many passes ago — monitor 1 lights
 on pass delay + 1 and no other, and the frame is byte for byte the undelayed
-one. External inputs get
+one; an input lands past the whole ring; and blanking the monitors empties
+the ring under a flash still in flight. External inputs get
 the same: what was written to an input's layer is what the monitor it is
 patched to shows, it is current in the bank the cameras read, blanking
 the monitors leaves it alone, the switcher sums it with a camera on one
