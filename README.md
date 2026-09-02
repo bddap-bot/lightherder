@@ -318,7 +318,11 @@ of the period all leave every fader turning on from wherever the knob now is.
 The rails clamp — a step past one is dropped, not owed — and a fader that has
 run out of travel is brought back under the **clutch**: while S8 is held, every
 fader and rotary moves nothing, and letting go resumes from the new position.
-Rotation, hue and the key hue wrap instead of clamping. The two whole-number
+Rotation, hue and the key hue wrap instead of clamping. Zoom, gamma and
+headroom are ratios, and a step multiplies instead of adding: a throw doubles
+the zoom from wherever it stands, one code moves it half a percent, and unity
+zoom and gamma sit in the middle of their travel, so the thousandths either
+side of 1.0 get the same hand as the doublings above it. The two whole-number
 knobs, the delay and the period, are turned a frame at a time, ticking over
 at the half like a detent; at a quarter a full throw over a reach of four is
 one frame, and at a sixteenth the delay wants two throws, clutched between,

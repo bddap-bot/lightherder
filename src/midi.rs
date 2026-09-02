@@ -1098,8 +1098,7 @@ impl Midi {
                 return None;
             }
             let limit = fader.knob.limit(params);
-            let (low, high) = limit.ends();
-            let by = steps / 127.0 * self.precision.gain() * (high - low);
+            let by = steps / 127.0 * self.precision.gain() * limit.travel();
             let paid = match limit {
                 Limit::Whole(_) => {
                     let owed = &mut self.owed[fader.knob as usize];
@@ -1108,7 +1107,7 @@ impl Midi {
                     *owed -= paid;
                     paid
                 }
-                Limit::Clamp(..) | Limit::Wrap => by,
+                Limit::Clamp(..) | Limit::Ratio(..) | Limit::Wrap => by,
             };
             return (paid != 0.0).then_some(Action::Turn(fader.knob, paid));
         }
@@ -2331,12 +2330,13 @@ mod tests {
             [Action::Clutch(Edge::Up)]
         );
         // Let go, the fader turns on from where the clutch left it, by how
-        // far it moved since — not by the whole way it was carried.
+        // far it moved since — not by the whole way it was carried. The zoom
+        // is a ratio, so the travel a code is a 127th of is the rails' log.
         let by = turned(&mut midi, &params, 10).unwrap();
         assert!((by - 10.0 / 127.0).abs() < 1e-6, "{by}");
         assert!(matches!(
             feed(&mut midi, &params, &cc(16, 91))[..],
-            [Action::Turn(Knob::Zoom, by)] if (by - 3.75 / 4.0 / 127.0).abs() < 1e-6
+            [Action::Turn(Knob::Zoom, by)] if (by - 16f32.ln() / 4.0 / 127.0).abs() < 1e-6
         ));
         // And the clutch is lit while a hand is on it.
         let lit = |midi: &Midi| midi.wanted(at(0, 0), Shown::default()) & lamp(CLUTCH) != 0;
@@ -2392,7 +2392,7 @@ mod tests {
         assert!((turned(&mut midi, &params, 61).unwrap() - 1.0 / 127.0).abs() < 1e-6);
         assert!(matches!(
             feed(&mut midi, &params, &cc(5, 126))[..],
-            [Action::Turn(Knob::Gamma, by)] if (by + 3.75 / 4.0 / 127.0).abs() < 1e-6
+            [Action::Turn(Knob::Gamma, by)] if (by + 16f32.ln() / 4.0 / 127.0).abs() < 1e-6
         ));
         // Unplugged, nothing can vouch for where the next surface's faders
         // stand, so its first word is where and not how far.

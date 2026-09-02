@@ -693,9 +693,31 @@ impl Limit {
     /// on.
     pub const fn ends(self) -> (f32, f32) {
         match self {
-            Limit::Clamp(low, high) => (low, high),
+            Limit::Clamp(low, high) | Limit::Ratio(low, high) => (low, high),
             Limit::Whole(high) => (0.0, high as f32),
             Limit::Wrap => (-std::f32::consts::PI, std::f32::consts::PI),
+        }
+    }
+
+    /// What a surface divides among its codes.
+    pub fn travel(self) -> f32 {
+        let (low, high) = self.ends();
+        self.stepped(high) - self.stepped(low)
+    }
+
+    /// Nepers on a ratio, so that one step is one factor wherever the knob
+    /// stands.
+    fn stepped(self, value: f32) -> f32 {
+        match self {
+            Limit::Ratio(..) => value.ln(),
+            Limit::Clamp(..) | Limit::Whole(_) | Limit::Wrap => value,
+        }
+    }
+
+    fn valued(self, stepped: f32) -> f32 {
+        match self {
+            Limit::Ratio(..) => stepped.exp(),
+            Limit::Clamp(..) | Limit::Whole(_) | Limit::Wrap => stepped,
         }
     }
 }
@@ -720,6 +742,8 @@ pub enum Side {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Limit {
     Clamp(f32, f32),
+    /// A step multiplies rather than adds.
+    Ratio(f32, f32),
     /// A count of frames or passes, from none up to this many: a knob that
     /// moves a whole one at a time, which a surface turning it by deltas
     /// has to bank up to.
@@ -911,7 +935,7 @@ impl Knob {
             // Whole frames, as far as the ring the graph bought goes.
             Knob::Delay => Limit::Whole(params.delay),
             // Zero would divide by zero in the sampling transform.
-            Knob::Zoom => Limit::Clamp(0.25, 4.0),
+            Knob::Zoom => Limit::Ratio(0.25, 4.0),
             // Spinning one way for long enough must not run the number away.
             Knob::Rotation => Limit::Wrap,
             Knob::TranslateX | Knob::TranslateY => Limit::Clamp(-1.0, 1.0),
@@ -945,7 +969,7 @@ impl Knob {
             // never leaves a loop that feeds itself. The floor sits well
             // above either, because a phosphor curve worth playing lives
             // nowhere near the rails.
-            Knob::Gamma => Limit::Clamp(0.25, 4.0),
+            Knob::Gamma => Limit::Ratio(0.25, 4.0),
             // Candlelight to open shade, in mired from D65; both ends well
             // inside the 1667 K to 25 000 K the locus fit is good for.
             Knob::Temperature => Limit::Clamp(-100.0, 340.0),
@@ -956,7 +980,7 @@ impl Knob {
             // Zero would divide by it. The bottom of the range squeezes the
             // whole picture into the darkest eighth, which is a sound worth
             // having; the top is well clear of anything a monitor displays.
-            Knob::Headroom => Limit::Clamp(0.125, 8.0),
+            Knob::Headroom => Limit::Ratio(0.125, 8.0),
             Knob::Period => Limit::Whole(Monitor::MAX_PERIOD),
             // A crosspoint is a fraction of what it is switching. Above 1.0
             // it would be an amplifier, which is what the loop gain already
@@ -1089,10 +1113,15 @@ impl Params {
         }
     }
 
-    /// Through a delta rather than by writing the field, so the rails, the
-    /// wrap and the rigid three-channel step live in one place.
+    /// Through [`Params::place`] rather than by writing the field, so the
+    /// rails and the wrap live in one place; the rigid gain is the one knob
+    /// that is not a field, and goes as a step so its three channels slide.
     fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
-        self.nudge(knob, value - self.knob(knob, focus), focus)
+        if knob == Knob::Gain {
+            self.nudge(knob, value - self.knob(knob, focus), focus);
+        } else {
+            self.place(knob, value, focus);
+        }
     }
 
     /// Put `knob` back where its stage does nothing to the light.
@@ -1157,7 +1186,7 @@ impl Params {
         }
     }
 
-    /// Turn `knob` by `delta` of its own units. Past a rail the rest of the
+    /// Turn `knob` by `delta` of its own step. Past a rail the rest of the
     /// step is dropped.
     pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
         // The rigid gain knob is the one that is not a single value: clamp its
@@ -1171,20 +1200,24 @@ impl Params {
             }
             return;
         }
+        let limit = knob.limit(self);
+        let to = limit.valued(limit.stepped(self.knob(knob, focus)) + delta);
+        self.place(knob, to, focus);
+    }
+
+    fn place(&mut self, knob: Knob, value: f32, focus: Focus) {
         match knob.limit(self) {
             Limit::Whole(most) => {
                 let count = self
                     .whole_mut(knob, focus)
                     .expect("a knob with a whole limit reads a count");
-                *count = (*count as f32 + delta).round().clamp(0.0, most as f32) as u32;
+                *count = value.round().clamp(0.0, most as f32) as u32;
             }
-            Limit::Clamp(low, high) => {
-                let field = self.knob_mut(knob, focus);
-                *field = (*field + delta).clamp(low, high);
+            Limit::Clamp(low, high) | Limit::Ratio(low, high) => {
+                *self.knob_mut(knob, focus) = value.clamp(low, high);
             }
             Limit::Wrap => {
-                let field = self.knob_mut(knob, focus);
-                *field = wrap_pi(*field + delta);
+                *self.knob_mut(knob, focus) = wrap_pi(value);
             }
         }
     }
@@ -1363,6 +1396,41 @@ mod tests {
             });
             assert!(moved.iter().any(|m| *m), "{knob:?} did nothing");
         }
+    }
+
+    #[test]
+    fn a_ratio_knob_steps_by_the_same_factor_wherever_it_stands() {
+        // Named, so a knob demoted to a plain clamp cannot slip out of the
+        // walk unnoticed.
+        let mut ratios = Vec::new();
+        for knob in Knob::ALL {
+            let Limit::Ratio(low, high) = knob.limit(&p()) else {
+                continue;
+            };
+            ratios.push(knob);
+            // A rail at or below zero has no log, and would turn the first
+            // step into a NaN the loop never sheds.
+            assert!(low > 0.0, "{knob:?}");
+            let focus = Focus::default();
+            let middle = (low * high).sqrt();
+            let half = knob.limit(&p()).travel() / 2.0;
+            let mut params = p();
+            params.set(knob, low, focus);
+            params.nudge(knob, half, focus);
+            assert!((params.knob(knob, focus) - middle).abs() < 1e-5, "{knob:?}");
+            params.set(knob, high, focus);
+            params.nudge(knob, -half, focus);
+            assert!((params.knob(knob, focus) - middle).abs() < 1e-5, "{knob:?}");
+            params.nudge(knob, 0.3, focus);
+            params.nudge(knob, -0.3, focus);
+            assert!((params.knob(knob, focus) - middle).abs() < 1e-5, "{knob:?}");
+            params.nudge(knob, 2.0 * half + 1.0, focus);
+            assert_eq!(params.knob(knob, focus), high, "{knob:?}");
+            // Exactly, which a step through the log would not manage.
+            params.set(knob, knob.identity(), focus);
+            assert_eq!(params.knob(knob, focus), knob.identity(), "{knob:?}");
+        }
+        assert_eq!(ratios, [Knob::Zoom, Knob::Gamma, Knob::Headroom]);
     }
 
     #[test]
@@ -1582,10 +1650,11 @@ mod tests {
             let before = params.describe(Focus::default());
             // Away from whichever rail the default is on, so a knob with no
             // room upward is still moved.
-            let delta = match knob.limit(&params) {
-                Limit::Clamp(_, high) if params.knob(knob, Focus::default()) >= high => -0.05,
-                Limit::Whole(most) if params.knob(knob, Focus::default()) >= most as f32 => -0.05,
-                _ => 0.05,
+            let (_, high) = knob.limit(&params).ends();
+            let delta = if params.knob(knob, Focus::default()) >= high {
+                -0.05
+            } else {
+                0.05
             };
             nudge(&mut params, knob, step_for(knob, delta));
             assert_ne!(
@@ -2134,10 +2203,11 @@ mod tests {
             // down. Inside the tightest knob's travel, so every knob can
             // take it.
             const STEP: f32 = 0.002;
-            let step = match knob.limit(&params) {
-                Limit::Clamp(_, high) if params.knob(knob, focus) >= high => -STEP,
-                Limit::Whole(most) if params.knob(knob, focus) >= most as f32 => -STEP,
-                _ => STEP,
+            let (_, high) = knob.limit(&params).ends();
+            let step = if params.knob(knob, focus) >= high {
+                -STEP
+            } else {
+                STEP
             };
             let step = step_for(knob, step);
             params.nudge(knob, step, focus);
@@ -2148,7 +2218,10 @@ mod tests {
                 let gain_family =
                     |k: Knob| matches!(k, Knob::Gain | Knob::GainR | Knob::GainG | Knob::GainB);
                 let expected = if other == knob {
-                    was + step
+                    match knob.limit(&params) {
+                        Limit::Ratio(..) => was * step.exp(),
+                        Limit::Clamp(..) | Limit::Whole(_) | Limit::Wrap => was + step,
+                    }
                 } else if gain_family(knob) && gain_family(other) {
                     continue;
                 } else {
@@ -2166,8 +2239,7 @@ mod tests {
 
     #[test]
     fn a_fader_puts_a_knob_exactly_where_it_says() {
-        // What `set` is for, and the reason it goes through `nudge`: the
-        // value lands, and it lands inside the rails.
+        // What `set` is for: the value lands, and it lands inside the rails.
         let mut params = p();
         let focus = Focus::default();
         params.set(Knob::Contrast, 2.5, focus);
