@@ -250,6 +250,7 @@ reversal, the flips and the page on every rig.
 | fader 1 | the **send**, on a rig that has an input; nothing on one that has not |
 | faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
+| fader 7, page 2 | the focused **monitor**'s period: every this many passes its two strongest sources trade levels, as the reversal does; at the bottom the mode is off |
 | fader 8, page 2 | the focused **camera**'s delay, in whole frames up to the graph's reach; nothing on a graph with none |
 | rotaries 1–8, page 2 | the focused **camera** still: red, green and blue gain, bloom radius, key threshold, key softness, key hue, key tolerance |
 | S 1–8 | focus camera 1–8, as many as the graph has a choice of |
@@ -291,8 +292,8 @@ the same way, rather than lighting a button that lies or spending a fader on
 silence. Nothing is bound to quit — the window manager ends the instrument,
 and a slipped finger on the surface must not be able to. Every knob the graph has is on
 the factory map, on one page or the other; page 2 keeps the rotaries the camera's,
-puts its delay on fader 8, and leaves the other faders free for a `midi.toml`
-to claim.
+puts the monitor's period on fader 7 and the camera's delay on fader 8, and
+leaves the other faders free for a `midi.toml` to claim.
 
 **A fader does not take its knob over until it has passed through where the
 knob already is.** A fader sends where it is standing, so without that,
@@ -497,6 +498,12 @@ graph is its frame delay units' reach, 0 to 30 frames, and defaults to none;
 the reach on top of the one pass every camera is behind by. The reach is
 bought at load — a frame of it is another copy of every monitor in the bank —
 and is as far as the delay fader goes; a camera's `delay` past it is refused.
+`period` on a monitor is the original's period mode on that switcher column:
+every that many passes the monitor's two strongest sources trade levels,
+counted on one grid from the start of the run so every monitor in the mode
+beats in step; 0 to 60 passes, and 0 — the default — is the mode off. There is
+no latch beside the knob: the board is full, and a period at its floor is the
+off switch.
 `framing` may also set `flip_x` and
 `flip_y`, the original's router-output mirrors, applied to the framed
 picture as a whole. `seed` is

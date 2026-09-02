@@ -75,6 +75,9 @@ pub struct App {
     /// button. It names its own monitor, so a select pressed mid-hold cannot
     /// send the release to another one.
     cut: Option<Crosspoints>,
+    /// Passes since the run began: the grid the switcher's period mode
+    /// beats on — see [`Params::beat`].
+    pass: u64,
     /// Passes and presents since the last rate line, and when that was. Two
     /// counts because they are two clocks — see [`App::meter`], where the
     /// difference between them is the whole of what the line says.
@@ -199,6 +202,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             overlay_shown: false,
             solo: false,
             cut: None,
+            pass: 0,
             passes: 0,
             presents: 0,
             metered: Instant::now(),
@@ -396,6 +400,18 @@ impl App {
         self.midi.release();
         self.last_knob = None;
         log::info!("reset: {}", self.params.describe(self.focus));
+    }
+
+    /// One beat of the tempo, before the pass it falls on: the period mode's
+    /// reversals, which move the two crosspoint knobs without their faders
+    /// the way a press on the button does. Not said on the log: at a period
+    /// of one it would be a line a pass.
+    fn beat(&mut self) {
+        self.pass += 1;
+        if self.params.beat(self.pass) {
+            self.midi.release_knob(Knob::Route);
+            self.midi.release_knob(Knob::Send);
+        }
     }
 
     fn shown(&self) -> Shown {
@@ -807,17 +823,23 @@ impl ApplicationHandler for App {
                 // the window's.
                 let solo = self.soloed();
                 let overlay = self.overlay_page();
-                let Some(live) = self.live.as_mut() else {
+                if self.live.is_none() {
                     return;
-                };
+                }
                 // Whatever the tempo owes, and then the frame either way: a
                 // pass is the piece's clock and the blank is the display's,
                 // so a beat that has not fallen due yet is no reason to leave
                 // an expose, a resize or the overlay unanswered.
                 let passes = self.tempo.take_due(Instant::now());
                 for _ in 0..passes {
-                    live.pass(&self.gpu, &self.params, &mut self.sources);
+                    self.beat();
+                    if let Some(live) = self.live.as_mut() {
+                        live.pass(&self.gpu, &self.params, &mut self.sources);
+                    }
                 }
+                let Some(live) = self.live.as_mut() else {
+                    return;
+                };
                 // Nothing is drawn to a window nothing can see. The
                 // compositor either hands out frames that wait on no blank at
                 // all, which the chain below would spin on, or stops handing
@@ -891,6 +913,7 @@ mod tests {
             overlay_shown: false,
             solo: false,
             cut: None,
+            pass: 0,
             passes: 0,
             presents: 0,
             metered: Instant::now(),
@@ -1371,6 +1394,59 @@ mod tests {
         // Pressed again, it is the reverse of the reverse.
         app.act(Action::Reverse);
         assert_eq!(app.params, before);
+    }
+
+    #[test]
+    fn the_period_beats_the_focused_monitor_and_a_reset_stops_it() {
+        let mut params = config::shaped(2, 2, 0);
+        params.routing = vec![vec![1.0, 0.0], vec![0.6, 0.1]];
+        let Some(mut app) = playing(params) else {
+            return;
+        };
+        let started = app.params.clone();
+        app.act(Action::Focus(Node::Monitor, 1));
+        // Page 2's fader 7, the period, dialled to two passes; then back on
+        // page 1, route — fader 8 — caught, to show the beat lets go of it.
+        app.act(Action::Page);
+        surface(&mut app, 6, 0);
+        surface(&mut app, 6, 5);
+        assert_eq!(app.params.monitors[1].period, 2);
+        app.act(Action::Page);
+        surface(&mut app, 7, 0);
+        surface(&mut app, 7, 127);
+        surface(&mut app, 7, 76);
+        let row = app.params.routing[1].clone();
+        assert!(
+            (row[0] - 76.0 / 127.0).abs() < 1e-3,
+            "the route fader never caught"
+        );
+        let swapped = vec![row[1], row[0]];
+        app.beat();
+        assert_eq!(
+            app.params.routing[1], row,
+            "the first pass is not a beat of two"
+        );
+        app.beat();
+        assert_eq!(app.params.routing[1], swapped);
+        assert_eq!(
+            app.params.routing[0],
+            [1.0, 0.0],
+            "the other monitor is its own"
+        );
+        app.beat();
+        app.beat();
+        assert_eq!(app.params.routing[1], row);
+        // The beat moved the crosspoint under the fader, so the fader has
+        // to catch it again: a jump well past the catch step drives nothing.
+        surface(&mut app, 7, 90);
+        assert_eq!(app.params.routing[1], row, "the route fader kept its grip");
+
+        app.act(Action::Reset);
+        assert_eq!(app.params, started);
+        for _ in 0..8 {
+            app.beat();
+        }
+        assert_eq!(app.params, started, "a reset panel went on beating");
     }
 
     #[test]

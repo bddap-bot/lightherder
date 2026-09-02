@@ -60,6 +60,7 @@ fn graph(s: &Single) -> Params {
             colour: s.colour,
             seed: s.seed,
             headroom: s.headroom,
+            period: 0,
         }],
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
@@ -1123,6 +1124,7 @@ fn silent_monitor() -> Monitor {
         colour: Colour::NEUTRAL,
         seed: Seed::Dark,
         headroom: Monitor::KNEE_AT_WHITE,
+        period: 0,
     }
 }
 

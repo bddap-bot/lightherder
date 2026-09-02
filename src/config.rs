@@ -1022,7 +1022,7 @@ mod tests {
              \x20 framing = { zoom = 0.994, rotation = 0.05, translate = [0.01, -0.02], flip_x = true, flip_y = true },\n\
              \x20 character = { bloom = 0.1, bloom_radius = 0.04, chroma_bleed = 0.02, noise = 0.01 },\n\
              \x20 key = { threshold = 0.2, softness = 0.06, hue = 1.2, tolerance = 0.3 } }]\n\
-             monitors = [{ seed = { white_blob = 0.2 }, headroom = 1.5,\n\
+             monitors = [{ seed = { white_blob = 0.2 }, headroom = 1.5, period = 12,\n\
              \x20 colour = { hue = 0.1, saturation = 1.1, brightness = 0.02, contrast = 1.05, gamma = 1.2 } }]\n\
              routing = [[0.7]]\n\
              routing_inputs = [[0.3]]\n\
@@ -1053,6 +1053,7 @@ mod tests {
         let monitor = &params.monitors[0];
         assert_eq!(monitor.seed, Seed::WhiteBlob(0.2));
         assert_eq!(monitor.headroom, 1.5);
+        assert_eq!(monitor.period, 12);
         assert_eq!(monitor.colour.hue, 0.1);
         assert_eq!(monitor.colour.saturation, 1.1);
         assert_eq!(monitor.colour.brightness, 0.02);
