@@ -42,10 +42,8 @@ pub enum Action {
     Overlay,
     Screencap,
     Record(Edge),
-    /// The switcher's momentary cut, the rig's foot pedal: while held, the
-    /// focused monitor shows its focused source whole and nothing else, and
-    /// letting go puts its crosspoints back as they were. Held rather than
-    /// latched because the trap is the flick back.
+    /// The switcher's foot pedal. Held rather than latched because the trap
+    /// is the flick back.
     Cut(Edge),
 }
 

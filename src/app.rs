@@ -71,10 +71,10 @@ pub struct App {
     /// tiled bank. Which monitor is not kept here — that is the focus, and
     /// two indices for one question is one of them going stale.
     solo: bool,
-    /// The crosspoints the held cut took, and from which monitor. Pinned to
-    /// that monitor rather than to the focus, so a select pressed mid-hold
-    /// cannot make the release write one monitor's column onto another.
-    cut: Option<(usize, Crosspoints)>,
+    /// The column the held cut took, for as long as the hand is on the
+    /// button. It names its own monitor, so a select pressed mid-hold cannot
+    /// send the release to another one.
+    cut: Option<Crosspoints>,
     /// Passes and presents since the last rate line, and when that was. Two
     /// counts because they are two clocks — see [`App::meter`], where the
     /// difference between them is the whole of what the line says.
@@ -547,18 +547,21 @@ impl App {
             Action::Screencap => self.screencap(),
             Action::Record(Edge::Down) => self.record(),
             Action::Record(Edge::Up) => self.stop_recording(),
+            // Both edges move the two crosspoint knobs without their faders,
+            // and only those two, so only their grips are let go.
             Action::Cut(Edge::Down) => {
                 if self.cut.is_none() {
-                    let prior = self.params.cut(self.focus);
-                    self.cut = Some((self.focus.monitor, prior));
-                    self.midi.release();
+                    self.cut = Some(self.params.cut(self.focus));
+                    self.midi.release_knob(Knob::Route);
+                    self.midi.release_knob(Knob::Send);
                     log::info!("cut: {}", self.params.describe(self.focus));
                 }
             }
             Action::Cut(Edge::Up) => {
-                if let Some((monitor, prior)) = self.cut.take() {
-                    self.params.set_crosspoints(monitor, &prior);
-                    self.midi.release();
+                if let Some(prior) = self.cut.take() {
+                    self.params.restore(&prior);
+                    self.midi.release_knob(Knob::Route);
+                    self.midi.release_knob(Knob::Send);
                     log::info!("{}", self.params.describe(self.focus));
                 }
             }
@@ -1248,18 +1251,20 @@ mod tests {
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
+        app.act(Action::Focus(Node::Monitor, 1));
+        app.act(Action::Focus(Node::Camera, 1));
         let before = app.params.clone();
-        assert_eq!(before.routing[0], vec![0.0, 1.0]);
+        assert_eq!(before.routing[1], vec![1.0, 0.0]);
         app.act(Action::Cut(Edge::Down));
-        assert_eq!(app.params.routing[0], vec![1.0, 0.0]);
-        assert_eq!(app.params.routing[1], before.routing[1]);
+        assert_eq!(app.params.routing[1], vec![0.0, 1.0]);
+        assert_eq!(app.params.routing[0], before.routing[0]);
         // A second down with the first still held takes nothing: the column
         // it would save is the cut's own, and a release must not put that
         // back.
         app.act(Action::Cut(Edge::Down));
         // The focus moving under a held cut moves nothing: the release owes
         // the column to the monitor it was taken from.
-        app.act(Action::Focus(Node::Monitor, 1));
+        app.act(Action::Focus(Node::Monitor, 0));
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, before);
         // Letting go of nothing is nothing.
@@ -1268,14 +1273,24 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_on_a_rig_with_an_input_shows_that_input_alone() {
-        let Some(mut app) = playing(config::external()) else {
+    fn a_cut_on_a_rig_with_inputs_shows_the_focused_input_alone() {
+        // Two inputs, the second focused, and a camera on the monitor: the
+        // cut takes the camera off and shows that input and not the first.
+        let mut params = config::rig(1, 2, 2);
+        params.routing = vec![vec![1.0], vec![1.0]];
+        params.routing_inputs = vec![vec![0.25, 0.5], vec![0.0, 0.75]];
+        let Some(mut app) = playing(params) else {
             return;
         };
+        app.act(Action::Focus(Node::Monitor, 1));
+        app.act(Action::Focus(Node::Input, 1));
         let before = app.params.clone();
         app.act(Action::Cut(Edge::Down));
-        assert_eq!(app.params.routing, vec![vec![0.0]]);
-        assert_eq!(app.params.routing_inputs, vec![vec![1.0]]);
+        assert_eq!(app.params.routing, vec![vec![1.0], vec![0.0]]);
+        assert_eq!(
+            app.params.routing_inputs,
+            vec![vec![0.25, 0.0], vec![0.0, 1.0]]
+        );
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, before);
     }
@@ -1288,7 +1303,8 @@ mod tests {
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
-        turn(&mut app, Knob::Route, -0.5);
+        turn(&mut app, Knob::Route, 0.5);
+        assert_ne!(app.params, app.initial);
         app.act(Action::Cut(Edge::Down));
         app.act(Action::Reset);
         assert_eq!(app.params, app.initial);
@@ -1311,6 +1327,11 @@ mod tests {
             (held - 64.0 / 127.0).abs() < 1e-3,
             "the fader never caught: {held}"
         );
+        // Contrast, fader 5, caught the same way and held at the top: a
+        // knob the cut never moves, whose fader owes no sweep for it.
+        surface(&mut app, 4, 0);
+        surface(&mut app, 4, 127);
+        assert_eq!(app.params.knob(Knob::Contrast, app.focus), 4.0);
         app.act(Action::Cut(Edge::Down));
         assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
         surface(&mut app, 7, 65);
@@ -1318,6 +1339,11 @@ mod tests {
             app.params.knob(Knob::Route, app.focus),
             1.0,
             "the fader kept its grip through the cut"
+        );
+        surface(&mut app, 4, 126);
+        assert!(
+            app.params.knob(Knob::Contrast, app.focus) < 4.0,
+            "the cut took the contrast fader's grip for a knob it never moved"
         );
         // And on the way back: the release moves the crosspoint again.
         app.act(Action::Cut(Edge::Up));

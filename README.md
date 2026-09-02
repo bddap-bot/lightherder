@@ -248,7 +248,7 @@ camera, one monitor, no inputs — all three are dead.
 | \|◀ track prev, ▶\| track next | the tempo: slower / faster, four presses to halve or double it |
 | ● marker set | write what the display is showing to a file |
 | ● record | record the display for as long as it is held down |
-| marker prev | **cut**: while held, the focused monitor shows the focused input alone — or, on a rig with no inputs, the focused camera — and letting go puts its crosspoints back; lit while held |
+| marker prev | **cut**: while held, the focused monitor shows the focused input alone — or, on a rig with no inputs, the focused camera — and letting go puts its crosspoints back |
 
 So the left hand works one monitor, the right hand one camera, and the two
 crosspoints bracket the front panel: outside light enters at fader 1 and loop

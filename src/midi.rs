@@ -481,8 +481,6 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
         // records it for as long as a hand stays on it.
         button(60, "snap"),
         button(45, "record"),
-        // The switcher's foot pedal, on the marker that was left: held, not
-        // latched, like record beside it.
         button(61, "cut"),
     ]);
     out
@@ -801,9 +799,18 @@ impl Midi {
             }
         }
         // The messages already in hand are still this device's, and are
-        // returned; what the unplug takes is the state, not the backlog.
+        // returned; what the unplug takes is the state, not the backlog. Then
+        // every button is let go of, after that backlog, so a held mode ends
+        // the way a release would have ended it rather than outliving the
+        // surface that held it. Every button and not the held ones, because
+        // the backlog may still hold a press; a release of a button nobody
+        // is on is nothing.
         if gone {
             self.drop_port();
+            messages.extend(self.map.button.iter().map(|b| ControlChange {
+                control: b.cc,
+                value: 0,
+            }));
         }
         messages
     }
@@ -896,12 +903,9 @@ impl Midi {
         }
     }
 
-    /// Let go of the surface. Note what is *not* here: the buttons are not
-    /// released, because `poll` hands back the messages that were already in
-    /// hand and the caller is about to press them — a release here would be
-    /// undone by the same batch, leaving a button held by nothing, its lamp
-    /// lit and its next press swallowed. [`Midi::connect`] does it instead,
-    /// where nothing can arrive between the release and the first message.
+    /// Let go of the surface. The buttons are not let go of here: `poll`
+    /// hands back the messages that were already in hand and the caller is
+    /// about to press them, so it appends the releases after that backlog.
     fn drop_port(&mut self) {
         self.port = None;
         self.release();
@@ -932,10 +936,6 @@ impl Midi {
                 Ok(port) => {
                     log::info!("surface: {} on {}", self.map.device, port.path.display());
                     self.complaint = None;
-                    // Whatever was under a finger when the last cable came
-                    // out is not under one now — see [`Midi::drop_port`] for
-                    // why the release waits until here.
-                    self.held.iter_mut().for_each(|held| *held = false);
                     self.port = Some(port);
                     return;
                 }
@@ -2159,6 +2159,42 @@ mod tests {
         // unknown place — so the grip does not survive.
         midi.drop_port();
         assert_eq!(feed(&mut midi, &params, &cc(2, 64)), []);
+    }
+
+    #[test]
+    fn unplugging_the_surface_lets_go_of_every_button_a_finger_was_on() {
+        // A held mode must end with the surface holding it, and end the way
+        // a release would have — after whatever the surface had already
+        // sent — rather than leaving the instrument cut or recording with
+        // nothing to let go of it, and the next press swallowed.
+        let (mut midi, params) = surface();
+        let surface = midi.plug_in_a_test_surface();
+        surface.press(45);
+        surface.press(61);
+        let play = |midi: &mut Midi| -> Vec<Action> {
+            midi.poll()
+                .into_iter()
+                .filter_map(|m| midi.action_for(m, &params, Focus::default()))
+                .collect()
+        };
+        assert_eq!(
+            play(&mut midi),
+            [
+                Action::Record(crate::command::Edge::Down),
+                Action::Cut(crate::command::Edge::Down)
+            ]
+        );
+        surface.press(60);
+        drop(surface);
+        assert_eq!(
+            play(&mut midi),
+            [
+                Action::Screencap,
+                Action::Record(crate::command::Edge::Up),
+                Action::Cut(crate::command::Edge::Up)
+            ]
+        );
+        assert!(midi.held.iter().all(|held| !held));
     }
 
     #[test]
