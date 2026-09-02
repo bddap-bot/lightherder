@@ -190,7 +190,9 @@ impl Map {
     ///
     /// Page 2 keeps the rotaries the camera's: the three per-channel gain
     /// offsets and the bloom radius, trims of knobs on page 1, and then the
-    /// keyer's four. Its fader 8 is the focused camera's delay — where page
+    /// keyer's four. Its fader 2 is the focused monitor's colour
+    /// temperature, under the hue fader as the original's toggle puts it
+    /// under the hue knobs. Its fader 8 is the focused camera's delay — where page
     /// 1's fader 8 is how much of that camera the monitor shows, page 2's is
     /// how late — on a graph whose delay units have any reach, and dead
     /// otherwise, like the send. Page 2's fader 7 is the focused monitor's period,
@@ -237,6 +239,7 @@ impl Map {
                     page_two(21, Knob::KeySoftness),
                     page_two(22, Knob::KeyHue),
                     page_two(23, Knob::KeyTolerance),
+                    page_two(1, Knob::Temperature),
                 ])
                 .chain(
                     Knob::Period
@@ -1884,6 +1887,7 @@ mod tests {
                 page_two(21, Knob::KeySoftness),
                 page_two(22, Knob::KeyHue),
                 page_two(23, Knob::KeyTolerance),
+                page_two(1, Knob::Temperature),
                 page_two(6, Knob::Period),
             ]
         );

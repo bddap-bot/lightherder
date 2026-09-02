@@ -33,6 +33,14 @@ pub struct Colour {
     /// Phosphor transfer exponent. Above 1 the dark end is crushed and the
     /// trails thin out; below 1 they lift and smear.
     pub gamma: f32,
+    /// Where the monitor's white sits on the Planckian locus, as a distance
+    /// from D65 in mired (reciprocal megakelvin — the unit the locus is
+    /// close to even in, where kelvin bunches every warm white into a
+    /// corner of the fader). Positive warms: +340 is candlelight, about
+    /// 2000 K. Negative cools: -100 is open shade, about 18 000 K. A grey
+    /// takes on that white's tint and keeps its luma, which is what tells
+    /// this knob from the three gains.
+    pub temperature: f32,
 }
 
 impl Default for Colour {
@@ -60,6 +68,63 @@ const ENCODE: [[f64; 3]; 3] = [
     [1.0, -1.1067043153243328, 1.704421283696311],
 ];
 
+/// D65 in mired: the white a grey has with the temperature knob at rest.
+const D65_MIRED: f64 = 1e6 / 6504.0;
+
+/// The white's temperature in kelvin, `mired` from D65.
+pub fn kelvin(mired: f64) -> f64 {
+    1e6 / (D65_MIRED + mired)
+}
+
+/// The chroma a grey of unit luma takes on with the white moved `mired`
+/// along the Planckian locus from D65, as the two subcarrier axes.
+///
+/// Kim et al.'s cubic fit of a black body's CIE 1931 chromaticity, to XYZ
+/// at unit Y, to sRGB as a display shows it — the loop's texels are what
+/// the glass shows, not linear light, and a candle flame's linear red is
+/// forty times its blue where the displayed one is fourteen — then decoded.
+/// The locus does not pass through D65 itself — a daylight white sits a
+/// little above it — so this is the shift from the locus's own point at
+/// D65's temperature: at zero it is exactly zero, which keeps the neutral
+/// matrix exactly the identity.
+fn white_shift(mired: f64) -> [f64; 2] {
+    fn chroma(kelvin: f64) -> [f64; 2] {
+        let t = kelvin;
+        let x = if t < 4000.0 {
+            -0.2661239e9 / (t * t * t) - 0.2343589e6 / (t * t) + 0.8776956e3 / t + 0.179910
+        } else {
+            -3.0258469e9 / (t * t * t) + 2.1070379e6 / (t * t) + 0.2226347e3 / t + 0.240390
+        };
+        let y = if t < 2222.0 {
+            -1.1063814 * x * x * x - 1.34811020 * x * x + 2.18555832 * x - 0.20219683
+        } else if t < 4000.0 {
+            -0.9549476 * x * x * x - 1.37418593 * x * x + 2.09137015 * x - 0.16748867
+        } else {
+            3.0817580 * x * x * x - 5.87338670 * x * x + 3.75112997 * x - 0.37001483
+        };
+        let (big_x, big_z) = (x / y, (1.0 - x - y) / y);
+        let rgb = [
+            3.2406 * big_x - 1.5372 - 0.4986 * big_z,
+            -0.9689 * big_x + 1.8758 + 0.0415 * big_z,
+            0.0557 * big_x - 0.2040 + 1.0570 * big_z,
+        ]
+        .map(|linear: f64| {
+            let linear = linear.max(0.0);
+            if linear <= 0.0031308 {
+                12.92 * linear
+            } else {
+                1.055 * linear.powf(1.0 / 2.4) - 0.055
+            }
+        });
+        let weigh = |row: [f64; 3]| row.iter().zip(rgb).map(|(w, c)| w * c).sum::<f64>();
+        let luma = weigh(DECODE[0]);
+        [weigh(DECODE[1]) / luma, weigh(DECODE[2]) / luma]
+    }
+    let [i, q] = chroma(kelvin(mired));
+    let [i0, q0] = chroma(kelvin(0.0));
+    [i - i0, q - q0]
+}
+
 /// NTSC luma, in the precision the shader wants it. Row 0 of [`DECODE`] and
 /// nowhere else: the chroma bleed needs it too, and a second copy in WGSL
 /// would be a constant nothing could keep in step with this one.
@@ -75,10 +140,12 @@ impl Colour {
         brightness: 0.0,
         contrast: 1.0,
         gamma: 1.0,
+        temperature: 0.0,
     };
 
     /// The 3x3 the shader multiplies RGB by: decode, turn the chroma by hue
-    /// and scale it by saturation, encode back. Indexed `m[row][col]`.
+    /// and scale it by saturation, add the white point's chroma in
+    /// proportion to the luma, encode back. Indexed `m[row][col]`.
     ///
     /// Composed here, in f64, once a frame — not left as three steps in the
     /// shader. Chained in f32 per fragment the three matrices leave a
@@ -90,13 +157,17 @@ impl Colour {
         let (sin, cos) = (self.hue as f64).sin_cos();
         let saturation = self.saturation as f64;
         let (turn, lift) = (saturation * cos, saturation * sin);
+        let [warm_i, warm_q] = white_shift(self.temperature as f64);
         std::array::from_fn(|row| {
             // Turning and scaling the subcarrier is one complex multiply, so
             // it folds into the pair of chroma weights this row encodes with.
             let (i, q) = (ENCODE[row][1], ENCODE[row][2]);
+            // The white point is the phosphor's, past the decode, so the hue
+            // does not turn it: it rides the luma into each channel unturned.
+            let white = 1.0 + i * warm_i + q * warm_q;
             let (i, q) = (i * turn + q * lift, q * turn - i * lift);
             std::array::from_fn(|col| {
-                (DECODE[0][col] + i * DECODE[1][col] + q * DECODE[2][col]) as f32
+                (DECODE[0][col] * white + i * DECODE[1][col] + q * DECODE[2][col]) as f32
             })
         })
     }
@@ -582,6 +653,7 @@ pub enum Knob {
     Brightness,
     Contrast,
     Gamma,
+    Temperature,
     Headroom,
     Period,
     /// The switcher crosspoint the focus's camera and monitor name between
@@ -634,7 +706,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 26] = [
+    pub const ALL: [Knob; 27] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -657,6 +729,7 @@ impl Knob {
         Knob::Brightness,
         Knob::Contrast,
         Knob::Gamma,
+        Knob::Temperature,
         Knob::Headroom,
         Knob::Period,
         Knob::Route,
@@ -690,6 +763,7 @@ impl Knob {
             Knob::Brightness => "brightness",
             Knob::Contrast => "contrast",
             Knob::Gamma => "gamma",
+            Knob::Temperature => "temperature",
             Knob::Headroom => "headroom",
             Knob::Period => "period",
             Knob::Route => "route",
@@ -759,6 +833,7 @@ impl Knob {
             | Knob::Brightness
             | Knob::Contrast
             | Knob::Gamma
+            | Knob::Temperature
             | Knob::Headroom
             | Knob::Period => Side::Monitor,
             Knob::Route => Side::Edge,
@@ -845,6 +920,9 @@ impl Knob {
             // above either, because a phosphor curve worth playing lives
             // nowhere near the rails.
             Knob::Gamma => Limit::Clamp(0.25, 4.0),
+            // Candlelight to open shade, in mired from D65; both ends well
+            // inside the 1667 K to 25 000 K the locus fit is good for.
+            Knob::Temperature => Limit::Clamp(-100.0, 340.0),
             // Zero would divide by it. The bottom of the range squeezes the
             // whole picture into the darkest eighth, which is a sound worth
             // having; the top is well clear of anything a monitor displays.
@@ -1036,6 +1114,7 @@ impl Params {
             Knob::Brightness => mon.colour.brightness,
             Knob::Contrast => mon.colour.contrast,
             Knob::Gamma => mon.colour.gamma,
+            Knob::Temperature => mon.colour.temperature,
             Knob::Headroom => mon.headroom,
             Knob::Period => mon.period as f32,
             Knob::Route => self.routing[focus.monitor][focus.camera],
@@ -1104,6 +1183,7 @@ impl Params {
             Knob::Brightness => &mut self.monitors[focus.monitor].colour.brightness,
             Knob::Contrast => &mut self.monitors[focus.monitor].colour.contrast,
             Knob::Gamma => &mut self.monitors[focus.monitor].colour.gamma,
+            Knob::Temperature => &mut self.monitors[focus.monitor].colour.temperature,
             Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
             Knob::Route => &mut self.routing[focus.monitor][focus.camera],
             Knob::Send => &mut self.routing_inputs[focus.input][focus.monitor],
@@ -1126,7 +1206,7 @@ impl Params {
              bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  delay {}/{}  \
              key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             gamma {:.3}  headroom {:.3}  period {}  seed {}\n\
+             gamma {:.3}  white {:.0}K  headroom {:.3}  period {}  seed {}\n\
              route {:.3}: how much of cam {} mon {} shows{}",
             focus.camera + 1,
             self.cameras.len(),
@@ -1154,6 +1234,7 @@ impl Params {
             mon.colour.brightness,
             mon.colour.contrast,
             mon.colour.gamma,
+            kelvin(mon.colour.temperature as f64),
             mon.headroom,
             mon.period,
             mon.seed,
@@ -1279,6 +1360,7 @@ mod tests {
         assert_eq!(mon.colour.brightness, 0.5);
         assert_eq!(mon.colour.contrast, 4.0);
         assert_eq!(mon.colour.gamma, 4.0);
+        assert_eq!(mon.colour.temperature, 340.0);
 
         for _ in 0..10_000 {
             for knob in Knob::ALL {
@@ -1302,6 +1384,7 @@ mod tests {
         assert_eq!(mon.colour.brightness, -0.5);
         assert_eq!(mon.colour.contrast, 0.0);
         assert_eq!(mon.colour.gamma, 0.25);
+        assert_eq!(mon.colour.temperature, -100.0);
     }
 
     #[test]
@@ -1514,7 +1597,7 @@ mod tests {
     /// the constant [`identity_graph`] is built from. Read off the same
     /// constant the code reads and a knob wired to the wrong field would
     /// agree with itself: this table is the independent word.
-    const IDENTITIES: [(Knob, f32); 26] = [
+    const IDENTITIES: [(Knob, f32); 27] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
         (Knob::TranslateX, 0.0),
@@ -1542,6 +1625,7 @@ mod tests {
         (Knob::Brightness, 0.0),
         (Knob::Contrast, 1.0),
         (Knob::Gamma, 1.0),
+        (Knob::Temperature, 0.0),
         // The rail at twice display white: an amplifier always has one, and
         // this is the one that touches nothing a monitor can show.
         (Knob::Headroom, 2.0),
@@ -1848,6 +1932,56 @@ mod tests {
                     "{colour:?}: luma weight {col} became {out}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_white_point_tints_grey_at_constant_luma_and_only_off_its_rest() {
+        let grey = |m: [[f32; 3]; 3]| -> [f32; 3] { m.map(|row| row.iter().sum()) };
+        let warm = grey(
+            Colour {
+                temperature: 340.0,
+                ..Colour::NEUTRAL
+            }
+            .chroma_matrix(),
+        );
+        let cool = grey(
+            Colour {
+                temperature: -100.0,
+                ..Colour::NEUTRAL
+            }
+            .chroma_matrix(),
+        );
+        assert!(
+            warm[0] > warm[1] && warm[1] > warm[2],
+            "warm white {warm:?}"
+        );
+        assert!(
+            cool[2] > cool[1] && cool[1] > cool[0],
+            "cool white {cool:?}"
+        );
+        for white in [warm, cool] {
+            let luma: f32 = white.iter().zip(DECODE[0]).map(|(c, w)| c * w as f32).sum();
+            assert!((luma - 1.0).abs() < 1e-5, "grey's luma moved: {white:?}");
+        }
+        // Rest is exactly rest, not the locus's own point near D65: the
+        // subtraction that makes it so is what this pins.
+        assert_eq!(white_shift(0.0), [0.0; 2]);
+        // And hue leaves the white where it is: a turned chroma is not a
+        // turned phosphor.
+        let turned = grey(
+            Colour {
+                temperature: 340.0,
+                hue: 2.0,
+                ..Colour::NEUTRAL
+            }
+            .chroma_matrix(),
+        );
+        for (t, w) in turned.iter().zip(warm) {
+            assert!(
+                (t - w).abs() < 1e-6,
+                "hue turned the white: {turned:?} vs {warm:?}"
+            );
         }
     }
 

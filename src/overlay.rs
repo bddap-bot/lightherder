@@ -744,7 +744,7 @@ mod tests {
         let factory = Map::nano_kontrol2(&widest);
         let mut map = factory.clone();
         map.fader.push(crate::midi::Fader {
-            cc: 1,
+            cc: 2,
             knob: crate::params::Knob::Noise,
             page: Page::Two,
             curve: 0.0,
@@ -758,9 +758,9 @@ mod tests {
         let bound = rasterize(&map, Page::Two);
         assert!(texels_differing(&rasterize(&factory, Page::One), &bare) > 100);
         assert!(texels_differing(&bare, &bound) > 100);
-        let under_fader_2 = |r: &Raster| marked_texels(r, strip_x(1), 124, STRIP_W, GLYPH);
-        assert_eq!(under_fader_2(&bare), 0);
-        assert!(under_fader_2(&bound) > 0);
+        let under_fader_3 = |r: &Raster| marked_texels(r, strip_x(2), 124, STRIP_W, GLYPH);
+        assert_eq!(under_fader_3(&bare), 0);
+        assert!(under_fader_3(&bound) > 0);
         // The page's own caption, against the word drawn alone.
         for page in Page::ALL {
             let mut want = Canvas::new(PANEL_W, PANEL_H);

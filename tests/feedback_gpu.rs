@@ -526,6 +526,55 @@ fn hue_moves_light_between_the_channels_at_constant_luma() {
 }
 
 #[test]
+fn temperature_tints_grey_at_constant_luma_and_leaves_it_grey_at_rest() {
+    let Some(mut h) = square() else { return };
+    // A grey spot, lit afresh before every setting: the seed at half
+    // brightness with nothing fed back, so there is no chroma for the tint
+    // to be mistaken for a turn of, and no previous tint under this one.
+    let mut grey_through = |temperature: f32| {
+        h.step(&Single {
+            seed: Seed::WhiteBlob(0.5),
+            loop_gain: [0.0; 3],
+            ..frozen(seeded())
+        });
+        let grey = h.spot();
+        assert_eq!(spread(grey), 0.0, "not grey to begin with: {grey:?}");
+        let tinted = recolour(
+            &mut h,
+            Colour {
+                temperature,
+                ..Colour::NEUTRAL
+            },
+        );
+        (grey, tinted)
+    };
+    let (grey, at_rest) = grey_through(0.0);
+    assert_eq!(at_rest, grey, "grey did not stay grey at rest");
+    let (_, warm) = grey_through(340.0);
+    assert!(
+        warm[0] > warm[1] + 8.0 && warm[1] > warm[2] + 8.0,
+        "{grey:?} -> {warm:?}: not warmed"
+    );
+    let (_, cool) = grey_through(-100.0);
+    assert!(
+        cool[2] > cool[1] + 4.0 && cool[1] > cool[0] + 4.0,
+        "{grey:?} -> {cool:?}: not cooled"
+    );
+    // A white point is a tint, not a level: what changed is where the light
+    // sits between the channels, not how much of it there is.
+    for tinted in [warm, cool] {
+        assert!(
+            (luma(tinted) - luma(grey)).abs() < 3.0,
+            "{:?} -> {:?}: luma {} -> {}",
+            grey,
+            tinted,
+            luma(grey),
+            luma(tinted)
+        );
+    }
+}
+
+#[test]
 fn brightness_lifts_black_itself() {
     let Some(mut h) = square() else { return };
     let lift = 0.2;

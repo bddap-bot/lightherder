@@ -1024,7 +1024,7 @@ mod tests {
              \x20 character = { bloom = 0.1, bloom_radius = 0.04, chroma_bleed = 0.02, noise = 0.01 },\n\
              \x20 key = { threshold = 0.2, softness = 0.06, hue = 1.2, tolerance = 0.3 } }]\n\
              monitors = [{ seed = { white_blob = 0.2 }, headroom = 1.5, period = 12,\n\
-             \x20 colour = { hue = 0.1, saturation = 1.1, brightness = 0.02, contrast = 1.05, gamma = 1.2 } }]\n\
+             \x20 colour = { hue = 0.1, saturation = 1.1, brightness = 0.02, contrast = 1.05, gamma = 1.2, temperature = 20 } }]\n\
              routing = [[0.7]]\n\
              routing_inputs = [[0.3]]\n\
              inputs = [{ pattern = \"bars\" }]\n\
@@ -1060,6 +1060,7 @@ mod tests {
         assert_eq!(monitor.colour.brightness, 0.02);
         assert_eq!(monitor.colour.contrast, 1.05);
         assert_eq!(monitor.colour.gamma, 1.2);
+        assert_eq!(monitor.colour.temperature, 20.0);
 
         assert_eq!(params.routing, [[0.7]]);
         assert_eq!(params.routing_inputs, [[0.3]]);
