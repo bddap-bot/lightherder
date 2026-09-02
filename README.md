@@ -256,14 +256,16 @@ reversal, the flips and the page on every rig.
 | control | is |
 |---|---|
 | fader 1 | the **send**, on a rig that has an input; nothing on one that has not |
-| faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows. Brightness and contrast come through a half-flattened `curve`: finer near the middle of the travel, coarser at the ends |
+| faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
 | fader 2, page 2 | the focused **monitor**'s colour temperature, under the hue fader as the original's toggle puts it under the hue knobs: down cools the white toward shade, up warms it toward candlelight, a quarter of the way up is daylight |
 | fader 3, page 2 | the focused **monitor**'s sharpness, beside the temperature as the other face of the original's toggle: at the bottom the stage is skipped; up, every rim the cameras hand it steepens |
 | fader 7, page 2 | the focused **monitor**'s period: every this many passes its two strongest sources trade levels, as the reversal does; at the bottom the mode is off; nothing on a graph with one source |
 | fader 8, page 2 | the focused **camera**'s delay, in whole frames up to the graph's reach; nothing on a graph with none |
 | rotaries 1–8, page 2 | the focused **camera** still: red, green and blue gain, bloom radius, key threshold, key softness, key hue, key tolerance |
-| S 1–8 | focus camera 1–8, as many as the graph has a choice of |
+| S 1–5 | focus camera 1–5, as many as the graph has a choice of |
+| S 6, S 7 | **precision -**, **precision +**: halve or double what a full throw of a fader moves, on a ladder from a whole travel down to a sixteenth; a quarter to begin with; lit on whichever side of that the ladder is |
+| S 8 | **clutch**: while held, every fader and rotary moves nothing, so a hand can bring one back from a rail; lit while held |
 | M 1–8 | focus monitor 1–8, likewise |
 | R 1–4 | focus input 1–4, likewise |
 | R 5 | **reverse**: the focused monitor's two strongest sources trade levels; nothing on a monitor showing one thing |
@@ -288,8 +290,8 @@ cameras, Mute the monitors, Record the inputs.
 
 **A row is the choice its kind offers, and nothing else.** The surface is
 built for the graph about to be played. A rig of one camera and two monitors
-binds M1 and M2 and leaves eighteen select buttons dead — unlit, silent,
-and free for a `midi.toml` to claim; R5–R8 are the reversal, the flips and the page on every rig. The Solo row is dead there
+binds M1 and M2 and leaves fifteen select buttons dead — unlit, silent,
+and free for a `midi.toml` to claim; R5–R8 are the reversal, the flips and the page on every rig, and S6–S8 the precision pair and the clutch. The Solo row is dead there
 because one camera is no choice: a button that selects the only camera there
 is selects what is already selected, and the rule is that a button is
 owed to equipment, not spent on it. Dead is the point.
@@ -306,16 +308,20 @@ puts the monitor's colour temperature on fader 2, its sharpness on fader 3, its
 period on fader 7 and the camera's delay on fader 8, and leaves the other faders free for a `midi.toml`
 to claim.
 
-**A fader does not take its knob over until it has passed through where the
-knob already is.** A fader sends where it is standing, so without that,
-plugging in mid-piece throws every knob to wherever its fader was left — with
-the headroom fader slamming a monitor to white. Sweep the fader and it picks
-its knob up on the way past, and from then on the fader is the knob. It lets
-go on a reset and a change of focus — the whole panel moving without a fader
-moving with it — on a page turn, after which every fader is standing over
-some other knob, on a cut, which moves the two crosspoints
-without theirs, and on an unplug, after which nothing knows where a fader is
-standing.
+**A fader turns its knob by how far it moves, never to where it stands.** A
+fader sends where it is, and what the instrument reads off that is the
+distance since it was last heard from: a knob moves by that fraction of its
+travel, scaled by the precision — a quarter by default, so a full throw covers
+a quarter of the knob and one step of the 127 covers a five-hundredth. Nothing
+jumps: a hot-plug, a page turn, a change of focus, a reset, a cut or a beat
+of the period all leave every fader turning on from wherever the knob now is.
+The rails clamp — a step past one is dropped, not owed — and a fader that has
+run out of travel is brought back under the **clutch**: while S8 is held, every
+fader and rotary moves nothing, and letting go resumes from the new position.
+Rotation, hue and the key hue wrap instead of clamping. The two whole-number
+knobs, the delay and the period, are turned a frame at a time: the fader owes
+a whole one before the knob moves, and at a quarter a full throw over a reach
+of four is one frame.
 
 The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.
@@ -337,10 +343,8 @@ Named by having been turned rather than by a control of its own, because
 there are two dozen of them and no display to point at one with, and the knob a
 hand wants back is the one that hand was just on. Which stops being true the
 moment the panel moves without the hands, so a whole-panel reset and a change
-of focus both clear the name along with the faders' grips — otherwise rewind
-after either would put back a knob nobody has touched. Only that knob's fader
-lets go, so a single-knob reset does not charge the rest of the panel a
-pickup sweep.
+of focus both clear the name — otherwise rewind after either would put back a
+knob nobody has touched.
 
 **The track pair plays the tempo**: |◀ slower, ▶| faster, a press being the
 fourth root of two so four of them halve or double the rate. It is the one
@@ -420,11 +424,6 @@ cc = 0
 knob = "noise"
 page = 2            # the same control, once the page button has turned the knobs over
 
-[[fader]]
-cc = 4
-knob = "contrast"
-curve = 0.5         # 0 is a straight line; 1 is level at the middle of the travel
-
 [[button]]
 cc = 71
 command = "page"
@@ -442,17 +441,10 @@ A fader names a **knob** and spans its whole travel — for the two knobs that
 wrap, rotation and hue, that is one full revolution from bottom to top. A
 fader is on `page` 1 unless it says 2; the buttons are on both pages, so a
 control may carry one knob a page and a button on no page; a map with a knob
-on page 2 and no `page` button is refused. A fader's `curve`, 0 unless it
-says otherwise, bends its travel the way the original's sensitivity knob does:
-the ends and the middle stay where they are, and at 1 the middle is level, so
-the hand has a wide arc of fine change there and the ends do the coarse work;
-outside 0 to 1 is refused. The factory map bends brightness and contrast half
-way; a `midi.toml` that binds either starts them straight again unless it says
-`curve` itself. The pickup reads the fader through its curve, so a curved fader still
-catches its knob where the knob stands. A
+on page 2 and no `page` button is refused. A
 button names a **command**, spelled the way the overlay captions it: `blank`,
 `reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `reverse`, `page`, `flip x`, `flip y`, `rate -`,
-`rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
+`rate +`, `precision -`, `precision +`, `clutch`, and `cam 1`…`cam 5`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
 as many of each as a graph may legally hold.
 
 Every channel is listened to, so a surface set to some other MIDI channel
@@ -734,14 +726,16 @@ all of them at once. The decoder against the ways a fader sweep actually
 arrives — three bytes split across reads, running status with the status byte
 left off, a clock byte landing between a control number and its value, a scene
 dump that must not read as a hundred knob moves, and notes and bends that are
-not knobs. The pickup against a fader that has to reach its knob before it
-moves it, one already standing on it, and one that loses its grip on an
-unplug. The map against a duplicate binding, a command nothing
+not knobs. The turn against a fader's first word placing it and not moving
+anything, a full throw at every rung of the precision ladder, the clutch
+holding every control still and letting go without a jump, a whole-frame knob
+owed a frame at a time, and a page turn and an unplug that throw nothing. The
+map against a duplicate binding, a command nothing
 answers to, a fader and a button on equipment the graph has not got, and a
 literal file rather than a round trip, because a round trip agrees with
 itself whatever the fields are called. The card search against a `/proc/asound/cards`
 with two other cards that also have raw MIDI devices. And the whole path —
-discovery, the open, the reader thread, the decode, the map and the pickup —
+discovery, the open, the reader thread, the decode, the map and the turn —
 against a device that is not there when the instrument starts, appears, sends
 a sweep down a pipe, and goes away again, which is what hot-plug is.
 

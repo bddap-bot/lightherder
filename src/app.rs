@@ -32,12 +32,9 @@ fn finished(capture: Capture) {
 
 /// One beat of the tempo, before the pass it falls on. Not said on the log:
 /// at a period of one it would be a line a pass.
-fn beat(played: &mut u64, params: &mut Params, midi: &mut Midi, focus: Focus) {
+fn beat(played: &mut u64, params: &mut Params, focus: Focus) {
     *played += 1;
-    if params.beat(*played, focus.monitor) {
-        midi.release_knob(Knob::Route);
-        midi.release_knob(Knob::Send);
-    }
+    params.beat(*played, focus.monitor);
 }
 
 struct Live {
@@ -400,24 +397,16 @@ impl App {
     fn reset(&mut self) {
         self.params = self.initial.clone();
         self.played = 0;
-        // The column the cut took was a column of the panel that is gone.
+        // The column the cut took was a column of the panel that is gone,
+        // and so was the knob "the last knob turned" names.
         self.cut = None;
-        // The whole panel just moved without a fader moving with it — and
-        // without a hand moving with it either, so the knob "the last knob
-        // turned" names was turned on a panel that is gone.
-        self.midi.release();
         self.last_knob = None;
         log::info!("reset: {}", self.params.describe(self.focus));
     }
 
     #[cfg(test)]
     fn beat(&mut self) {
-        beat(
-            &mut self.played,
-            &mut self.params,
-            &mut self.midi,
-            self.focus,
-        );
+        beat(&mut self.played, &mut self.params, self.focus);
     }
 
     fn shown(&self) -> Shown {
@@ -436,23 +425,18 @@ impl App {
         self.solo.then_some(self.focus.monitor)
     }
 
-    /// Point the knobs at another node. The one way `self.focus` moves: a
-    /// fader that has caught a knob is holding *that* node's knob, and the
-    /// new node's is somewhere else entirely — without letting go, the next
-    /// rotary touched throws it to wherever the fader is standing.
+    /// Point the knobs at another node. The one way `self.focus` moves.
     ///
-    /// A focus that is not moving costs no grips: the select row invites a
-    /// press on the node already under the knobs. The readout still prints —
+    /// The select row invites a press on the node already under the knobs,
+    /// which moves nothing. The readout still prints —
     /// on a one-node graph that press is the only way to ask what the knobs
     /// are on, and the log line is the only place the answer appears.
     fn refocus(&mut self, focus: Focus) {
         if focus != self.focus {
             self.focus = focus;
-            self.midi.release();
-            // And with the faders' grips, the name of the knob the hands
-            // were on: it was a knob of the node they have just left, and
-            // putting "the last knob turned" back on the node they landed on
-            // would reset one nobody has touched.
+            // The knob the hands were on was a knob of the node they have
+            // just left; putting "the last knob turned" back on the node they
+            // landed on would reset one nobody has touched.
             self.last_knob = None;
         }
         log::info!("{}", self.params.describe(self.focus));
@@ -486,12 +470,6 @@ impl App {
     }
 
     /// Put the last knob that moved back to its identity, and nothing else.
-    ///
-    /// Only that knob's own faders let go — [`Midi::release_knob`] rather
-    /// than the whole panel's release, which is what a reset or a refocus
-    /// owes: one knob moved without its fader, so charging every other fader
-    /// a pickup sweep for it would make a single-knob reset more expensive
-    /// on the hands than the whole-panel one.
     fn reset_knob(&mut self) {
         let Some(knob) = self.last_knob else {
             // Not silent: the button did nothing, and the one place a
@@ -500,7 +478,6 @@ impl App {
             return log::info!("no knob has been turned yet");
         };
         self.params.reset(knob, self.focus);
-        self.midi.release_knob(knob);
         log::info!(
             "{} reset: {}",
             knob.name(),
@@ -516,8 +493,8 @@ impl App {
     /// control surface must not be able to.
     fn act(&mut self, action: Action) {
         match action {
-            Action::Set(knob, value) => {
-                self.params.set(knob, value, self.focus);
+            Action::Turn(knob, delta) => {
+                self.params.nudge(knob, delta, self.focus);
                 self.last_knob = Some(knob);
                 log::info!("{}", self.params.describe(self.focus));
             }
@@ -572,8 +549,6 @@ impl App {
             Action::Screencap => self.screencap(),
             Action::Record(Edge::Down) => self.record(),
             Action::Record(Edge::Up) => self.stop_recording(),
-            // Both edges move the two crosspoint knobs without their faders,
-            // and only those two, so only their grips are let go.
             Action::Cut(edge) => {
                 let moved = match (edge, self.cut.take()) {
                     (Edge::Down, None) => {
@@ -590,16 +565,11 @@ impl App {
                     }
                 };
                 if moved {
-                    self.midi.release_knob(Knob::Route);
-                    self.midi.release_knob(Knob::Send);
                     log::info!("{}", self.params.describe(self.focus));
                 }
             }
-            // The same two knobs as a cut, moved without their faders.
             Action::Reverse => {
                 if self.params.reverse(self.focus.monitor) {
-                    self.midi.release_knob(Knob::Route);
-                    self.midi.release_knob(Knob::Send);
                     log::info!("{}", self.params.describe(self.focus));
                 } else {
                     log::info!(
@@ -621,6 +591,19 @@ impl App {
                     framing.flipped()
                 );
             }
+            Action::Finer | Action::Coarser => {
+                self.midi.step_precision(action);
+                log::info!("precision {}", self.midi.precision());
+            }
+            // The surface reads the clutch off its own held buttons; the line
+            // is so a performer can see the knobs went quiet on purpose.
+            Action::Clutch(edge) => log::info!(
+                "clutch {}",
+                match edge {
+                    Edge::Down => "held: the knobs stay put",
+                    Edge::Up => "released",
+                }
+            ),
         }
     }
 
@@ -731,7 +714,7 @@ impl App {
     /// frame needs no window, and so can be played by a test.
     fn surface_frame(&mut self) {
         for message in self.midi.poll() {
-            if let Some(action) = self.midi.action_for(message, &self.params, self.focus) {
+            if let Some(action) = self.midi.action_for(message, &self.params) {
                 self.act(action);
             }
         }
@@ -838,12 +821,7 @@ impl ApplicationHandler for App {
                 // an expose, a resize or the overlay unanswered.
                 let passes = self.tempo.take_due(Instant::now());
                 for _ in 0..passes {
-                    beat(
-                        &mut self.played,
-                        &mut self.params,
-                        &mut self.midi,
-                        self.focus,
-                    );
+                    beat(&mut self.played, &mut self.params, self.focus);
                     live.pass(&self.gpu, &self.params, &mut self.sources);
                 }
                 // Nothing is drawn to a window nothing can see. The
@@ -1077,9 +1055,7 @@ mod tests {
             before.knob(Knob::Saturation, app.focus) + 1.0
         );
 
-        // And a fader takes over from where the reset left the knob, not
-        // from wherever that fader happens to be standing.
-        app.act(Action::Set(Knob::Gamma, 2.0));
+        app.act(Action::Turn(Knob::Gamma, 1.0));
         app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Gamma, app.focus),
@@ -1156,67 +1132,17 @@ mod tests {
         );
     }
 
-    /// A fader moving `knob` by `delta` from wherever it stands. The surface
-    /// sends where it is, so a move is a `Set` against the value the knob
-    /// already holds — there is no other way to turn one.
     fn turn(app: &mut App, knob: Knob, delta: f32) {
-        let to = app.params.knob(knob, app.focus) + delta;
-        app.act(Action::Set(knob, to));
+        app.act(Action::Turn(knob, delta));
     }
 
     /// One message off the surface, played the way the redraw plays it:
     /// resolved against the panel as it stands, then applied to it.
     fn surface(app: &mut App, control: u8, value: u8) {
         let change = crate::midi::change(control, value);
-        if let Some(action) = app.midi.action_for(change, &app.params, app.focus) {
+        if let Some(action) = app.midi.action_for(change, &app.params) {
             app.act(action);
         }
-    }
-
-    #[test]
-    fn a_reset_takes_the_knob_out_of_the_hands_of_the_fader_holding_it() {
-        let Some(mut app) = playing(config::single()) else {
-            return;
-        };
-        // Gamma is fader 6 and contrast fader 5. Sweep each up from the
-        // bottom past where its knob stands, which catches it, and leave
-        // both faders at the top with both knobs driven to 4. Contrast
-        // second, so it is the one the reset means.
-        for control in [5, 4] {
-            surface(&mut app, control, 0);
-            surface(&mut app, control, 127);
-        }
-        assert_eq!(app.params.knob(Knob::Gamma, app.focus), 4.0);
-        assert_eq!(app.params.knob(Knob::Contrast, app.focus), 4.0);
-        // Walk gamma away from its fader without touching that fader, so
-        // that whether it is still holding the knob is a question the next
-        // touch answers out loud: a grip that survived puts it back at the
-        // top, and one that was let go leaves the knob where this left it.
-        turn(&mut app, Knob::Gamma, -2.0);
-        // Contrast last, so it is the knob the reset means.
-        surface(&mut app, 4, 126);
-        surface(&mut app, 4, 127);
-
-        app.act(Action::ResetLastKnob);
-        let identity = Knob::Contrast.identity();
-        assert_eq!(app.params.knob(Knob::Contrast, app.focus), identity);
-        // Contrast's fader is still at the top while its knob is back at
-        // 1.0. One that kept its grip throws it straight back on the next
-        // touch — the reset undone by a hand nowhere near it.
-        surface(&mut app, 4, 126);
-        assert_eq!(app.params.knob(Knob::Contrast, app.focus), identity);
-        // And *only* that knob's grip went: gamma's fader is still holding
-        // it and takes it back to the top at a touch. A whole-panel release
-        // here would leave gamma at 2.0, charging a sweep it does not owe.
-        surface(&mut app, 5, 126);
-        assert!(
-            (app.params.knob(Knob::Gamma, app.focus) - 4.0).abs() < 0.05,
-            "gamma let go: {}",
-            app.params.knob(Knob::Gamma, app.focus)
-        );
-        // Contrast takes its fader again by sweeping back down to it.
-        surface(&mut app, 4, 20);
-        assert_ne!(app.params.knob(Knob::Contrast, app.focus), identity);
     }
 
     #[test]
@@ -1252,6 +1178,55 @@ mod tests {
     }
 
     #[test]
+    fn a_change_of_focus_leaves_the_faders_turning_from_where_they_stand() {
+        // The select row moves the knobs to another node; the faders stay
+        // where the hands left them, and turn that node's knobs on from
+        // there by how far they move — nothing on either node jumps.
+        let Some(mut app) = playing(config::crossed()) else {
+            return;
+        };
+        surface(&mut app, 4, 0);
+        surface(&mut app, 4, 127);
+        assert_eq!(app.params.monitors[0].colour.contrast, 2.0);
+        app.act(Action::Focus(Node::Monitor, 1));
+        surface(&mut app, 4, 100);
+        assert!(
+            (app.params.monitors[1].colour.contrast - (1.0 - 27.0 / 127.0)).abs() < 1e-6,
+            "{}",
+            app.params.monitors[1].colour.contrast
+        );
+        assert_eq!(app.params.monitors[0].colour.contrast, 2.0);
+    }
+
+    #[test]
+    fn a_cut_moves_the_crosspoint_and_the_fader_turns_it_on_from_there() {
+        // Route is fader 8, control 7. A cut throws it to 1 and the release
+        // puts it back; the fader, wherever it stands, turns it by how far
+        // it moves — and at the rail the rest of a step is dropped, not owed.
+        let Some(mut app) = playing(config::crossed()) else {
+            return;
+        };
+        let start = app.params.knob(Knob::Route, app.focus);
+        assert_eq!(start, 0.0);
+        surface(&mut app, 7, 0);
+        surface(&mut app, 7, 64);
+        let held = app.params.knob(Knob::Route, app.focus);
+        assert!((held - 64.0 / 127.0 / 4.0).abs() < 1e-6, "{held}");
+        app.act(Action::Cut(Edge::Down));
+        assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
+        surface(&mut app, 7, 65);
+        surface(&mut app, 7, 66);
+        assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
+        app.act(Action::Cut(Edge::Up));
+        assert!((app.params.knob(Knob::Route, app.focus) - held).abs() < 1e-6);
+        surface(&mut app, 7, 67);
+        assert!(
+            (app.params.knob(Knob::Route, app.focus) - (held + 1.0 / 127.0 / 4.0)).abs() < 1e-6,
+            "the steps past the rail were banked"
+        );
+    }
+
+    #[test]
     fn a_reset_before_any_knob_has_turned_does_nothing() {
         // There is no "that one" to mean yet, and the panel must not take a
         // guess at which knob was meant.
@@ -1261,28 +1236,6 @@ mod tests {
         let before = app.params.clone();
         app.act(Action::ResetLastKnob);
         assert_eq!(app.params, before);
-    }
-
-    #[test]
-    fn a_change_of_focus_takes_the_faders_off_the_node_they_were_on() {
-        // The select row moves the knobs to another node; the faders stay
-        // where the hands left them. Without the release the next touch
-        // throws that node's knob to a position that stood for the old one.
-        let Some(mut app) = playing(config::crossed()) else {
-            return;
-        };
-        // Catch contrast on monitor 1 and drive it to the top of its travel.
-        surface(&mut app, 4, 0);
-        surface(&mut app, 4, 127);
-        assert_eq!(app.params.monitors[0].colour.contrast, 4.0);
-
-        app.act(Action::Focus(Node::Monitor, 1));
-        surface(&mut app, 4, 126);
-        assert_eq!(
-            app.params.monitors[1].colour.contrast,
-            Knob::Contrast.identity(),
-            "the fader kept its grip across the focus"
-        );
     }
 
     #[test]
@@ -1412,17 +1365,18 @@ mod tests {
         let started = app.params.clone();
         app.act(Action::Focus(Node::Monitor, 1));
         app.act(Action::Page);
+        // A quarter of sixty passes a throw: seventeen steps of it owe two.
         surface(&mut app, 6, 0);
-        surface(&mut app, 6, 5);
+        surface(&mut app, 6, 17);
         assert_eq!(app.params.monitors[1].period, 2);
         app.act(Action::Page);
-        surface(&mut app, 7, 0);
         surface(&mut app, 7, 127);
         surface(&mut app, 7, 76);
         let row = app.params.routing[1].clone();
         assert!(
-            (row[0] - 76.0 / 127.0).abs() < 1e-3,
-            "the route fader never caught"
+            (row[0] - (0.6 - 51.0 / 127.0 / 4.0)).abs() < 1e-3,
+            "the route fader moved {} and not a quarter of its throw",
+            row[0]
         );
         let swapped = vec![row[1], row[0]];
         app.beat();
@@ -1440,10 +1394,14 @@ mod tests {
         app.beat();
         app.beat();
         assert_eq!(app.params.routing[1], row);
-        // The beat moved the crosspoint under the fader, so the fader has
-        // to catch it again: a jump well past the catch step drives nothing.
+        // The beats moved the crosspoint under the fader and back; the fader
+        // turns it on from there, by how far it moved and nothing more.
         surface(&mut app, 7, 90);
-        assert_eq!(app.params.routing[1], row, "the route fader kept its grip");
+        assert!(
+            (app.params.routing[1][0] - (row[0] + 14.0 / 127.0 / 4.0)).abs() < 1e-3,
+            "{}",
+            app.params.routing[1][0]
+        );
 
         app.act(Action::Reset);
         assert_eq!(app.params, started);
@@ -1478,62 +1436,6 @@ mod tests {
             app.act(Action::Reverse);
             assert_eq!(app.params, before);
         }
-        // And a reversal that moves nothing lets go of nothing: route,
-        // fader 8, caught at the middle keeps driving the crosspoint after
-        // a press on the one source, and after one on a tie.
-        surface(&mut app, 7, 0);
-        surface(&mut app, 7, 127);
-        surface(&mut app, 7, 64);
-        let held = app.params.routing[1][0];
-        assert!((held - 64.0 / 127.0).abs() < 1e-3, "the fader never caught");
-        app.act(Action::Reverse);
-        surface(&mut app, 7, 65);
-        let followed = app.params.routing[1][0];
-        assert!(
-            (followed - 65.0 / 127.0).abs() < 1e-3,
-            "a press on one source let go of the fader: {followed}"
-        );
-        app.params.routing[1][1] = followed;
-        app.act(Action::Reverse);
-        surface(&mut app, 7, 66);
-        assert!(
-            (app.params.routing[1][0] - 66.0 / 127.0).abs() < 1e-3,
-            "a press on a tie let go of the fader"
-        );
-    }
-
-    #[test]
-    fn a_reversal_takes_the_crosspoints_out_of_the_hands_of_the_faders_holding_them() {
-        // As the cut does: the send, fader 1, and the route, fader 8, each
-        // caught at a level, then the reversal trades the two without their
-        // faders — so the next touch of either must not throw it back.
-        let mut params = config::shaped(2, 1, 1);
-        params.routing = vec![vec![0.0, 0.25]];
-        params.routing_inputs = vec![vec![0.0]];
-        let Some(mut app) = playing(params) else {
-            return;
-        };
-        surface(&mut app, 7, 0);
-        surface(&mut app, 7, 64);
-        surface(&mut app, 0, 0);
-        surface(&mut app, 0, 100);
-        let route = app.params.routing[0][0];
-        let send = app.params.routing_inputs[0][0];
-        assert!((route - 64.0 / 127.0).abs() < 1e-3, "route never caught");
-        assert!((send - 100.0 / 127.0).abs() < 1e-3, "send never caught");
-        app.act(Action::Reverse);
-        assert_eq!(app.params.routing, vec![vec![send, 0.25]]);
-        assert_eq!(app.params.routing_inputs, vec![vec![route]]);
-        surface(&mut app, 7, 65);
-        surface(&mut app, 0, 101);
-        assert_eq!(
-            app.params.routing[0][0], send,
-            "the route fader kept its grip through the reversal"
-        );
-        assert_eq!(
-            app.params.routing_inputs[0][0], route,
-            "the send fader kept its grip through the reversal"
-        );
     }
 
     #[test]
@@ -1551,52 +1453,6 @@ mod tests {
         assert_eq!(app.params, app.initial);
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, app.initial);
-    }
-
-    #[test]
-    fn a_cut_takes_the_crosspoint_out_of_the_hands_of_the_fader_holding_it() {
-        // Route is fader 8, control 7. Catch it by sweeping from the bottom
-        // to the middle, then cut: the crosspoint has moved without the
-        // fader, so the next touch of that fader must not throw it back.
-        let Some(mut app) = playing(config::crossed()) else {
-            return;
-        };
-        surface(&mut app, 7, 0);
-        surface(&mut app, 7, 64);
-        let held = app.params.knob(Knob::Route, app.focus);
-        assert!(
-            (held - 64.0 / 127.0).abs() < 1e-3,
-            "the fader never caught: {held}"
-        );
-        // Contrast, fader 5, caught the same way and held at the top: a
-        // knob the cut never moves, whose fader owes no sweep for it.
-        surface(&mut app, 4, 0);
-        surface(&mut app, 4, 127);
-        assert_eq!(app.params.knob(Knob::Contrast, app.focus), 4.0);
-        app.act(Action::Cut(Edge::Down));
-        assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
-        surface(&mut app, 7, 65);
-        assert_eq!(
-            app.params.knob(Knob::Route, app.focus),
-            1.0,
-            "the fader kept its grip through the cut"
-        );
-        surface(&mut app, 4, 126);
-        assert!(
-            app.params.knob(Knob::Contrast, app.focus) < 4.0,
-            "the cut took the contrast fader's grip for a knob it never moved"
-        );
-        // And on the way back: the release moves the crosspoint again.
-        app.act(Action::Cut(Edge::Up));
-        assert!((app.params.knob(Knob::Route, app.focus) - held).abs() < 1e-6);
-        surface(&mut app, 7, 66);
-        assert!(
-            (app.params.knob(Knob::Route, app.focus) - held).abs() < 1e-6,
-            "the fader kept its grip through the release"
-        );
-        // A sweep back through the knob catches it again.
-        surface(&mut app, 7, 40);
-        assert!((app.params.knob(Knob::Route, app.focus) - 40.0 / 127.0).abs() < 1e-3);
     }
 
     #[test]

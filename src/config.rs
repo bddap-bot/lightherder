@@ -13,6 +13,10 @@ use crate::rig::Rig;
 /// texture array all need a second look; fewer keeps every one of them dumb.
 pub const MAX_MONITORS: usize = 8;
 
+/// Cameras cost nothing but a select button each, and the Solo row has
+/// three to spare for the clutch and the precision pair.
+pub const MAX_CAMERAS: usize = 5;
+
 /// Inputs cost what [`MAX_TAPS`] does not bound: one bank layer each, plus —
 /// for a file or a device — a process and a thread of its own. Four is what
 /// a switcher has spare inputs for.
@@ -23,14 +27,14 @@ pub const MAX_INPUTS: usize = 4;
 /// something is held to its own cap; a camera costs nothing but a button.
 pub const fn cap(node: Node) -> usize {
     match node {
-        Node::Camera => ROW_BUTTONS,
+        Node::Camera => MAX_CAMERAS,
         Node::Monitor => MAX_MONITORS,
         Node::Input => MAX_INPUTS,
     }
 }
 
 const _: () = assert!(
-    MAX_MONITORS <= ROW_BUTTONS && MAX_INPUTS <= ROW_BUTTONS,
+    MAX_CAMERAS <= ROW_BUTTONS && MAX_MONITORS <= ROW_BUTTONS && MAX_INPUTS <= ROW_BUTTONS,
     "a cap past the select row would name selects no button can carry"
 );
 
@@ -38,7 +42,7 @@ const _: () = assert!(
 /// *surface* rather than about any rig means by "the factory layout".
 #[cfg(test)]
 pub(crate) fn widest() -> Params {
-    shaped(ROW_BUTTONS, MAX_MONITORS, MAX_INPUTS)
+    shaped(MAX_CAMERAS, MAX_MONITORS, MAX_INPUTS)
 }
 
 /// A graph of a named shape, for the tests that are about the *surface* a
@@ -385,7 +389,7 @@ fn focuses(side: Side, params: &Params) -> impl Iterator<Item = Focus> {
 ///
 /// Every value a knob turns is checked against that knob's own [`Knob::limit`]
 /// and nowhere else. A file outside one is *refused* rather than loaded and
-/// silently snapped by the first fader that catches it: a `headroom = 1e6` that validates
+/// silently snapped by the first fader that turns it: a `headroom = 1e6` that validates
 /// is a state the instrument shows, cannot return to, and hands a fader a
 /// travel it is standing off the end of.
 ///
@@ -426,11 +430,12 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // nothing could bring the focus to it.
     for node in Node::ALL {
         let have = params.count(node);
-        if have > ROW_BUTTONS {
+        if have > cap(node) {
             return Err(format!(
-                "{have} {}s; at most {ROW_BUTTONS} — one button per node, and \
+                "{have} {}s; at most {} — one button per node, and \
                  a {} past those could never be turned live",
                 node.name(),
+                cap(node),
                 node.name()
             ));
         }
@@ -1194,10 +1199,10 @@ mod tests {
         };
         // The reach is the camera's whole bound, so it is the kind that
         // shows the reach's own words.
-        let why = validate(&with(Node::Camera, ROW_BUTTONS + 1)).unwrap_err();
+        let why = validate(&with(Node::Camera, MAX_CAMERAS + 1)).unwrap_err();
         assert!(
             why.contains("one button per node")
-                && why.contains(&format!("{} cameras", ROW_BUTTONS + 1)),
+                && why.contains(&format!("{} cameras", MAX_CAMERAS + 1)),
             "refused for the wrong reason: {why}"
         );
         // The two kinds that cost something are refused past their own cap

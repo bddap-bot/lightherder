@@ -747,7 +747,6 @@ mod tests {
             cc: 3,
             knob: crate::params::Knob::Noise,
             page: Page::Two,
-            curve: 0.0,
         });
         // Page 1 is untouched by a binding on page 2, texel for texel.
         assert_eq!(
@@ -783,7 +782,7 @@ mod tests {
         // would read the same on all of them. Past the choice the strip is
         // bare chrome, which is what a dead button looks like — and a kind
         // the rig has one of is no choice, so its whole row is chrome.
-        for (cameras, monitors, inputs) in [(1, 1, 0), (4, 2, 1), (1, 8, 0), (8, 8, 4)] {
+        for (cameras, monitors, inputs) in [(1, 1, 0), (4, 2, 1), (1, 8, 0), (5, 8, 4)] {
             let params = crate::config::shaped(cameras, monitors, inputs);
             let raster = rasterize(&Map::nano_kontrol2(&params), Page::One);
             for node in Node::ALL {
@@ -800,6 +799,9 @@ mod tests {
                             crate::midi::FLIP_X => captioned(node, i, "flip x"),
                             crate::midi::FLIP_Y => captioned(node, i, "flip y"),
                             crate::midi::PAGE => captioned(node, i, "page"),
+                            crate::midi::FINER => captioned(node, i, "precision -"),
+                            crate::midi::COARSER => captioned(node, i, "precision +"),
+                            crate::midi::CLUTCH => captioned(node, i, "clutch"),
                             _ => asleep(node, i),
                         }
                     };

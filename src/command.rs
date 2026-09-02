@@ -7,10 +7,10 @@ use crate::params::{Knob, Node};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
-    /// Put a knob at a value outright, which is what a fader does by standing
-    /// somewhere. Absolute, not a position, so where the ends of a fader are
-    /// is the surface's business and not the instrument's.
-    Set(Knob, f32),
+    /// Turn a knob by this much, in the knob's own units. A delta and not a
+    /// position, so where a fader stands is the surface's business and not
+    /// the instrument's.
+    Turn(Knob, f32),
     /// Put the knobs' focus on one node of one kind outright, by its place
     /// in the graph. A select rather than a step: a hand that means "that
     /// one" should not have to walk past the ones it does not mean.
@@ -51,6 +51,12 @@ pub enum Action {
     Page,
     /// A latch on a button with a lamp, not a knob: a flip is on or off.
     Flip(Axis),
+    /// Halve or double what a full throw of a fader moves.
+    Finer,
+    Coarser,
+    /// While held, every fader and rotary is inert, so a hand can bring one
+    /// back from a rail it has hit.
+    Clutch(Edge),
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -67,6 +73,7 @@ pub fn released(action: Action) -> Option<Action> {
     match action {
         Action::Record(Edge::Down) => Some(Action::Record(Edge::Up)),
         Action::Cut(Edge::Down) => Some(Action::Cut(Edge::Up)),
+        Action::Clutch(Edge::Down) => Some(Action::Clutch(Edge::Up)),
         _ => None,
     }
 }
@@ -140,6 +147,21 @@ const COMMANDS: &[Command] = &[
         "flip y",
         Action::Flip(Axis::Y),
         "mirror the focused camera top for bottom; lit while it is",
+    ),
+    cmd(
+        "precision -",
+        Action::Finer,
+        "a full throw moves half as much; lit below the default",
+    ),
+    cmd(
+        "precision +",
+        Action::Coarser,
+        "a full throw moves twice as much; lit above the default",
+    ),
+    cmd(
+        "clutch",
+        Action::Clutch(Edge::Down),
+        "while held, the faders and rotaries move nothing",
     ),
 ];
 
@@ -263,6 +285,9 @@ mod tests {
         assert_eq!(action_for_name("cut"), Some(Action::Cut(Edge::Down)));
         assert_eq!(action_for_name("reverse"), Some(Action::Reverse));
         assert_eq!(action_for_name("page"), Some(Action::Page));
+        assert_eq!(action_for_name("precision -"), Some(Action::Finer));
+        assert_eq!(action_for_name("precision +"), Some(Action::Coarser));
+        assert_eq!(action_for_name("clutch"), Some(Action::Clutch(Edge::Down)));
         assert_eq!(describes("reset").as_deref(), Some("reset every knob"));
     }
 
@@ -282,7 +307,12 @@ mod tests {
             let action = action_for_name(&name).expect("every name resolves");
             assert_eq!(
                 released(action).is_some(),
-                matches!(action, Action::Record(Edge::Down) | Action::Cut(Edge::Down)),
+                matches!(
+                    action,
+                    Action::Record(Edge::Down)
+                        | Action::Cut(Edge::Down)
+                        | Action::Clutch(Edge::Down)
+                ),
                 "{name}"
             );
         }

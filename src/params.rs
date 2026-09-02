@@ -778,7 +778,7 @@ impl Knob {
         Knob::ALL.into_iter().find(|knob| knob.name() == name)
     }
 
-    /// Whether the knob is a value of the graph or a grip on other knobs.
+    /// Whether the knob is a value of the graph or a reading of other knobs.
     /// The rigid gain is the only one of the latter: it reads as the mean of
     /// the three channel knobs and turns all three, so it is a reading rather
     /// than a field. Anything walking the graph's *values* wants the fields,
@@ -788,6 +788,13 @@ impl Knob {
     /// walk over the fields goes through [`Params::set`] and never `knob_mut`.
     pub const fn owns_a_field(self) -> bool {
         !matches!(self, Knob::Gain)
+    }
+
+    /// Whether the knob counts whole frames or passes rather than reading a
+    /// float, which is what [`Params::whole_mut`] reaches and what a surface
+    /// turning it by deltas has to bank a whole step for.
+    pub const fn is_whole(self) -> bool {
+        matches!(self, Knob::Delay | Knob::Period)
     }
 
     /// Whether turning one of these knobs moves a value the other reads.
@@ -1131,7 +1138,11 @@ impl Params {
         }
     }
 
-    fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
+    /// Turn `knob` by `delta` of its own units, which is what a fader does:
+    /// it sends how far it moved. Past a rail the rest of the step is dropped,
+    /// and a whole-frame knob rounds to the nearest frame — the surface owes
+    /// it a whole step at a time.
+    pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
         // The rigid gain knob is the one that is not a single value: clamp its
         // step once against the tightest channel, so hitting the rail slides
         // all three together instead of flattening the colour offsets.
@@ -1398,6 +1409,19 @@ mod tests {
         assert_eq!(mon.colour.gamma, 0.25);
         assert_eq!(mon.colour.temperature, -100.0);
         assert_eq!(mon.sharpness, 0.0);
+    }
+
+    #[test]
+    fn a_whole_knob_is_the_one_whose_field_is_a_count() {
+        let mut params = Params::default();
+        for knob in Knob::ALL {
+            assert_eq!(
+                knob.is_whole(),
+                params.whole_mut(knob, Focus::default()).is_some(),
+                "{}",
+                knob.name()
+            );
+        }
     }
 
     #[test]
