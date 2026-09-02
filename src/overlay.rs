@@ -793,10 +793,13 @@ mod tests {
                 for i in 0..crate::midi::ROW_BUTTONS as u8 {
                     let want = if (i as usize) < bound {
                         selects(node, i)
-                    } else if crate::midi::row_of(node) + i == crate::midi::PAGE {
-                        captioned(node, i, "page")
                     } else {
-                        asleep(node, i)
+                        match crate::midi::row_of(node) + i {
+                            crate::midi::FLIP_X => captioned(node, i, "flip x"),
+                            crate::midi::FLIP_Y => captioned(node, i, "flip y"),
+                            crate::midi::PAGE => captioned(node, i, "page"),
+                            _ => asleep(node, i),
+                        }
                     };
                     assert_eq!(
                         band(&raster.pixels, raster.width as i32, node, i),

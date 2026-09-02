@@ -27,6 +27,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use web_time::Instant;
 
+use crate::affine::Axis;
 use crate::command::{action_for_name, names, Action};
 use crate::lamps::{lamp, Lamplight, Lamps};
 use crate::params::{Focus, Knob, Limit, Node, Params, Seed};
@@ -432,7 +433,10 @@ pub const ROW_BUTTONS: usize = 8;
 /// leaves dead — the inputs stop short of it — so it is the one select
 /// button no rig can claim, and the page costs the transport nothing.
 pub(crate) const PAGE: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
-const _: () = assert!(crate::config::cap(Node::Input) < ROW_BUTTONS);
+/// The two flips, beside the page on the same dead end of the Record row.
+pub(crate) const FLIP_X: u8 = PAGE - 2;
+pub(crate) const FLIP_Y: u8 = PAGE - 1;
+const _: () = assert!(crate::config::cap(Node::Input) as u8 + R_ROW <= FLIP_X);
 
 pub(crate) fn spot(cc: u8) -> Option<Spot> {
     let block = |first: u8| (cc >= first && cc < first + ROW_BUTTONS as u8).then(|| cc - first);
@@ -557,9 +561,33 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
         button(60, "snap"),
         button(45, "record"),
         button(61, "cut"),
+        button(FLIP_X, "flip x"),
+        button(FLIP_Y, "flip y"),
         button(PAGE, "page"),
     ]);
     out
+}
+
+/// What the lamps say that the focus alone cannot: one fact about the
+/// focused monitor, two about the focused camera, and two latched modes of
+/// the display. The caller owns every one of them.
+#[derive(Clone, Copy, Debug)]
+pub struct Shown {
+    pub seed: Seed,
+    pub mirrored: [bool; 2],
+    pub overlay: bool,
+    pub solo: bool,
+}
+
+impl Default for Shown {
+    fn default() -> Shown {
+        Shown {
+            seed: Seed::Dark,
+            mirrored: [false; 2],
+            overlay: false,
+            solo: false,
+        }
+    }
 }
 
 /// One thing off the wire. A knob or a button is a control change; a system
@@ -923,11 +951,9 @@ impl Midi {
     /// change follows to light it. Saying the same panel again costs nothing
     /// on the wire.
     ///
-    /// `seed`, `overlay` and `solo` are what the caller owns — one fact
-    /// about the focused monitor and two latched modes.
-    pub fn show(&self, focus: Focus, seed: Seed, overlay: bool, solo: bool) {
+    pub fn show(&self, focus: Focus, shown: Shown) {
         if let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) {
-            lamps.show(self.wanted(focus, seed, overlay, solo));
+            lamps.show(self.wanted(focus, shown));
         }
     }
 
@@ -951,14 +977,17 @@ impl Midi {
 
     /// The panel [`Midi::show`] would ask for, apart from whether there is a
     /// surface to ask.
-    fn wanted(&self, focus: Focus, seed: Seed, overlay: bool, solo: bool) -> Lamplight {
+    fn wanted(&self, focus: Focus, shown: Shown) -> Lamplight {
         let when = |on: bool, action| if on { self.lamp_of(action) } else { 0 };
         let mut want = Node::ALL.into_iter().fold(0, |want, node| {
             want | self.lamp_of(Action::Focus(node, focus.at(node)))
-        }) | when(seed.lit(), Action::Seed)
-            | when(overlay, Action::Overlay)
-            | when(solo, Action::Solo)
+        }) | when(shown.seed.lit(), Action::Seed)
+            | when(shown.overlay, Action::Overlay)
+            | when(shown.solo, Action::Solo)
             | when(self.page == Page::Two, Action::Page);
+        for axis in Axis::ALL {
+            want |= when(shown.mirrored[axis as usize], Action::Flip(axis));
+        }
         for (button, held) in self.map.button.iter().zip(&self.held) {
             if *held {
                 want |= lamp(button.cc);
@@ -1433,7 +1462,7 @@ mod tests {
                 input: index,
             };
             assert_eq!(
-                midi.wanted(focus, Seed::Dark, false, false),
+                midi.wanted(focus, Shown::default()),
                 crate::lamps::lamp(S_ROW + index as u8)
                     | crate::lamps::lamp(M_ROW + index as u8)
                     | crate::lamps::lamp(R_ROW + index as u8),
@@ -1450,28 +1479,28 @@ mod tests {
         map.button.push(button(91, "mon 3"));
         let midi = Midi::new(map, &crate::config::widest()).unwrap();
         assert_eq!(
-            midi.wanted(at(1, 2), Seed::Dark, false, false),
+            midi.wanted(at(1, 2), Shown::default()),
             crate::lamps::lamp(90) | crate::lamps::lamp(91)
         );
         // A node no button of the map names has no lamp rather than the
         // nearest one: a graph may run deeper than the surface, and the same
         // `None` answers both.
         assert_eq!(
-            midi.wanted(at(0, 2), Seed::Dark, false, false),
+            midi.wanted(at(0, 2), Shown::default()),
             crate::lamps::lamp(91)
         );
         assert_eq!(
-            midi.wanted(at(1, 0), Seed::Dark, false, false),
+            midi.wanted(at(1, 0), Shown::default()),
             crate::lamps::lamp(90)
         );
-        assert_eq!(midi.wanted(at(7, 7), Seed::Dark, false, false), 0);
+        assert_eq!(midi.wanted(at(7, 7), Shown::default()), 0);
 
         // The first button that names a node wins, rather than the last.
         let mut map = Map::nano_kontrol2(&crate::config::widest());
         map.button.push(button(90, "cam 1"));
         let midi = Midi::new(map, &crate::config::widest()).unwrap();
         assert_eq!(
-            midi.wanted(at(0, 0), Seed::Dark, false, false),
+            midi.wanted(at(0, 0), Shown::default()),
             crate::lamps::lamp(S_ROW) | crate::lamps::lamp(M_ROW) | crate::lamps::lamp(R_ROW)
         );
     }
@@ -1488,36 +1517,36 @@ mod tests {
         let pair = crate::lamps::lamp(S_ROW + 2)
             | crate::lamps::lamp(M_ROW + 1)
             | crate::lamps::lamp(R_ROW);
-        assert_eq!(midi.wanted(focus, Seed::Dark, false, false), pair);
+        assert_eq!(midi.wanted(focus, Shown::default()), pair);
         // A finger down on a button whose light nothing else would give
         // back: all three lamps, not one.
         assert_eq!(feed(&mut midi, &params, &cc(62, 127)), [Action::Clear]);
         assert_eq!(
-            midi.wanted(focus, Seed::Dark, false, false),
+            midi.wanted(focus, Shown::default()),
             pair | crate::lamps::lamp(62)
         );
         // And out again when the finger comes off, which is a message that
         // does nothing else at all.
         assert_eq!(feed(&mut midi, &params, &cc(62, 0)), []);
-        assert_eq!(midi.wanted(focus, Seed::Dark, false, false), pair);
+        assert_eq!(midi.wanted(focus, Shown::default()), pair);
         // A node no row reaches lights nothing of its own, one kind at a
         // time so none can cover for another.
         let input = crate::lamps::lamp(R_ROW);
         assert_eq!(
-            midi.wanted(at(99, 1), Seed::Dark, false, false),
+            midi.wanted(at(99, 1), Shown::default()),
             crate::lamps::lamp(M_ROW + 1) | input
         );
         assert_eq!(
-            midi.wanted(at(2, 99), Seed::Dark, false, false),
+            midi.wanted(at(2, 99), Shown::default()),
             crate::lamps::lamp(S_ROW + 2) | input
         );
-        assert_eq!(midi.wanted(at(99, 99), Seed::Dark, false, false), input);
+        assert_eq!(midi.wanted(at(99, 99), Shown::default()), input);
         let lost = Focus {
             camera: 99,
             monitor: 99,
             input: 99,
         };
-        assert_eq!(midi.wanted(lost, Seed::Dark, false, false), 0);
+        assert_eq!(midi.wanted(lost, Shown::default()), 0);
     }
 
     #[test]
@@ -1531,14 +1560,26 @@ mod tests {
         )
         .unwrap();
         let focus = at(0, 0);
-        let base = midi.wanted(focus, Seed::Dark, false, false);
+        let base = midi.wanted(focus, Shown::default());
         assert_eq!(
-            midi.wanted(focus, Seed::Dark, true, false) & !base,
+            midi.wanted(
+                focus,
+                Shown {
+                    overlay: true,
+                    ..Shown::default()
+                }
+            ) & !base,
             crate::lamps::lamp(46),
             "the overlay is cycle"
         );
         assert_eq!(
-            midi.wanted(focus, Seed::Dark, false, true) & !base,
+            midi.wanted(
+                focus,
+                Shown {
+                    solo: true,
+                    ..Shown::default()
+                }
+            ) & !base,
             crate::lamps::lamp(44),
             "the display's solo is forward"
         );
@@ -1548,8 +1589,17 @@ mod tests {
         let mut map = Map::nano_kontrol2(&crate::config::widest());
         map.button.retain(|b| b.cc != 46);
         let midi = Midi::new(map, &crate::config::widest()).unwrap();
-        let base = midi.wanted(focus, Seed::Dark, false, false);
-        assert_eq!(midi.wanted(focus, Seed::Dark, true, false), base);
+        let base = midi.wanted(focus, Shown::default());
+        assert_eq!(
+            midi.wanted(
+                focus,
+                Shown {
+                    overlay: true,
+                    ..Shown::default()
+                }
+            ),
+            base
+        );
     }
 
     #[test]
@@ -1564,9 +1614,15 @@ mod tests {
         )
         .unwrap();
         let focus = at(0, 0);
-        let base = midi.wanted(focus, Seed::Dark, false, false);
+        let base = midi.wanted(focus, Shown::default());
         assert_eq!(
-            midi.wanted(focus, Seed::BLOB, false, false) & !base,
+            midi.wanted(
+                focus,
+                Shown {
+                    seed: Seed::BLOB,
+                    ..Shown::default()
+                }
+            ) & !base,
             crate::lamps::lamp(41),
             "the seed is play on the factory map"
         );
@@ -1574,19 +1630,49 @@ mod tests {
         // load refuses it precisely so the two rigs have one spelling each —
         // but the type can hold one, and a lamp reading the *variant* rather
         // than the light would light PLAY over a monitor drawing nothing.
-        assert_eq!(midi.wanted(focus, Seed::WhiteBlob(0.0), false, false), base);
+        assert_eq!(
+            midi.wanted(
+                focus,
+                Shown {
+                    seed: Seed::WhiteBlob(0.0),
+                    ..Shown::default()
+                }
+            ),
+            base
+        );
         // Any blob, not just the one the toggle brings back: a config may
         // name its own level and the button is still what it is on.
         assert_eq!(
-            midi.wanted(focus, Seed::WhiteBlob(0.42), false, false),
-            midi.wanted(focus, Seed::BLOB, false, false)
+            midi.wanted(
+                focus,
+                Shown {
+                    seed: Seed::WhiteBlob(0.42),
+                    ..Shown::default()
+                }
+            ),
+            midi.wanted(
+                focus,
+                Shown {
+                    seed: Seed::BLOB,
+                    ..Shown::default()
+                }
+            )
         );
         // And a map that binds the seed nowhere lights nothing extra.
         let mut map = Map::nano_kontrol2(&crate::config::widest());
         map.button.retain(|b| b.cc != 41);
         let midi = Midi::new(map, &crate::config::widest()).unwrap();
-        let base = midi.wanted(focus, Seed::Dark, false, false);
-        assert_eq!(midi.wanted(focus, Seed::BLOB, false, false), base);
+        let base = midi.wanted(focus, Shown::default());
+        assert_eq!(
+            midi.wanted(
+                focus,
+                Shown {
+                    seed: Seed::BLOB,
+                    ..Shown::default()
+                }
+            ),
+            base
+        );
     }
 
     #[test]
@@ -1774,6 +1860,8 @@ mod tests {
                 button(60, "snap"),
                 button(45, "record"),
                 button(61, "cut"),
+                button(69, "flip x"),
+                button(70, "flip y"),
                 button(71, "page"),
             ]
         );
@@ -1785,8 +1873,9 @@ mod tests {
         // And the buttons it leaves alone even on the widest rig: one bound
         // here is one a blind slip can find. The Record row runs out past
         // the inputs, which is what a row as wide as its kind looks like —
-        // all but its last button, which is the page's on every rig.
-        let spare = R_ROW + crate::config::cap(Node::Input) as u8..PAGE;
+        // all but its last three, which are the flips' and the page's on
+        // every rig.
+        let spare = R_ROW + crate::config::cap(Node::Input) as u8..FLIP_X;
         for cc in spare {
             assert!(
                 !map.button.iter().any(|b| b.cc == cc),
@@ -2102,11 +2191,33 @@ mod tests {
         let (mut midi, _) = surface();
         let focus = at(2, 1);
         let lamp = crate::lamps::lamp(PAGE);
-        assert_eq!(midi.wanted(focus, Seed::Dark, false, false) & lamp, 0);
+        assert_eq!(midi.wanted(focus, Shown::default()) & lamp, 0);
         midi.turn_page();
-        assert_eq!(midi.wanted(focus, Seed::Dark, false, false) & lamp, lamp);
+        assert_eq!(midi.wanted(focus, Shown::default()) & lamp, lamp);
         midi.turn_page();
-        assert_eq!(midi.wanted(focus, Seed::Dark, false, false) & lamp, 0);
+        assert_eq!(midi.wanted(focus, Shown::default()) & lamp, 0);
+    }
+
+    #[test]
+    fn a_flip_button_is_lit_while_the_focused_camera_is_mirrored_that_way() {
+        let (midi, _) = surface();
+        let focus = at(2, 1);
+        let base = midi.wanted(focus, Shown::default());
+        let x = crate::lamps::lamp(FLIP_X);
+        let y = crate::lamps::lamp(FLIP_Y);
+        assert_eq!(base & (x | y), 0);
+        let lit = |mirrored| {
+            midi.wanted(
+                focus,
+                Shown {
+                    mirrored,
+                    ..Shown::default()
+                },
+            ) & !base
+        };
+        assert_eq!(lit([true, false]), x);
+        assert_eq!(lit([false, true]), y);
+        assert_eq!(lit([true, true]), x | y);
     }
 
     #[test]
@@ -2494,9 +2605,9 @@ mod tests {
             }
             // And the rest of the row, past what this rig has, reaches
             // nothing: a dead button is the point of building the row from
-            // the graph. All but the last of the Record row, which the
-            // inputs never reach and the page takes.
-            for control in (row + width as u8..row + 8).filter(|cc| *cc != PAGE) {
+            // the graph. All but the last three of the Record row, which the
+            // inputs never reach and the flips and the page take.
+            for control in (row + width as u8..row + 8).filter(|cc| *cc < FLIP_X) {
                 assert_eq!(
                     feed(&mut midi, &params, &cc(control, 127)),
                     [],
@@ -2504,6 +2615,14 @@ mod tests {
                 );
             }
         }
+        assert_eq!(
+            feed(&mut midi, &params, &cc(FLIP_X, 127)),
+            [Action::Flip(Axis::X)]
+        );
+        assert_eq!(
+            feed(&mut midi, &params, &cc(FLIP_Y, 127)),
+            [Action::Flip(Axis::Y)]
+        );
         assert_eq!(feed(&mut midi, &params, &cc(PAGE, 127)), [Action::Page]);
         // The transport strip: rewind puts one knob back, stop the whole
         // panel, cycle lifts the overlay, the track pair moves the tempo.
@@ -2663,7 +2782,7 @@ mod tests {
         // One row per kind: the first of each is S1, M1 and R1, which are
         // controls 32, 48 and 64.
         let home = lamp(S_ROW) | lamp(M_ROW) | lamp(R_ROW);
-        midi.show(Focus::default(), Seed::Dark, false, false);
+        midi.show(Focus::default(), Shown::default());
         assert!(
             surface.wire.panel_becomes(home),
             "the panel the instrument started on never reached the wire"
@@ -2672,7 +2791,7 @@ mod tests {
             camera: 1,
             ..Focus::default()
         };
-        midi.show(moved, Seed::Dark, false, false);
+        midi.show(moved, Shown::default());
         assert!(
             surface
                 .wire

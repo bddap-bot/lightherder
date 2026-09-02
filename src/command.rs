@@ -2,6 +2,7 @@
 //! `midi.toml` is resolved against and the card the instrument prints, so the
 //! two cannot drift apart.
 
+use crate::affine::Axis;
 use crate::params::{Knob, Node};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,6 +47,9 @@ pub enum Action {
     /// is the flick back.
     Cut(Edge),
     Page,
+    /// Mirror the focused camera's picture, and again to put it back. A
+    /// latch on a button with a lamp, not a knob: a mirror is on or off.
+    Flip(Axis),
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -120,6 +124,16 @@ const COMMANDS: &[Command] = &[
         "page",
         Action::Page,
         "the faders and rotaries on their other page of knobs; lit on page 2",
+    ),
+    cmd(
+        "flip x",
+        Action::Flip(Axis::X),
+        "mirror the focused camera left for right; lit while it is",
+    ),
+    cmd(
+        "flip y",
+        Action::Flip(Axis::Y),
+        "mirror the focused camera top for bottom; lit while it is",
     ),
 ];
 

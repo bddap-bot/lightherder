@@ -100,6 +100,31 @@ impl Framing {
     }
 }
 
+/// The two ways a picture is mirrored, in the order the pair of flips is
+/// written down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    X,
+    Y,
+}
+
+impl Axis {
+    pub const ALL: [Axis; 2] = [Axis::X, Axis::Y];
+}
+
+impl Framing {
+    pub fn mirror(&mut self, axis: Axis) -> &mut bool {
+        match axis {
+            Axis::X => &mut self.flip_x,
+            Axis::Y => &mut self.flip_y,
+        }
+    }
+
+    pub fn mirrored(&self) -> [bool; 2] {
+        [self.flip_x, self.flip_y]
+    }
+}
+
 impl Default for Framing {
     fn default() -> Framing {
         Framing::identity()

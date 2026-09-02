@@ -15,9 +15,9 @@ use crate::command::{Action, Edge};
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
-use crate::midi::{Map, Midi, Page};
+use crate::midi::{Map, Midi, Page, Shown};
 use crate::overlay::Overlay;
-use crate::params::{Crosspoints, Focus, Knob, Params, Seed};
+use crate::params::{Crosspoints, Focus, Knob, Params};
 use crate::present::Present;
 use crate::tempo::Tempo;
 
@@ -398,10 +398,13 @@ impl App {
         log::info!("reset: {}", self.params.describe(self.focus));
     }
 
-    /// What lights the monitor the faders are on — the one fact about the
-    /// graph the panel's lamps read, since the focus alone cannot say it.
-    fn seed(&self) -> Seed {
-        self.params.monitors[self.focus.monitor].seed
+    fn shown(&self) -> Shown {
+        Shown {
+            seed: self.params.monitors[self.focus.monitor].seed,
+            mirrored: self.params.cameras[self.focus.camera].framing.mirrored(),
+            overlay: self.overlay_shown,
+            solo: self.solo,
+        }
     }
 
     /// The monitor the display is showing on its own, if any. The solo keeps
@@ -574,6 +577,15 @@ impl App {
                 self.midi.turn_page();
                 log::info!("knob page {}", self.midi.page());
             }
+            Action::Flip(axis) => {
+                let framing = &mut self.params.cameras[self.focus.camera].framing;
+                *framing.mirror(axis) ^= true;
+                log::info!(
+                    "camera {} mirrored {:?}",
+                    self.focus.camera + 1,
+                    framing.mirrored()
+                );
+            }
         }
     }
 
@@ -688,8 +700,7 @@ impl App {
                 self.act(action);
             }
         }
-        self.midi
-            .show(self.focus, self.seed(), self.overlay_shown, self.solo);
+        self.midi.show(self.focus, self.shown());
     }
 }
 
@@ -822,7 +833,8 @@ impl ApplicationHandler for App {
 mod tests {
     use super::*;
     use crate::config;
-    use crate::params::Node;
+    use crate::affine::Axis;
+    use crate::params::{Node, Seed};
 
     /// An instrument playing `params`, headless: no window has opened, so
     /// `live` is `None` the way it is before `resumed`. `None` when the
@@ -879,6 +891,25 @@ mod tests {
     }
 
     #[test]
+    fn a_flip_mirrors_the_focused_camera_and_again_puts_it_back() {
+        let Some(mut app) = playing(config::shaped(2, 2, 0)) else {
+            return;
+        };
+        let started = app.params.clone();
+        app.act(Action::Focus(Node::Camera, 1));
+        app.act(Action::Flip(Axis::X));
+        assert_eq!(app.shown().mirrored, [true, false]);
+        let mut want = started.clone();
+        want.cameras[1].framing.flip_x = true;
+        assert_eq!(app.params, want, "only the focused camera, only that axis");
+        app.act(Action::Flip(Axis::Y));
+        assert_eq!(app.shown().mirrored, [true, true]);
+        app.act(Action::Flip(Axis::X));
+        app.act(Action::Flip(Axis::Y));
+        assert_eq!(app.params, started);
+    }
+
+    #[test]
     fn a_reset_puts_the_panel_back_on_the_graph_the_instrument_started_on() {
         let Some(mut app) = playing(config::external()) else {
             return;
@@ -915,9 +946,9 @@ mod tests {
         assert_eq!(app.params.monitors[0].seed, Seed::BLOB, "both went");
         // What the panel reads, which is the focused monitor's and follows
         // the focus rather than the press.
-        assert_eq!(app.seed(), Seed::Dark);
+        assert_eq!(app.shown().seed, Seed::Dark);
         app.act(Action::Focus(Node::Monitor, 0));
-        assert_eq!(app.seed(), Seed::BLOB);
+        assert_eq!(app.shown().seed, Seed::BLOB);
 
         // And back, through the name a `midi.toml` binds a button to.
         app.act(Action::Focus(Node::Monitor, 1));
