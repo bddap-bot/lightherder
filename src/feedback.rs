@@ -1,7 +1,8 @@
 //! The feedback graph: N monitors, M cameras, and the wiring between them.
 //!
-//! The monitors are the layers of one texture array, double-buffered so a
-//! pass can read every monitor's previous frame while writing one's next.
+//! The monitors are the layers of one texture array, a ring of their past
+//! frames deep enough for a pass to read every monitor's previous frame — or
+//! one as many frames back as a camera's delay — while writing the next.
 //! The external inputs are further layers of the same array, written rather
 //! than rendered — so what a monitor's pass samples is one layer index and
 //! the shader never learns which kind it got.
@@ -38,8 +39,7 @@ const BLOB_CENTRE: [f32; 2] = [0.25, 0.0];
 /// through a four-way splitter on top. `config::validate` holds the line.
 pub const MAX_TAPS: usize = 32;
 
-/// The most GPU memory a bank may ask for, the ring of past frames and the
-/// stage the next one is drawn on together. A cap in bytes rather than in
+/// The most GPU memory a bank may ask for. A cap in bytes rather than in
 /// pixels because it is the layers that do the multiplying: the largest
 /// undelayed graph `config::validate` allows — eight monitors and four
 /// inputs — is 1.2 GiB of half-float at 3840x2160 and four times that at
@@ -57,14 +57,9 @@ fn monitor_texel_bytes() -> u32 {
         .expect("a colour format copies a whole texel at a time")
 }
 
-/// The layers the bank is made of: the ring, and the stage.
-fn bank_layers(params: &Params) -> usize {
-    params.layers() + params.monitors.len()
-}
-
 /// What the bank costs `params` at monitors of `size`.
 pub fn bank_bytes(params: &Params, size: (u32, u32)) -> u64 {
-    bank_layers(params) as u64 * size.0 as u64 * size.1 as u64 * monitor_texel_bytes() as u64
+    params.layers() as u64 * size.0 as u64 * size.1 as u64 * monitor_texel_bytes() as u64
 }
 
 /// Whether that fits in [`MAX_BANK_BYTES`], with the figure in the refusal:
@@ -75,7 +70,7 @@ pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
     if bytes > MAX_BANK_BYTES {
         return Err(format!(
             "{} bank layers at {}x{} is {:.1} GiB of bank, past the {:.1} GiB cap",
-            bank_layers(params),
+            params.layers(),
             size.0,
             size.1,
             bytes as f64 / (1u64 << 30) as f64,
@@ -88,13 +83,13 @@ pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
 /// The bank layer holding monitor `m` as it stood `delay` passes before the
 /// newest frame, which sits in ring slab `newest`. The ring is
 /// [`Params::history`] slabs of every monitor, so a delay counts back round
-/// it from the newest slab, and one of the longest delay lands on the slab
-/// the next pass will overwrite.
+/// it from the newest slab; the slab after the newest is the one being
+/// written, which no delay may reach.
 fn monitor_layer(params: &Params, newest: usize, delay: u32, m: usize) -> usize {
     let history = params.history();
     let delay = delay as usize;
     assert!(
-        delay < history,
+        delay + 2 <= history,
         "{delay} frames of delay in a ring of {history}"
     );
     (newest + history - delay) % history * params.monitors.len() + m
@@ -217,6 +212,9 @@ struct Uniforms {
     /// x: brightness. y: contrast. z: gamma. w: the white blob's brightness.
     levels: [f32; 4],
     /// x: tap count. y: this monitor's own layer, for the present pass.
+    /// zw: where the bank splits round the slab this pass writes — the
+    /// first layer past the lower view, and the first layer of the upper
+    /// one.
     info: [f32; 4],
     /// The analog stage's per-monitor lanes, which are not [`Character`]'s
     /// fields — those are per camera and ride the taps. x: grain amplitude,
@@ -240,18 +238,21 @@ pub struct Feedback {
     inputs: usize,
     /// How many slabs of the monitors the ring holds, from [`Params::history`].
     history: usize,
-    /// The bank the cameras sample: the ring of past frames, then the
-    /// inputs, laid out as [`Params::layers`] says. Kept because an external
-    /// input is written into its layers rather than rendered into them.
+    /// The bank: the ring of the monitors' frames, then the inputs, laid out
+    /// as [`Params::layers`] says. Kept because an external input is written
+    /// into its layers rather than rendered into them.
     ring: wgpu::Texture,
-    /// Where a pass draws the monitors' next frame, one layer each, before it
-    /// is copied into the ring's next slab. Its own texture because a pass
-    /// cannot sample the subresource it is writing, and the ring is bound
-    /// whole.
-    stage: wgpu::Texture,
-    /// Render targets, one per layer of the stage.
-    stage_views: Vec<wgpu::TextureView>,
-    bind_group: wgpu::BindGroup,
+    /// Render targets, `layer_views[slab][monitor]`. Monitors only: an input
+    /// layer is never drawn to, and never blanked.
+    layer_views: Vec<Vec<wgpu::TextureView>>,
+    /// One per slab, for the passes that write that slab: the bank bound as
+    /// the layers below it and the layers above it, since a pass may not
+    /// sample the layers it is drawing to and a view is one run of layers.
+    /// A side with no layers binds the other side again — never sampled,
+    /// because no tap's layer falls on it.
+    writing: Vec<wgpu::BindGroup>,
+    /// The whole bank, for the passes that write none of it.
+    whole: wgpu::BindGroup,
     /// The ring slab holding the newest frame — the one the present pass
     /// shows and an undelayed camera reads.
     newest: usize,
@@ -282,50 +283,49 @@ impl Feedback {
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/feedback.wgsl"));
 
-        let bank = |label: &str, layers: usize, usage: wgpu::TextureUsages| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: layers as u32,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: MONITOR_FORMAT,
-                usage,
-                view_formats: &[],
+        let layers = params.layers();
+        let ring = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("source bank"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: layers as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: MONITOR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                // What an input's frames are written through.
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // A run of layers of the bank, bound as an array even when it is one
+        // layer long: `create_view` defaults the dimension to D2 for a single
+        // layer, which would not match the shader's `texture_2d_array`.
+        let run = |from: usize, to: usize| {
+            ring.create_view(&wgpu::TextureViewDescriptor {
+                label: Some(&format!("bank layers {from}..{to}")),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                base_array_layer: from as u32,
+                array_layer_count: Some((to - from) as u32),
+                ..Default::default()
             })
         };
-        // COPY_DST on the ring is what both an input's frames and the stage's
-        // are written through.
-        let ring = bank(
-            "source bank",
-            params.layers(),
-            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        );
-        let stage = bank(
-            "stage",
-            monitors,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        );
-        // A one-layer ring still binds as an array: `create_view` defaults
-        // the dimension to D2 for a single layer, which would not match the
-        // shader's `texture_2d_array`.
-        let array_view = ring.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            ..Default::default()
-        });
-        let stage_views: Vec<wgpu::TextureView> = (0..monitors as u32)
-            .map(|layer| {
-                stage.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some(&format!("monitor {layer} of the stage")),
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: layer,
-                    array_layer_count: Some(1),
-                    ..Default::default()
-                })
+        let layer_views: Vec<Vec<wgpu::TextureView>> = (0..history)
+            .map(|slab| {
+                (0..monitors)
+                    .map(|m| {
+                        ring.create_view(&wgpu::TextureViewDescriptor {
+                            label: Some(&format!("monitor {m} of slab {slab}")),
+                            dimension: Some(wgpu::TextureViewDimension::D2),
+                            base_array_layer: (slab * monitors + m) as u32,
+                            array_layer_count: Some(1),
+                            ..Default::default()
+                        })
+                    })
+                    .collect()
             })
             .collect();
 
@@ -387,34 +387,66 @@ impl Feedback {
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("cameras reading the bank"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &uniforms,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&array_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
+        let bind = |label: &str, lower: &wgpu::TextureView, upper: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &uniforms,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(lower),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(upper),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        };
+        let everything = run(0, layers);
+        let whole = bind("reading the whole bank", &everything, &everything);
+        let writing = (0..history)
+            .map(|slab| {
+                let (split, above) = (slab * monitors, (slab + 1) * monitors);
+                let lower = (split > 0).then(|| run(0, split));
+                let upper = (above < layers).then(|| run(above, layers));
+                let (lower, upper) = match (&lower, &upper) {
+                    (Some(lower), Some(upper)) => (lower, upper),
+                    (Some(lower), None) => (lower, lower),
+                    (None, Some(upper)) => (upper, upper),
+                    (None, None) => unreachable!("a ring has at least two slabs"),
+                };
+                bind(&format!("reading round slab {slab}"), lower, upper)
+            })
+            .collect();
 
         let pipeline = crate::fullscreen_pipeline(
             device,
@@ -433,9 +465,9 @@ impl Feedback {
             inputs,
             history,
             ring,
-            stage,
-            stage_views,
-            bind_group,
+            layer_views,
+            writing,
+            whole,
             // The ring is zero-initialised, so every slab is a black frame
             // and which one is newest does not matter yet.
             newest: 0,
@@ -504,43 +536,15 @@ impl Feedback {
         );
     }
 
-    /// Copies the stage — every monitor's freshly drawn frame — into ring
-    /// slab `slab`.
-    fn commit(&self, encoder: &mut wgpu::CommandEncoder, slab: usize) {
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.stage,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.ring,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: 0,
-                    y: 0,
-                    z: (slab * self.monitors) as u32,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: self.monitors as u32,
-            },
-        );
-    }
-
     /// The dynamic offset that binds monitor `m`'s uniform slot.
     pub(crate) fn uniform_offset(&self, m: usize) -> u32 {
         (UNIFORM_STRIDE * m as u64) as u32
     }
 
-    /// Binds the monitor bank, for a pipeline built against
-    /// [`Feedback::layout`].
+    /// Binds the whole monitor bank, for a pipeline built against
+    /// [`Feedback::layout`] that draws to none of it.
     pub(crate) fn bind_group(&self) -> &wgpu::BindGroup {
-        &self.bind_group
+        &self.whole
     }
 
     pub(crate) fn layout(&self) -> &wgpu::BindGroupLayout {
@@ -552,13 +556,12 @@ impl Feedback {
     }
 
     /// Blank every monitor, restarting the loops from the seeds alone. The
-    /// whole ring, so no stale frame comes back round a delay later: the
-    /// stage is blanked and then committed to every slab.
+    /// whole ring, so no stale frame comes back round a delay later.
     pub fn clear(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("clear"),
         });
-        for view in &self.stage_views {
+        for view in self.layer_views.iter().flatten() {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("clear monitor"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -575,9 +578,6 @@ impl Feedback {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-        }
-        for slab in 0..self.history {
-            self.commit(&mut encoder, slab);
         }
         queue.submit([encoder.finish()]);
     }
@@ -627,11 +627,10 @@ impl Feedback {
         // fills the monitor, which is the identity framing carried through
         // the same transform every camera's is.
         let square_on = sample_transform(&Framing::identity(), aspect).rows();
-        // Where this pass's frame goes once drawn: the slab after the newest,
-        // which holds the oldest frame in the ring — the one only a camera at
-        // the longest delay still reads, in this same pass, before it is
-        // overwritten.
+        // Where this pass draws: the slab after the newest, holding the one
+        // frame in the ring older than any delay reaches.
         let next = (self.newest + 1) % self.history;
+        let (split, above) = (next * self.monitors, (next + 1) * self.monitors);
 
         for (m, monitor) in params.monitors.iter().enumerate() {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
@@ -717,7 +716,7 @@ impl Feedback {
                     monitor.colour.gamma,
                     monitor.seed.brightness(),
                 ],
-                info: [count as f32, (next * self.monitors + m) as f32, 0.0, 0.0],
+                info: [count as f32, (split + m) as f32, split as f32, above as f32],
                 analog: [grain, monitor.headroom, self.frame as f32, 0.0],
                 luma: {
                     let l = crate::params::luma_row();
@@ -735,7 +734,7 @@ impl Feedback {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("step"),
         });
-        for (m, view) in self.stage_views.iter().enumerate() {
+        for (m, view) in self.layer_views[next].iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("camera"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -753,10 +752,9 @@ impl Feedback {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[self.uniform_offset(m)]);
+            pass.set_bind_group(0, &self.writing[next], &[self.uniform_offset(m)]);
             pass.draw(0..3, 0..1);
         }
-        self.commit(&mut encoder, next);
         queue.submit([encoder.finish()]);
         self.newest = next;
         // Exact in f32 for two days at 60 Hz, and the grain is the only
@@ -812,27 +810,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_bank_is_the_ring_and_the_stage() {
+    fn a_bank_is_a_ring_of_every_monitor_and_the_inputs() {
         // Worked out from the format rather than from `bank_bytes`: one
         // 1920x1080 layer of Rgba16Float is 8 bytes a texel, and an
-        // undelayed graph is two copies of every monitor — the ring's one
-        // slab and the stage — so a pass can read every layer while writing
-        // one.
+        // undelayed graph is two copies of every monitor, so a pass can read
+        // every layer while writing one.
         let mut single = crate::config::single();
-        assert_eq!(single.layers(), 1);
+        assert_eq!(single.layers(), 2);
         assert_eq!(bank_bytes(&single, (1920, 1080)), 2 * 1920 * 1080 * 8);
         // Four monitors, and the layers are what multiply.
         let insanity = crate::config::insanity();
-        assert_eq!(insanity.layers(), 4);
+        assert_eq!(insanity.layers(), 8);
         assert_eq!(bank_bytes(&insanity, (3840, 2160)), 4 * 2 * 3840 * 2160 * 8);
         // A frame of delay is another slab of every monitor in the ring, and
         // an input is one layer past the ring, delayed or not.
         single.cameras[0].delay = 3;
-        assert_eq!(single.history(), 4);
-        assert_eq!(single.layers(), 4);
+        assert_eq!(single.history(), 5);
+        assert_eq!(single.layers(), 5);
         assert_eq!(bank_bytes(&single, (1920, 1080)), 5 * 1920 * 1080 * 8);
         single.inputs = vec![crate::input::Input::Pattern(crate::input::Pattern::Bars)];
-        assert_eq!(single.layers(), 5);
+        assert_eq!(single.layers(), 6);
         assert_eq!(bank_bytes(&single, (1920, 1080)), 6 * 1920 * 1080 * 8);
     }
 
@@ -850,7 +847,7 @@ mod tests {
             crate::input::Input::Pattern(crate::input::Pattern::Bars);
             crate::config::MAX_INPUTS
         ];
-        assert_eq!(most.layers(), 12);
+        assert_eq!(most.layers(), 20);
         assert!(bank_fits(&most, (3840, 2160)).is_ok());
         // Four times the texels each, on twenty of them, is past it — and the
         // refusal says both halves of why, since neither the graph nor the
@@ -861,8 +858,8 @@ mod tests {
             "{why}"
         );
         // The ring counts: the same graph at 4K, which fits undelayed, is
-        // refused once one camera asks for the full delay — thirty-one slabs
-        // of eight monitors, four inputs and the stage.
+        // refused once one camera asks for the full delay — thirty-two slabs
+        // of eight monitors and four inputs.
         most.cameras[0].delay = crate::params::Camera::MAX_DELAY;
         let why = bank_fits(&most, (3840, 2160)).unwrap_err();
         assert!(why.contains("260 bank layers"), "{why}");

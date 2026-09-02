@@ -835,11 +835,11 @@ impl Params {
         }
     }
 
-    /// How many past frames of every monitor the bank keeps: one for the
-    /// frame every camera reads, plus one per frame of the longest delay any
-    /// camera asks for.
+    /// How many frames of every monitor the bank keeps as a ring: the one a
+    /// pass is drawing, the one every camera reads, and one more per frame
+    /// of the longest delay any camera asks for.
     pub fn history(&self) -> usize {
-        1 + self
+        2 + self
             .cameras
             .iter()
             .map(|camera| camera.delay as usize)

@@ -33,7 +33,8 @@ struct Uniforms {
     chroma: mat3x3<f32>,
     // x: brightness. y: contrast. z: phosphor gamma. w: the blob's brightness.
     levels: vec4<f32>,
-    // x: tap count. y: this monitor's own layer, for fs_present.
+    // x: tap count. y: this monitor's own layer, for fs_present. z: the
+    // first bank layer past `lower`. w: the first bank layer of `upper`.
     info: vec4<f32>,
     // x: grain amplitude. y: the amplifier's headroom. z: frame counter.
     analog: vec4<f32>,
@@ -47,8 +48,12 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var src_tex: texture_2d_array<f32>;
-@group(0) @binding(2) var src_samp: sampler;
+// The bank in two runs of layers, split round the slab a camera pass is
+// drawing to: a pass may not sample the layers it writes, and a view is one
+// run. A pass that writes none of the bank binds the whole of it as `lower`.
+@group(0) @binding(1) var lower: texture_2d_array<f32>;
+@group(0) @binding(2) var upper: texture_2d_array<f32>;
+@group(0) @binding(3) var src_samp: sampler;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -106,11 +111,13 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
 // go nowhere.
 fn seen_at(uv: vec2<f32>, layer: i32) -> vec3<f32> {
     let inside = all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0));
-    return select(
-        vec3<f32>(0.0),
-        textureSampleLevel(src_tex, src_samp, uv, layer, 0.0).rgb,
-        inside,
-    );
+    if !inside {
+        return vec3<f32>(0.0);
+    }
+    if layer < i32(u.info.z) {
+        return textureSampleLevel(lower, src_samp, uv, layer, 0.0).rgb;
+    }
+    return textureSampleLevel(upper, src_samp, uv, layer - i32(u.info.w), 0.0).rgb;
 }
 
 // A cheap integer hash. The grain has to differ at every texel and every
@@ -201,7 +208,7 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_present(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(
-        textureSampleLevel(src_tex, src_samp, in.uv, i32(u.info.y), 0.0).rgb,
+        textureSampleLevel(lower, src_samp, in.uv, i32(u.info.y), 0.0).rgb,
         1.0,
     );
 }

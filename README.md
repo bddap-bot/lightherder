@@ -567,9 +567,8 @@ with none — `--bench` steps the graph, and a device that is not there uploads
 nothing — so its row is the passes and not the wire.
 
 The bank itself is what grows: at eight bytes a texel, a ring holding every
-monitor once per frame of the longest camera delay plus one, the stage a pass
-draws on, and every input — half a gigabyte for `insanity` at 4K, and refused
-past two.
+monitor twice plus once more per frame of the longest camera delay, and every
+input once — half a gigabyte for `insanity` at 4K, and refused past two.
 
 ## Playing it
 

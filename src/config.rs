@@ -1101,7 +1101,7 @@ mod tests {
         .unwrap();
         assert_eq!(p.cameras[0].delay, 4);
         assert_eq!(p.cameras[1].delay, 0);
-        assert_eq!(p.history(), 5);
+        assert_eq!(p.history(), 6);
     }
 
     #[test]
