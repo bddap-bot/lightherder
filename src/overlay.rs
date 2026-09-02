@@ -40,7 +40,7 @@ const GLYPH: i32 = 8;
 const STRIP_W: i32 = 84;
 /// A transport button and the pitch between them. Seven glyphs and a texel
 /// each side — a ceiling, not a fit: a map may bind any key to any button,
-/// and the axes' captions carry a knob's whole name ("loop gain, green -"),
+/// and the axes' captions carry a knob's whole name ("green gain -"),
 /// which is what the wider [`STRIP_W`] is for. A caption past seven clips.
 const BUTTON_W: i32 = 60;
 const BUTTON_H: i32 = 16;

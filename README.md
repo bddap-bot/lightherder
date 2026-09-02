@@ -250,6 +250,7 @@ button on every rig.
 | fader 1 | the **send**, on a rig that has an input; nothing on one that has not |
 | faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
+| rotaries 1–8, page 2 | the focused **camera** still: red, green and blue gain, bloom radius, key threshold, key softness, key hue, key tolerance |
 | S 1–8 | focus camera 1–8, as many as the graph has a choice of |
 | M 1–8 | focus monitor 1–8, likewise |
 | R 1–4 | focus input 1–4, likewise |
@@ -285,12 +286,9 @@ bring the knobs to; a `midi.toml` that binds a select button on a node the
 graph has not got — or the send on a rig with no input to send — is refused
 the same way, rather than lighting a button that lies or spending a fader on
 silence. Nothing is bound to quit — the window manager ends the instrument,
-and a slipped finger on the surface must not be able to. Eight of the twenty-four
-knobs are not on the factory map: the three per-channel gain offsets, which
-colour a rigid gain that is itself on a rotary; the bloom radius, which sizes
-a halo whose amount is; and the keyer's four, which wait for a hand that keys
-more than it bleeds and swaps this map for its own. They are set in the graph
-file, and a `midi.toml` may put any of them on a control.
+and a slipped finger on the surface must not be able to. Every knob is on the
+factory map, on one page or the other; page 2 keeps the rotaries the camera's
+and leaves its faders free for a `midi.toml` to claim.
 
 **A fader does not take its knob over until it has passed through where the
 knob already is.** A fader sends where it is standing, so without that,

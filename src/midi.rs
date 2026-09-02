@@ -140,6 +140,14 @@ const fn fader(cc: u8, knob: Knob) -> Fader {
     }
 }
 
+const fn page_two(cc: u8, knob: Knob) -> Fader {
+    Fader {
+        cc,
+        knob,
+        page: Page::Two,
+    }
+}
+
 /// A relative `XDG_CONFIG_HOME` is ignored the way the spec says to.
 pub fn map_path() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
@@ -170,11 +178,9 @@ impl Map {
     /// on a rig with none, the same as a select on a node the graph has not
     /// got.
     ///
-    /// Eight knobs are deliberately not here. The three per-channel gain
-    /// offsets and the bloom radius are trims of knobs that are on the
-    /// surface, and the keyer's four wait for a hand that keys more than it
-    /// bleeds and swaps this map for its own. They are set in the graph
-    /// file, and a `midi.toml` that wants one on a fader may say so.
+    /// Page 2 keeps the rotaries the camera's: the three per-channel gain
+    /// offsets and the bloom radius, trims of knobs on page 1, and then the
+    /// keyer's four. Its faders are free for a `midi.toml` to claim.
     ///
     /// `params` decides the rest of the layout: the send is bound only where
     /// there is one, and the select rows are as wide as the graph and no
@@ -202,6 +208,14 @@ impl Map {
                     fader(21, Knob::Bloom),
                     fader(22, Knob::ChromaBleed),
                     fader(23, Knob::Noise),
+                    page_two(16, Knob::GainR),
+                    page_two(17, Knob::GainG),
+                    page_two(18, Knob::GainB),
+                    page_two(19, Knob::BloomRadius),
+                    page_two(20, Knob::KeyThreshold),
+                    page_two(21, Knob::KeySoftness),
+                    page_two(22, Knob::KeyHue),
+                    page_two(23, Knob::KeyTolerance),
                 ])
                 .collect(),
             button: nano_buttons(params),
@@ -1706,6 +1720,14 @@ mod tests {
                 fader(21, Knob::Bloom),
                 fader(22, Knob::ChromaBleed),
                 fader(23, Knob::Noise),
+                page_two(16, Knob::GainR),
+                page_two(17, Knob::GainG),
+                page_two(18, Knob::GainB),
+                page_two(19, Knob::BloomRadius),
+                page_two(20, Knob::KeyThreshold),
+                page_two(21, Knob::KeySoftness),
+                page_two(22, Knob::KeyHue),
+                page_two(23, Knob::KeyTolerance),
             ]
         );
         // The three select rows, one kind of node each and each as wide as
@@ -1878,19 +1900,7 @@ mod tests {
             .filter(|knob| !map.fader.iter().any(|f| f.knob == *knob))
             .map(Knob::name)
             .collect();
-        assert_eq!(
-            missing,
-            [
-                "loop gain, red",
-                "loop gain, green",
-                "loop gain, blue",
-                "bloom radius",
-                "key threshold",
-                "key softness",
-                "key hue",
-                "key tolerance",
-            ]
-        );
+        assert_eq!(missing, [""; 0]);
         // And every control the map names is one the surface has. The rows
         // are eight-wide blocks of control numbers, so a select row grown
         // past eight walks off the end of its block into numbers no button
@@ -1982,14 +1992,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    fn on_page_two(cc: u8, knob: Knob) -> Fader {
-        Fader {
-            cc,
-            knob,
-            page: Page::Two,
-        }
-    }
-
     #[test]
     fn a_fader_s_page_is_read_from_the_file_and_is_one_unless_it_says() {
         let map: Map = toml::from_str(
@@ -1999,10 +2001,7 @@ mod tests {
              [[button]]\ncc = 71\ncommand = \"page\"\n",
         )
         .unwrap();
-        assert_eq!(
-            map.fader,
-            [fader(0, Knob::Hue), on_page_two(0, Knob::Noise)]
-        );
+        assert_eq!(map.fader, [fader(0, Knob::Hue), page_two(0, Knob::Noise)]);
         map.validate(&crate::config::widest()).unwrap();
         // The button has one lamp, so there are two pages and no third.
         let why = toml::from_str::<Map>(
@@ -2033,23 +2032,23 @@ mod tests {
     fn a_control_may_carry_one_knob_a_page_and_a_button_is_on_every_page() {
         let widest = crate::config::widest();
         let mut map = Map::nano_kontrol2(&widest);
-        map.fader.push(on_page_two(4, Knob::Noise));
+        map.fader.push(page_two(4, Knob::Noise));
         map.validate(&widest).unwrap();
-        map.fader.push(on_page_two(4, Knob::Bloom));
+        map.fader.push(page_two(4, Knob::Bloom));
         assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
         // A button is not paged, so a fader on page 2 cannot share its
         // number, whichever of the two the file names first.
         let mut map = Map::nano_kontrol2(&widest);
-        map.fader.push(on_page_two(62, Knob::Noise));
+        map.fader.push(page_two(62, Knob::Noise));
         assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
         let mut map = Map::nano_kontrol2(&widest);
-        map.fader.insert(0, on_page_two(62, Knob::Noise));
+        map.fader.insert(0, page_two(62, Knob::Noise));
         assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
         // A knob on page 2 of a map with no button to turn the page is a
         // knob nothing can reach, refused the way a select on equipment
         // the graph has not got is.
         let mut map = Map::nano_kontrol2(&widest);
-        map.fader.push(on_page_two(4, Knob::Noise));
+        map.fader.push(page_two(4, Knob::Noise));
         map.button.retain(|b| b.command != "page");
         let why = map.validate(&widest).unwrap_err();
         assert!(why.contains("page 2") && why.contains("no button"), "{why}");
@@ -2061,7 +2060,7 @@ mod tests {
     fn the_page_button_turns_the_faders_over_and_lets_go_of_every_grip() {
         let params = crate::config::widest();
         let mut map = Map::nano_kontrol2(&params);
-        map.fader.push(on_page_two(4, Knob::Noise));
+        map.fader.push(page_two(4, Knob::Noise));
         let mut midi = Midi::new(map, &params).unwrap();
         assert_eq!(midi.page(), Page::One);
         // Sweep up from the bottom past contrast (a quarter of the way up)
@@ -2099,7 +2098,7 @@ mod tests {
     }
 
     #[test]
-    fn the_page_button_is_lit_on_page_two() {
+    fn the_page_button_is_lit_page_two() {
         let (mut midi, _) = surface();
         let focus = at(2, 1);
         let lamp = crate::lamps::lamp(PAGE);
