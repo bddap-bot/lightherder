@@ -264,7 +264,7 @@ reversal, the flips and the page on every rig.
 | fader 8, page 2 | the focused **camera**'s delay, in whole frames up to the graph's reach; nothing on a graph with none |
 | rotaries 1–8, page 2 | the focused **camera** still: red, green and blue gain, bloom radius, key threshold, key softness, key hue, key tolerance |
 | S 1–5 | focus camera 1–5, as many as the graph has a choice of |
-| S 6, S 7 | **precision -**, **precision +**: halve or double what a full throw of a fader moves, on a ladder from a whole travel down to a sixteenth; a quarter to begin with; lit on whichever side of that the ladder is |
+| S 6, S 7 | **precision -**, **precision +**: halve or double what a full throw of a fader moves, on a ladder from a whole travel down to a sixteenth; a quarter to begin with; the log says which rung |
 | S 8 | **clutch**: while held, every fader and rotary moves nothing, so a hand can bring one back from a rail; lit while held |
 | M 1–8 | focus monitor 1–8, likewise |
 | R 1–4 | focus input 1–4, likewise |
@@ -321,7 +321,8 @@ fader and rotary moves nothing, and letting go resumes from the new position.
 Rotation, hue and the key hue wrap instead of clamping. The two whole-number
 knobs, the delay and the period, are turned a frame at a time, ticking over
 at the half like a detent; at a quarter a full throw over a reach of four is
-one frame.
+one frame, and at a sixteenth the delay wants two throws, clutched between,
+for the same frame.
 
 The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.

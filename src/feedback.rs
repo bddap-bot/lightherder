@@ -35,8 +35,9 @@ const BLOB_RADIUS: f32 = 0.06;
 const BLOB_CENTRE: [f32; 2] = [0.25, 0.0];
 
 /// Most taps one monitor can be fed by. Sized for comfort: all-to-all with
-/// eight cameras is eight taps, so this leaves room for every camera to look
-/// through a four-way splitter on top. `config::validate` holds the line.
+/// every camera the board can select is five taps, so this leaves room for
+/// each to look through a splitter several ways on top. `config::validate`
+/// holds the line.
 pub const MAX_TAPS: usize = 32;
 
 /// The most GPU memory a bank may ask for. A cap in bytes rather than in

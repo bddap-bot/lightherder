@@ -3,14 +3,10 @@
 //! instrument — there is no keyboard.
 //!
 //! Two kinds of control, because a surface has two kinds of thing on it. A
-//! fader or a rotary sends where it *is*; it names a [`Knob`], and how far
-//! it moved since it was last heard from turns the knob by that much of the
-//! knob's travel, scaled by the [`Precision`] the ladder is on. Nothing
-//! jumps: a knob is never set to where a fader happens to stand, so a
-//! hot-plug, a page turn or a change of focus throws nothing, and a fader on
-//! its rail is brought back under the clutch. A button sends that it was
-//! pushed, so it names a command by the two words [`crate::command`] spells
-//! it with.
+//! fader or a rotary names a [`Knob`] and turns it by how far it has moved,
+//! never to where it stands — the README says why. A button sends that it
+//! was pushed, so it names a command by the two words [`crate::command`]
+//! spells it with.
 //!
 //! ALSA raw MIDI and no library: a USB controller is `/dev/snd/midiC<card>D0`
 //! and reading it gives the wire bytes. Nothing here needs the sequencer's
@@ -35,7 +31,7 @@ use web_time::Instant;
 use crate::affine::Axis;
 use crate::command::{action_for_name, names, Action, Edge};
 use crate::lamps::{lamp, Lamplight, Lamps};
-use crate::params::{Focus, Knob, Node, Params, Seed};
+use crate::params::{Focus, Knob, Limit, Node, Params, Seed};
 
 /// Where ALSA puts its character devices.
 const DEV_SND: &str = "/dev/snd";
@@ -591,10 +587,10 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
         button(FLIP_X, "flip x"),
         button(FLIP_Y, "flip y"),
         button(PAGE, "page"),
-        // The clutch is the corner button, findable by feel while the other
-        // hand is on the fader it is freeing.
         button(FINER, "precision -"),
         button(COARSER, "precision +"),
+        // The corner, findable by feel while the other hand is on the fader
+        // it is freeing.
         button(CLUTCH, "clutch"),
     ]);
     out
@@ -779,14 +775,13 @@ pub struct Midi {
     snd: PathBuf,
     cards: PathBuf,
     port: Option<Port>,
-    /// Where each control was last seen, 0 at the bottom and 1 at the top, by
-    /// control number rather than by binding: a page turn puts another knob
-    /// under the same fader, and the fader has not moved.
-    standing: [Option<f32>; 128],
-    /// One per entry of `map.fader`: how much of a frame a whole-frame knob's
-    /// fader has moved since it last paid one, within half a frame either
-    /// way. It is the fader's motion, so it follows the fader, not the knob.
-    owed: Vec<f32>,
+    /// Where each control was last seen, by control number rather than by
+    /// binding: a page turn puts another knob under the same fader, and the
+    /// fader has not moved.
+    standing: [Option<u8>; 128],
+    /// What a whole-number knob has been turned by and not yet paid, within
+    /// half a step either way.
+    owed: [f32; Knob::ALL.len()],
     precision: Precision,
     page: Page,
     /// One per entry of `map.button`: whether it is being held. A button is
@@ -847,7 +842,7 @@ impl Midi {
         Ok(Midi {
             action,
             standing: [None; 128],
-            owed: vec![0.0; map.fader.len()],
+            owed: [0.0; Knob::ALL.len()],
             precision: Precision::DEFAULT,
             page: Page::One,
             held: vec![false; map.button.len()],
@@ -876,20 +871,18 @@ impl Midi {
             Page::One => Page::Two,
             Page::Two => Page::One,
         };
-        self.owed.fill(0.0);
     }
 
     pub fn precision(&self) -> Precision {
         self.precision
     }
 
-    /// One rung of the ladder either way; the rails absorb the rest.
-    pub fn step_precision(&mut self, action: Action) {
-        self.precision = match action {
-            Action::Finer => self.precision.finer(),
-            Action::Coarser => self.precision.coarser(),
-            _ => self.precision,
-        };
+    pub fn finer(&mut self) {
+        self.precision = self.precision.finer();
+    }
+
+    pub fn coarser(&mut self) {
+        self.precision = self.precision.coarser();
     }
 
     /// Whether a hand is holding the clutch, read off the buttons themselves
@@ -1020,15 +1013,7 @@ impl Midi {
         }) | when(shown.seed.lit(), Action::Seed)
             | when(shown.overlay, Action::Overlay)
             | when(shown.solo, Action::Solo)
-            | when(self.page == Page::Two, Action::Page)
-            | when(
-                self.precision.halvings > Precision::DEFAULT.halvings,
-                Action::Finer,
-            )
-            | when(
-                self.precision.halvings < Precision::DEFAULT.halvings,
-                Action::Coarser,
-            );
+            | when(self.page == Page::Two, Action::Page);
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
@@ -1045,10 +1030,8 @@ impl Midi {
     /// about to press them, so it appends the releases after that backlog.
     fn drop_port(&mut self) {
         self.port = None;
-        // The next surface plugged in is standing wherever it was left, and
-        // owes nothing.
+        // The next surface plugged in is standing wherever it was left.
         self.standing = [None; 128];
-        self.owed.fill(0.0);
         // A fresh cable is a fresh chance for whatever went wrong last time
         // to have been the old one.
         self.complaint = None;
@@ -1103,27 +1086,30 @@ impl Midi {
         // Where the control is, whatever it is bound to: a fader moved while
         // its page is hidden has still moved, and the knob it turns on the
         // other page must not be charged for that when the page comes back.
-        let position = f32::from(message.value) / 127.0;
-        let from = self.standing[usize::from(message.control)].replace(position);
-        if let Some(i) = self
+        let from = self.standing[usize::from(message.control)].replace(message.value);
+        if let Some(fader) = self
             .map
             .fader
             .iter()
-            .position(|f| f.cc == message.control && f.page == self.page)
+            .find(|f| f.cc == message.control && f.page == self.page)
         {
-            let fader = self.map.fader[i];
-            let from = from?;
+            let steps = f32::from(message.value) - f32::from(from?);
             if self.clutched() {
                 return None;
             }
-            let (low, high) = fader.knob.limit(params).ends();
-            self.owed[i] += (position - from) * self.precision.gain() * (high - low);
-            let paid = if fader.knob.is_whole() {
-                self.owed[i].round()
-            } else {
-                self.owed[i]
+            let limit = fader.knob.limit(params);
+            let (low, high) = limit.ends();
+            let by = steps / 127.0 * self.precision.gain() * (high - low);
+            let paid = match limit {
+                Limit::Whole(_) => {
+                    let owed = &mut self.owed[fader.knob as usize];
+                    *owed += by;
+                    let paid = owed.round();
+                    *owed -= paid;
+                    paid
+                }
+                Limit::Clamp(..) | Limit::Wrap => by,
             };
-            self.owed[i] -= paid;
             return (paid != 0.0).then_some(Action::Turn(fader.knob, paid));
         }
         let i = self
@@ -2311,8 +2297,11 @@ mod tests {
             (FINER, "1/16"),
             (FINER, "1/16"),
         ] {
-            let pressed = feed(&mut midi, &params, &cc(press, 127));
-            midi.step_precision(pressed[0]);
+            match feed(&mut midi, &params, &cc(press, 127))[..] {
+                [Action::Finer] => midi.finer(),
+                [Action::Coarser] => midi.coarser(),
+                ref other => panic!("{other:?}"),
+            }
             feed(&mut midi, &params, &cc(press, 0));
             assert_eq!(midi.precision().to_string(), want);
             let fraction = throw(&mut midi);
@@ -2321,16 +2310,6 @@ mod tests {
                 "{want}: a full throw moved {fraction}"
             );
         }
-        // The pair's lamps say which side of the default the ladder is on.
-        let focus = at(0, 0);
-        let lit = |midi: &Midi, cc: u8| midi.wanted(focus, Shown::default()) & lamp(cc) != 0;
-        assert!(lit(&midi, FINER) && !lit(&midi, COARSER));
-        for _ in 0..2 {
-            midi.step_precision(Action::Coarser);
-        }
-        assert!(!lit(&midi, FINER) && !lit(&midi, COARSER));
-        midi.step_precision(Action::Coarser);
-        assert!(!lit(&midi, FINER) && lit(&midi, COARSER));
     }
 
     #[test]
@@ -2387,8 +2366,8 @@ mod tests {
         assert_eq!(delay(&mut midi, 127), Some(1.0));
         assert_eq!(delay(&mut midi, 64), None);
         assert_eq!(delay(&mut midi, 0), Some(-1.0));
-        midi.step_precision(Action::Coarser);
-        midi.step_precision(Action::Coarser);
+        midi.coarser();
+        midi.coarser();
         assert_eq!(delay(&mut midi, 127), Some(4.0));
     }
 

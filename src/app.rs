@@ -591,8 +591,12 @@ impl App {
                     framing.flipped()
                 );
             }
-            Action::Finer | Action::Coarser => {
-                self.midi.step_precision(action);
+            Action::Finer => {
+                self.midi.finer();
+                log::info!("precision {}", self.midi.precision());
+            }
+            Action::Coarser => {
+                self.midi.coarser();
                 log::info!("precision {}", self.midi.precision());
             }
             // The surface reads the clutch off its own held buttons; the line

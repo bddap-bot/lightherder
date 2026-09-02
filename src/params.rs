@@ -676,6 +676,7 @@ impl Limit {
     pub const fn ends(self) -> (f32, f32) {
         match self {
             Limit::Clamp(low, high) => (low, high),
+            Limit::Whole(high) => (0.0, high as f32),
             Limit::Wrap => (-std::f32::consts::PI, std::f32::consts::PI),
         }
     }
@@ -701,6 +702,10 @@ pub enum Side {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Limit {
     Clamp(f32, f32),
+    /// A count of frames or passes, from none up to this many: a knob that
+    /// moves a whole one at a time, which a surface turning it by deltas
+    /// has to bank up to.
+    Whole(u32),
     Wrap,
 }
 
@@ -788,13 +793,6 @@ impl Knob {
     /// walk over the fields goes through [`Params::set`] and never `knob_mut`.
     pub const fn owns_a_field(self) -> bool {
         !matches!(self, Knob::Gain)
-    }
-
-    /// Whether the knob counts whole frames or passes rather than reading a
-    /// float, which is what [`Params::whole_mut`] reaches and what a surface
-    /// turning it by deltas has to bank a whole step for.
-    pub const fn is_whole(self) -> bool {
-        matches!(self, Knob::Delay | Knob::Period)
     }
 
     /// Whether turning one of these knobs moves a value the other reads.
@@ -893,7 +891,7 @@ impl Knob {
     pub fn limit(self, params: &Params) -> Limit {
         match self {
             // Whole frames, as far as the ring the graph bought goes.
-            Knob::Delay => Limit::Clamp(0.0, params.delay as f32),
+            Knob::Delay => Limit::Whole(params.delay),
             // Zero would divide by zero in the sampling transform.
             Knob::Zoom => Limit::Clamp(0.25, 4.0),
             // Spinning one way for long enough must not run the number away.
@@ -941,7 +939,7 @@ impl Knob {
             // whole picture into the darkest eighth, which is a sound worth
             // having; the top is well clear of anything a monitor displays.
             Knob::Headroom => Limit::Clamp(0.125, 8.0),
-            Knob::Period => Limit::Clamp(0.0, Monitor::MAX_PERIOD as f32),
+            Knob::Period => Limit::Whole(Monitor::MAX_PERIOD),
             // A crosspoint is a fraction of what it is switching. Above 1.0
             // it would be an amplifier, which is what the loop gain already
             // is — and on a send it would be an input brighter than itself.
@@ -1066,12 +1064,9 @@ impl Params {
         }
     }
 
-    /// Put `knob` at `value` outright, which is what a fader does: it sends
-    /// where it is standing rather than which way it moved.
-    ///
     /// Through a delta rather than by writing the field, so the rails, the
     /// wrap and the rigid three-channel step live in one place.
-    pub fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
+    fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
         self.nudge(knob, value - self.knob(knob, focus), focus)
     }
 
@@ -1137,10 +1132,8 @@ impl Params {
         }
     }
 
-    /// Turn `knob` by `delta` of its own units, which is what a fader does:
-    /// it sends how far it moved. Past a rail the rest of the step is dropped,
-    /// and a whole-frame knob rounds to the nearest frame — the surface owes
-    /// it a whole step at a time.
+    /// Turn `knob` by `delta` of its own units. Past a rail the rest of the
+    /// step is dropped.
     pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
         // The rigid gain knob is the one that is not a single value: clamp its
         // step once against the tightest channel, so hitting the rail slides
@@ -1153,17 +1146,22 @@ impl Params {
             }
             return;
         }
-        let limit = knob.limit(self);
-        if let Some(count) = self.whole_mut(knob, focus) {
-            let (low, high) = limit.ends();
-            *count = (*count as f32 + delta).round().clamp(low, high) as u32;
-            return;
+        match knob.limit(self) {
+            Limit::Whole(most) => {
+                let count = self
+                    .whole_mut(knob, focus)
+                    .expect("a knob with a whole limit reads a count");
+                *count = (*count as f32 + delta).round().clamp(0.0, most as f32) as u32;
+            }
+            Limit::Clamp(low, high) => {
+                let field = self.knob_mut(knob, focus);
+                *field = (*field + delta).clamp(low, high);
+            }
+            Limit::Wrap => {
+                let field = self.knob_mut(knob, focus);
+                *field = wrap_pi(*field + delta);
+            }
         }
-        let field = self.knob_mut(knob, focus);
-        *field = match limit {
-            Limit::Clamp(low, high) => (*field + delta).clamp(low, high),
-            Limit::Wrap => wrap_pi(*field + delta),
-        };
     }
 
     fn whole_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut u32> {
@@ -1411,11 +1409,11 @@ mod tests {
     }
 
     #[test]
-    fn a_whole_knob_is_the_one_whose_field_is_a_count() {
+    fn a_whole_limit_is_the_one_on_a_knob_whose_field_is_a_count() {
         let mut params = Params::default();
         for knob in Knob::ALL {
             assert_eq!(
-                knob.is_whole(),
+                matches!(knob.limit(&params), Limit::Whole(_)),
                 params.whole_mut(knob, Focus::default()).is_some(),
                 "{}",
                 knob.name()
@@ -1561,6 +1559,7 @@ mod tests {
             // room upward is still moved.
             let delta = match knob.limit(&params) {
                 Limit::Clamp(_, high) if params.knob(knob, Focus::default()) >= high => -0.05,
+                Limit::Whole(most) if params.knob(knob, Focus::default()) >= most as f32 => -0.05,
                 _ => 0.05,
             };
             nudge(&mut params, knob, step_for(knob, delta));
@@ -1754,7 +1753,7 @@ mod tests {
         let focus = Focus::default();
         assert_eq!(
             Knob::Period.limit(&params),
-            Limit::Clamp(0.0, Monitor::MAX_PERIOD as f32)
+            Limit::Whole(Monitor::MAX_PERIOD)
         );
         params.set(Knob::Period, 2.4, focus);
         assert_eq!(params.monitors[0].period, 2);
@@ -1772,7 +1771,7 @@ mod tests {
         let mut params = crate::config::shaped(2, 2, 0);
         params.delay = 4;
         let focus = Focus::default();
-        assert_eq!(Knob::Delay.limit(&params), Limit::Clamp(0.0, 4.0));
+        assert_eq!(Knob::Delay.limit(&params), Limit::Whole(4));
         params.set(Knob::Delay, 2.4, focus);
         assert_eq!(params.cameras[0].delay, 2);
         assert_eq!(params.knob(Knob::Delay, focus), 2.0);
@@ -2112,6 +2111,7 @@ mod tests {
             const STEP: f32 = 0.002;
             let step = match knob.limit(&params) {
                 Limit::Clamp(_, high) if params.knob(knob, focus) >= high => -STEP,
+                Limit::Whole(most) if params.knob(knob, focus) >= most as f32 => -STEP,
                 _ => STEP,
             };
             let step = step_for(knob, step);

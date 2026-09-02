@@ -151,12 +151,12 @@ const COMMANDS: &[Command] = &[
     cmd(
         "precision -",
         Action::Finer,
-        "a full throw moves half as much; lit below the default",
+        "a full throw moves half as much",
     ),
     cmd(
         "precision +",
         Action::Coarser,
-        "a full throw moves twice as much; lit above the default",
+        "a full throw moves twice as much",
     ),
     cmd(
         "clutch",
