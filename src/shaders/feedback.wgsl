@@ -195,10 +195,12 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
         // what the lens left of texel detail: the halo is smooth at that
         // scale, so (1 - bloom) of it survives the mix. The arms are summed
         // in pairs so four equal samples come back as exactly the centre.
-        // Skipped at rest: four reads a texel on every tap of every monitor,
-        // for nothing.
+        // Skipped at rest — four reads a texel on every tap of every monitor,
+        // for nothing — and past the source's edge, where the centre is the
+        // dark room and an arm that lands back inside would cut a dark rim
+        // into whatever else lights the fragment.
         let sharpness = u.analog.w;
-        if sharpness > 0.0 {
+        if sharpness > 0.0 && inside(src_uv) {
             let texel = 1.0 / vec2<f32>(textureDimensions(lower));
             let across = vec2<f32>(tap.row0.x, tap.row1.x) * texel.x;
             let down = vec2<f32>(tap.row0.y, tap.row1.y) * texel.y;

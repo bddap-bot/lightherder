@@ -2595,17 +2595,24 @@ fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
         0,
         &quartered_frame((SIZE, SIZE), [light, dark, light, dark]),
     );
+    let sharpness = 2.0;
     let rest = sharpened_input(&mut h, &p, 0.0);
-    let sharp = sharpened_input(&mut h, &p, 2.0);
-    let middle = [0.5, 0.5];
+    let sharp = sharpened_input(&mut h, &p, sharpness);
+    // Probed a quarter of the way in, off the other step: on the centre
+    // lines a mask with one arm missing still steepens both ways, since
+    // every texel there straddles both steps. The number is exact — each
+    // side of a step moves by a quarter of it per arm that crosses, and
+    // one arm does — so a mask at half strength cannot pass either.
+    let corner = [0.25, 0.25];
     for horizontal in [true, false] {
         let (was, is) = (
-            steepest(&rest, middle, horizontal),
-            steepest(&sharp, middle, horizontal),
+            steepest(&rest, corner, horizontal),
+            steepest(&sharp, corner, horizontal),
         );
+        let want = was * (1.0 + sharpness / 2.0);
         assert!(
-            is > was + 16.0,
-            "{} step went {was} -> {is}",
+            was > 48.0 && (is - want).abs() <= 1.0,
+            "{} step went {was} -> {is}, wanted {want}",
             if horizontal { "horizontal" } else { "vertical" }
         );
     }
