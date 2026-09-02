@@ -7,6 +7,7 @@ use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
 use crate::midi::ROW_BUTTONS;
 use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Node, Params, Seed, Side};
+use crate::rig::Rig;
 
 /// More monitors than this and the uniform buffer, the present grid and the
 /// texture array all need a second look; fewer keeps every one of them dumb.
@@ -37,14 +38,14 @@ const _: () = assert!(
 /// *surface* rather than about any rig means by "the factory layout".
 #[cfg(test)]
 pub(crate) fn widest() -> Params {
-    rig(ROW_BUTTONS, MAX_MONITORS, MAX_INPUTS)
+    shaped(ROW_BUTTONS, MAX_MONITORS, MAX_INPUTS)
 }
 
 /// A graph of a named shape, for the tests that are about the *surface* a
 /// graph builds rather than about any light it makes. One-hot looks and a
 /// switcher left off, so even the widest rig stays inside the tap bound.
 #[cfg(test)]
-pub(crate) fn rig(cameras: usize, monitors: usize, inputs: usize) -> Params {
+pub(crate) fn shaped(cameras: usize, monitors: usize, inputs: usize) -> Params {
     Params {
         cameras: (0..cameras)
             .map(|c| Camera {
@@ -291,6 +292,11 @@ pub fn webcam() -> Params {
     }
 }
 
+/// Blair's 4K rig itself, at its performance setting — see [`Rig`].
+pub fn rig() -> Params {
+    Rig::PERFORMANCE.params()
+}
+
 /// A weight per monitor with one of them full — a camera aimed straight at
 /// the one it watches.
 fn one_hot(monitors: usize, at: usize) -> Vec<f32> {
@@ -303,13 +309,14 @@ fn one_hot(monitors: usize, at: usize) -> Vec<f32> {
 pub type Preset = (&'static str, fn() -> Params);
 
 /// The presets, by the names the command line and the error messages use.
-pub const PRESETS: [Preset; 6] = [
+pub const PRESETS: [Preset; 7] = [
     ("single", single as fn() -> Params),
     ("analog", analog),
     ("crossed", crossed),
     ("insanity", insanity),
     ("external", external),
     ("webcam", webcam),
+    ("rig", rig),
 ];
 
 /// `arg` is a preset name or a path to a TOML file of [`Params`]. Either way
@@ -1160,14 +1167,14 @@ mod tests {
         // could play at whatever the file left its knobs on.
         // One of every other kind, so only the count under test can be what
         // the refusal is about.
-        let shaped = |node, n| match node {
-            Node::Camera => rig(n, 1, 1),
-            Node::Monitor => rig(1, n, 1),
-            Node::Input => rig(1, 1, n),
+        let with = |node, n| match node {
+            Node::Camera => shaped(n, 1, 1),
+            Node::Monitor => shaped(1, n, 1),
+            Node::Input => shaped(1, 1, n),
         };
         // The reach is the camera's whole bound, so it is the kind that
         // shows the reach's own words.
-        let why = validate(&shaped(Node::Camera, ROW_BUTTONS + 1)).unwrap_err();
+        let why = validate(&with(Node::Camera, ROW_BUTTONS + 1)).unwrap_err();
         assert!(
             why.contains("one button per node")
                 && why.contains(&format!("{} cameras", ROW_BUTTONS + 1)),
@@ -1181,7 +1188,7 @@ mod tests {
             (Node::Monitor, "texture array"),
             (Node::Input, "bank layer"),
         ] {
-            let why = validate(&shaped(node, cap(node) + 1)).unwrap_err();
+            let why = validate(&with(node, cap(node) + 1)).unwrap_err();
             assert!(why.contains(says), "{}: {why}", node.name());
             assert!(
                 !why.contains("one button"),
@@ -1189,13 +1196,12 @@ mod tests {
                 node.name()
             );
         }
-        // And exactly at each cap, well-shaped, a graph loads: every bound
+        // And exactly at each cap, well-with, a graph loads: every bound
         // is the node past the last legal one, not the last legal one. Off
         // `cap` rather than a second copy of the three numbers, so the bound
         // the vocabulary is cut to is the bound a graph is refused past.
         for node in Node::ALL {
-            validate(&shaped(node, cap(node)))
-                .unwrap_or_else(|why| panic!("{}: {why}", node.name()));
+            validate(&with(node, cap(node))).unwrap_or_else(|why| panic!("{}: {why}", node.name()));
         }
     }
 

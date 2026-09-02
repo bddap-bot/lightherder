@@ -1673,7 +1673,7 @@ mod tests {
         // And fader 1 is dead on a rig with nothing to send into: a fader
         // holding a knob that moves nothing is the lie the row law refuses,
         // one control to the left of the rows.
-        let no_inputs = Map::nano_kontrol2(&crate::config::rig(2, 2, 0));
+        let no_inputs = Map::nano_kontrol2(&crate::config::shaped(2, 2, 0));
         assert!(!no_inputs.fader.iter().any(|f| f.cc == 0));
         // And the buttons it leaves alone even on the widest rig: one bound
         // here is one a blind slip can find. The Record row runs out past
@@ -1702,7 +1702,7 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            selects(&Map::nano_kontrol2(&crate::config::rig(1, 4, 1))),
+            selects(&Map::nano_kontrol2(&crate::config::shaped(1, 4, 1))),
             [
                 (48, "mon 1".to_string()),
                 (49, "mon 2".to_string()),
@@ -1713,7 +1713,7 @@ mod tests {
         // Two is a choice and gets a row, which is the boundary: a rule that
         // read "a handful is no choice either" would pass on four alone.
         assert_eq!(
-            selects(&Map::nano_kontrol2(&crate::config::rig(2, 1, 2))),
+            selects(&Map::nano_kontrol2(&crate::config::shaped(2, 1, 2))),
             [
                 (32, "cam 1".to_string()),
                 (33, "cam 2".to_string()),
@@ -1723,7 +1723,7 @@ mod tests {
         );
         // And a rig with nothing to choose anywhere has three dead rows,
         // which is the rig's own: one camera, one monitor, one input.
-        let nothing_to_choose = Map::nano_kontrol2(&crate::config::rig(1, 1, 1));
+        let nothing_to_choose = Map::nano_kontrol2(&crate::config::shaped(1, 1, 1));
         assert_eq!(selects(&nothing_to_choose), []);
         // The transport strip is not the graph's business, so it is whole on
         // that rig too — a row rule that swallowed it would take the blank,
@@ -1741,7 +1741,7 @@ mod tests {
         // The factory rows cannot do this — they are built from the graph —
         // but a hand-written map can, and a lit button that selects a camera
         // nobody owns is the lie the row law exists to refuse.
-        let rig = crate::config::rig(2, 2, 0);
+        let rig = crate::config::shaped(2, 2, 0);
         for (name, says) in [
             ("cam 3", "focuses camera 3, and this graph has 2"),
             ("mon 3", "focuses monitor 3, and this graph has 2"),
@@ -1776,7 +1776,7 @@ mod tests {
         );
 
         // And the same map plays the moment the rig has an input to send.
-        let plugged = crate::config::rig(2, 2, 1);
+        let plugged = crate::config::shaped(2, 2, 1);
         let mut map = Map::nano_kontrol2(&rig);
         map.fader.push(fader(24, Knob::Send));
         assert!(Midi::new(map, &plugged).is_ok());

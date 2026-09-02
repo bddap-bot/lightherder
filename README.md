@@ -41,7 +41,24 @@ two-structure rig — each camera watches its own monitor through
 beam-splitter glass that lets a quarter of the other bleed in, and the
 switcher routes every camera to the opposite monitor, so each image is made
 of its twin's past. `insanity` is four monitors all-to-all: every monitor a
-quarter of every camera. One shape worth knowing before writing your own:
+quarter of every camera. `rig` is Dave Blair's 4K Light Herder itself, as
+one graph: three cameras, five monitors and one seed input. Cameras A and B
+each see their structure's upper monitor directly and its lower one in the
+50/50 glass, at half each; camera 3 sees the rotating monitor, which shows
+camera B's feed. Four switchers chain the rest — A mixes camera A with
+camera B's feed for structure A's monitors, B mixes camera B with switcher
+C's program for structure B's, C mixes camera A with switcher D's, and D
+mixes camera 3 with the seed — and each structure monitor is on its camera
+direct (In1) or its switcher's program (In2). The preset ships every monitor
+on In2, the cross-links a quarter open and the seed at a trickle. Every
+switcher is a crossfade and every select a pick, so a monitor's picture is a
+weighted sum of the cameras and the seed: the preset multiplies that chain
+out into the routing matrix (`src/rig.rs`) and there is no second mixer. Its
+controls are therefore the two crosspoints: fader 8 against upper A and
+camera B is switcher A's crossfade as that monitor sees it, and fader 1
+against a B monitor is the seed's share at the end of the chain. One shape
+worth knowing before writing your own:
+
 rotations in a mixed loop should all turn the same way, since paths whose
 rotations cancel never wind away from the seed, and light that cannot leave
 the seed spot piles up on it until the display clips.
@@ -162,7 +179,7 @@ straight to ffmpeg, and `{ format = "lavfi", device = "movie=/private.mp4" }`
 puts a local file on screen. Read a graph before you play it.
 
 Injection level is the crosspoint the input is sent on — a knob like the
-other crosspoint, on `9` and `0` against the focused monitor. Near unity a
+other crosspoint, on fader 1 against the focused monitor. Near unity a
 little goes a long way: the
 `external` preset sends a seventieth of the bars — 0.014 — onto a monitor
 whose loop runs at 0.985 and whose glass is dark, so the trickle goes round
@@ -202,7 +219,7 @@ A monitor's **seed** is what lights its loop from outside: either a soft
 white blob on the glass, or nothing of its own — dark glass, holding only
 what the switcher paints on it. One or the other, not a level with an off
 value, because the two are different rigs and the dark rig's level is already
-played on the switcher. `;` swaps them, PLAY does on the surface, and the
+played on the switcher. PLAY swaps them, and the
 button is
 lit while the focused monitor has its blob. A blob is what starts a loop with
 gain below 1.0, which decays to black with nothing feeding it. The spot sits
@@ -443,7 +460,7 @@ program's; a built binary takes them directly.
 The resolution is every monitor's size, and so the resolution the whole loop
 runs at. The window's shape has nothing to do with it: the bank is tiled into
 the window, each monitor letterboxed in its cell rather than stretched — and
-enter solos the focused monitor onto the whole window and back, which is that
+FORWARD solos the focused monitor onto the whole window and back, which is that
 same tiling with one tile in it. Nor is it part of a graph — every position
 here is in screen units and every weight a
 ratio, so it changes how much detail the loop carries and — the grain aside,

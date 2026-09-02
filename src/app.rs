@@ -65,7 +65,7 @@ pub struct App {
     resolution: (u32, u32),
     fullscreen: bool,
     /// Whether the controls overlay is showing. Off at startup: the overlay
-    /// is help, and help is what the cycle button and backquote are for.
+    /// is help, and help is what the cycle button is for.
     overlay_shown: bool,
     /// Whether the display shows the focused monitor alone rather than the
     /// tiled bank. Which monitor is not kept here — that is the focus, and
@@ -1281,7 +1281,7 @@ mod tests {
     fn a_cut_on_a_rig_with_inputs_shows_the_focused_input_alone() {
         // Two inputs, the second focused, and a camera on the monitor: the
         // cut takes the camera off and shows that input and not the first.
-        let mut params = config::rig(1, 2, 2);
+        let mut params = config::shaped(1, 2, 2);
         params.routing = vec![vec![1.0], vec![1.0]];
         params.routing_inputs = vec![vec![0.25, 0.5], vec![0.0, 0.75]];
         let Some(mut app) = playing(params) else {

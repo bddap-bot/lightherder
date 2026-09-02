@@ -720,7 +720,7 @@ mod tests {
         // bare chrome, which is what a dead button looks like — and a kind
         // the rig has one of is no choice, so its whole row is chrome.
         for (cameras, monitors, inputs) in [(1, 1, 0), (4, 2, 1), (1, 8, 0), (8, 8, 4)] {
-            let params = crate::config::rig(cameras, monitors, inputs);
+            let params = crate::config::shaped(cameras, monitors, inputs);
             let raster = rasterize(&Map::nano_kontrol2(&params));
             for node in Node::ALL {
                 let bound = match params.count(node) {
