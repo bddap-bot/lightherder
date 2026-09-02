@@ -326,22 +326,16 @@ pub struct Camera {
     /// This path's frame rate as a fraction of the graph's: the camera hands
     /// on a fresh frame every `divider` passes and the same one in between,
     /// at most [`Camera::MAX_DIVIDER`]. One is every pass. What it does is
-    /// the original's 24 or 30 fps router output on a 60 fps rig: a stutter,
-    /// and the image slower to fractal, with the tempo untouched.
+    /// the original's 30 fps router output on a 60 fps rig: a stutter, and
+    /// the image slower to fractal, with the tempo untouched.
     #[serde(default = "undivided")]
     pub divider: u32,
 }
 
 impl Camera {
-    /// The slowest path. 60 to 24 is not a whole divider, so the original's
-    /// 60, 30 and 24 are 1, 2 and 3 here — 20 fps for the last, which is
-    /// what a stutter a third the tempo looks like.
+    /// The slowest path. The original's 24 fps is not a whole divider of
+    /// its 60, so the nearest step below it, 20, is the slowest here.
     pub const MAX_DIVIDER: u32 = 3;
-
-    /// How many slabs past its delay this path's hold reaches back.
-    pub fn hold(&self) -> u32 {
-        self.divider - 1
-    }
 }
 
 impl Params {
@@ -1001,7 +995,12 @@ impl Params {
     /// the graph's reach, and the longest hold on top — a held frame is one
     /// the ring keeps that many passes past the delay.
     pub fn history(&self) -> usize {
-        let hold = self.cameras.iter().map(Camera::hold).max().unwrap_or(0);
+        let hold = self
+            .cameras
+            .iter()
+            .map(|c| c.divider - 1)
+            .max()
+            .unwrap_or(0);
         2 + self.delay as usize + hold as usize
     }
 

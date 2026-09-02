@@ -516,9 +516,10 @@ bought at load — a frame of it is another copy of every monitor in the bank �
 and is as far as the delay fader goes; a camera's `delay` past it is refused.
 `divider` on a camera is that path's frame rate as a fraction of the graph's, 1 to 3
 and defaulting to 1: the camera hands on a fresh frame every that many passes
-and the same one in between — the original's 30 or 24 fps router output on a
-60 fps rig, a stutter and an image slower to fractal, at the same tempo. A
-hold is more ring, one slab per pass of it, bought at load like the reach.
+and the same one in between — the original's 30 fps router output on a 60 fps
+rig, and at 3 the nearest whole step below its 24: a stutter and an image slower
+to fractal, at the same tempo. A divider of N is N-1 more slabs of ring, bought at
+load like the reach.
 `period` on a monitor is the original's period mode on that switcher column:
 every that many passes the monitor's two strongest sources trade levels,
 counted on one grid from the start of the run so every monitor in the mode

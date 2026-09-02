@@ -2675,6 +2675,7 @@ fn a_divided_camera_holds_each_frame_for_that_many_passes() {
         routing_inputs: Vec::new(),
         delay,
     };
+    let mut undelayed: Vec<Vec<u8>> = Vec::new();
     for delay in [0, 1] {
         let mut undivided: Vec<Vec<u8>> = Vec::new();
         for divider in 1..=Camera::MAX_DIVIDER {
@@ -2693,6 +2694,9 @@ fn a_divided_camera_holds_each_frame_for_that_many_passes() {
                 .collect();
             if divider == 1 {
                 undivided = frames;
+                if delay == 0 {
+                    undelayed = undivided.clone();
+                }
                 continue;
             }
             for (pass, frame) in frames.iter().enumerate() {
@@ -2701,6 +2705,12 @@ fn a_divided_camera_holds_each_frame_for_that_many_passes() {
                     *frame == undivided[fresh],
                     "delay {delay}, divider {divider}: pass {pass} is not the undivided pass {fresh}"
                 );
+                if let Some(earlier) = fresh.checked_sub(delay as usize) {
+                    assert!(
+                        *frame == undelayed[earlier],
+                        "delay {delay}, divider {divider}: pass {pass} is not the undelayed pass {earlier}"
+                    );
+                }
             }
             let lit = frames
                 .iter()

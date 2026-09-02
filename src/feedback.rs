@@ -148,11 +148,9 @@ impl Shape {
         (newest + self.history - back) % self.history
     }
 
-    /// The slab `camera` reads on pass number `pass`: its delay back, and
-    /// then as far again as the pass is into the camera's hold. The ring
-    /// moves on one slab a pass and so does the hold, so the slab stays put
-    /// for `divider` passes and then jumps — a path stepping at a fraction
-    /// of the tempo, with no frame copied to hold it.
+    /// The slab `camera` reads on pass number `pass`. The ring moves on one
+    /// slab a pass and so does the look-back, so the slab stays put for
+    /// `divider` passes and then jumps: no frame is copied to hold it.
     fn read(self, newest: usize, camera: &Camera, pass: u64) -> usize {
         let phase = (pass % camera.divider as u64) as u32;
         self.back(newest, camera.delay + phase)
@@ -769,6 +767,9 @@ impl Feedback {
                 analog: [
                     grain,
                     monitor.headroom,
+                    // The last integer f32 holds exactly, and the grain is
+                    // the only thing that reads it: the wrap costs a repeat
+                    // nobody will see.
                     (self.pass % (1 << 24)) as f32,
                     monitor.sharpness,
                 ],
