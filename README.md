@@ -68,9 +68,9 @@ temperature is the phosphor's white point, a distance along the Planckian
 locus from D65: the chroma of that white rides the luma into the channels, so
 a grey warms to candlelight or cools to shade at the same brightness, and the
 hue does not turn it — a turned chroma is not a turned phosphor. Decode, turn,
-white and encode compose into one 3x3, which the CPU works out once a frame: chained
-per fragment instead they leave a ten-thousandth of the signal behind on every
-pass, and a loop that feeds itself turns that into a colour cast. Then contrast
+white and encode compose into one 3x3, which the CPU works out once a frame:
+chained per fragment instead they leave a ten-thousandth of the signal behind
+on every pass, and a loop that feeds itself turns that into a colour cast. Then contrast
 about mid-grey, brightness as a lift, and a power curve for the phosphor. All
 of it is inside the loop, so every knob compounds once per pass: a few
 hundredths of a radian of hue walks the trail through the spectrum, a gamma
@@ -685,8 +685,8 @@ moves light between the channels at constant luma, contrast leaves mid-grey
 where it is while a gain would not, brightness lifts black itself, gamma
 bends the response instead of scaling it, and the temperature leaves a grey
 grey at rest and warms or cools it at the rails without moving its luma. The
-graph gets the same treatment:
-a seed sent across the crossed wiring bounces between the monitors without
+graph gets the same treatment: a seed sent across the crossed wiring bounces
+between the monitors without
 leaving a copy behind, mix weights deliver exactly the fraction they name, a
 beam splitter delivers light from a monitor its routing row never touches,
 insanity mode puts a quarter of one seed on all four monitors at once, and

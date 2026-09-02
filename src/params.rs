@@ -34,12 +34,11 @@ pub struct Colour {
     /// trails thin out; below 1 they lift and smear.
     pub gamma: f32,
     /// Where the monitor's white sits on the Planckian locus, as a distance
-    /// from D65 in mired (reciprocal megakelvin — the unit the locus is
-    /// close to even in, where kelvin bunches every warm white into a
-    /// corner of the fader). Positive warms: +340 is candlelight, about
-    /// 2000 K. Negative cools: -100 is open shade, about 18 000 K. A grey
-    /// takes on that white's tint and keeps its luma, which is what tells
-    /// this knob from the three gains.
+    /// from D65 in mired — reciprocal megakelvin, the unit the locus is close
+    /// to even in, where kelvin bunches every warm white into a corner of
+    /// the fader. Positive warms, negative cools. A grey takes on that
+    /// white's tint and keeps its luma, which is what tells this knob from
+    /// the three gains.
     pub temperature: f32,
 }
 
@@ -71,22 +70,16 @@ const ENCODE: [[f64; 3]; 3] = [
 /// D65 in mired: the white a grey has with the temperature knob at rest.
 const D65_MIRED: f64 = 1e6 / 6504.0;
 
-/// The white's temperature in kelvin, `mired` from D65.
-pub fn kelvin(mired: f64) -> f64 {
-    1e6 / (D65_MIRED + mired)
-}
-
 /// The chroma a grey of unit luma takes on with the white moved `mired`
 /// along the Planckian locus from D65, as the two subcarrier axes.
 ///
 /// Kim et al.'s cubic fit of a black body's CIE 1931 chromaticity, to XYZ
 /// at unit Y, to sRGB as a display shows it — the loop's texels are what
-/// the glass shows, not linear light, and a candle flame's linear red is
-/// forty times its blue where the displayed one is fourteen — then decoded.
-/// The locus does not pass through D65 itself — a daylight white sits a
-/// little above it — so this is the shift from the locus's own point at
-/// D65's temperature: at zero it is exactly zero, which keeps the neutral
-/// matrix exactly the identity.
+/// the glass shows, not linear light — then decoded. The locus does not
+/// pass through D65 itself — a daylight white sits a little above it — so
+/// this is the shift from the locus's own point at D65's temperature: at
+/// zero it is exactly zero, which keeps the neutral matrix exactly the
+/// identity.
 fn white_shift(mired: f64) -> [f64; 2] {
     fn chroma(kelvin: f64) -> [f64; 2] {
         let t = kelvin;
@@ -120,6 +113,7 @@ fn white_shift(mired: f64) -> [f64; 2] {
         let luma = weigh(DECODE[0]);
         [weigh(DECODE[1]) / luma, weigh(DECODE[2]) / luma]
     }
+    let kelvin = |mired: f64| 1e6 / (D65_MIRED + mired);
     let [i, q] = chroma(kelvin(mired));
     let [i0, q0] = chroma(kelvin(0.0));
     [i - i0, q - q0]
@@ -1206,7 +1200,7 @@ impl Params {
              bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  delay {}/{}  \
              key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             gamma {:.3}  white {:.0}K  headroom {:.3}  period {}  seed {}\n\
+             gamma {:.3}  temp {:+.1}  headroom {:.3}  period {}  seed {}\n\
              route {:.3}: how much of cam {} mon {} shows{}",
             focus.camera + 1,
             self.cameras.len(),
@@ -1234,7 +1228,7 @@ impl Params {
             mon.colour.brightness,
             mon.colour.contrast,
             mon.colour.gamma,
-            kelvin(mon.colour.temperature as f64),
+            mon.colour.temperature,
             mon.headroom,
             mon.period,
             mon.seed,
@@ -1967,6 +1961,17 @@ mod tests {
         // Rest is exactly rest, not the locus's own point near D65: the
         // subtraction that makes it so is what this pins.
         assert_eq!(white_shift(0.0), [0.0; 2]);
+        // And how far the rails go, pinned: every other assertion here is an
+        // ordering or an invariant, which a shift of the wrong size passes.
+        // The candle grey is the displayed sRGB white of a 2025 K black body
+        // at unit NTSC luma, nine parts red to one of blue, not the ninety
+        // of linear light.
+        for (got, want) in warm.iter().zip([1.5491, 0.8814, 0.1704]) {
+            assert!((got - want).abs() < 2e-3, "warm white {warm:?}");
+        }
+        for (got, want) in cool.iter().zip([0.8715, 1.0093, 1.2892]) {
+            assert!((got - want).abs() < 2e-3, "cool white {cool:?}");
+        }
         // And hue leaves the white where it is: a turned chroma is not a
         // turned phosphor.
         let turned = grey(

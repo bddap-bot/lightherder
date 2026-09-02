@@ -231,6 +231,7 @@ impl Map {
                     fader(21, Knob::Bloom),
                     fader(22, Knob::ChromaBleed),
                     fader(23, Knob::Noise),
+                    page_two(1, Knob::Temperature),
                     page_two(16, Knob::GainR),
                     page_two(17, Knob::GainG),
                     page_two(18, Knob::GainB),
@@ -239,7 +240,6 @@ impl Map {
                     page_two(21, Knob::KeySoftness),
                     page_two(22, Knob::KeyHue),
                     page_two(23, Knob::KeyTolerance),
-                    page_two(1, Knob::Temperature),
                 ])
                 .chain(
                     Knob::Period
@@ -1879,6 +1879,7 @@ mod tests {
                 fader(21, Knob::Bloom),
                 fader(22, Knob::ChromaBleed),
                 fader(23, Knob::Noise),
+                page_two(1, Knob::Temperature),
                 page_two(16, Knob::GainR),
                 page_two(17, Knob::GainG),
                 page_two(18, Knob::GainB),
@@ -1887,7 +1888,6 @@ mod tests {
                 page_two(21, Knob::KeySoftness),
                 page_two(22, Knob::KeyHue),
                 page_two(23, Knob::KeyTolerance),
-                page_two(1, Knob::Temperature),
                 page_two(6, Knob::Period),
             ]
         );
