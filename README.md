@@ -774,10 +774,10 @@ The same instrument, on WebGPU, at
 page takes an argument, `?preset=insanity`. What is not there is what a
 browser has no way to give it: the ALSA control surface — so a tab plays the
 graph it was handed and nothing turns a knob. An input it does have: where a
-terminal runs ffmpeg, a page plays a `<video>` — a `capture` is the page's
-own camera, asked for with `getUserMedia` whatever device the graph names, and
-a `file` is a URL — read back through a canvas into the same bytes, so
-`?preset=webcam` puts the visitor on the first monitor.
+terminal runs ffmpeg, a page plays a `<video>` of its own camera — asked for
+with `getUserMedia`, whatever device the graph names — and reads it back
+through a canvas into the same bytes, so `?preset=webcam` puts the visitor on
+the first monitor.
 
 `web/build.sh` builds `web/dist` — the module, its glue and the page — and
 every push to `main` runs it and publishes the result. Locally:

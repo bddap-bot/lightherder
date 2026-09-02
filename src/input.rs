@@ -16,9 +16,9 @@
 //! something and writing raw RGBA down a pipe, so anything ffmpeg can open is
 //! an input — including its own generators, `capture = { format = "lavfi",
 //! device = "testsrc2" }`, and a screen, `x11grab` + `:0.0`. In a browser
-//! they are a `<video>` instead — the page's camera, or a URL — read back
-//! through a canvas ([`crate::web::Feed`]); the frame that reaches the bank
-//! is the same bytes either way, so nothing past here knows the difference.
+//! a capture is a `<video>` playing the page's own camera, read back through
+//! a canvas; the frame that reaches the bank is the same bytes either way,
+//! so nothing past here knows the difference.
 //! [`Input::Pattern`] is drawn here instead: no process, no thread, no
 //! decode, and exact levels a test can assert without pinning an ffmpeg
 //! version, which is what makes the bars worth having when lavfi could draw
@@ -29,10 +29,14 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-#[cfg(target_arch = "wasm32")]
-use crate::web::Feed;
+/// What plays a file or a capture: one type per host, both with
+/// `async fn open(&Input, size) -> Result<(Feed, Vec<u8>), String>` — the
+/// feed and its first frame — and `fn next(&mut self, &mut Vec<u8>) -> Next`,
+/// and each letting its source go on drop.
 #[cfg(not(target_arch = "wasm32"))]
 use ffmpeg::Feed;
+#[cfg(target_arch = "wasm32")]
+use video::Feed;
 
 /// One external source in the graph.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -91,15 +95,15 @@ pub struct Source {
     /// pattern upload once and a second [`Source::frame`] between arrivals
     /// answer `None`.
     pending: bool,
-    /// What is behind the frames — the ffmpeg, or the page's `<video>` —
+    /// What is behind the frames — the ffmpeg, or the page's camera —
     /// dropped as soon as it ends. `None` for a pattern, and for a source
     /// that has ended.
     feed: Option<Feed>,
 }
 
 /// What a feed has for the layer when it is asked.
-pub(crate) enum Next {
-    /// A new frame, swapped into the buffer it was asked with.
+enum Next {
+    /// A new frame, in the buffer it was asked with.
     Frame,
     /// Nothing yet: the layer keeps what it has.
     Waiting,
@@ -143,7 +147,7 @@ impl Source {
     /// Borrowed rather than handed over, because the source keeps the buffer
     /// behind it either way.
     pub fn frame(&mut self) -> Option<&[u8]> {
-        match self.feed.as_mut().map(|feed| feed.swap(&mut self.showing)) {
+        match self.feed.as_mut().map(|feed| feed.next(&mut self.showing)) {
             Some(Next::Frame) => self.pending = true,
             // This is the one moment the feed can be let go: dropping it
             // joins the reader and reaps the ffmpeg, rather than leaving a
@@ -308,7 +312,7 @@ mod ffmpeg {
         /// The channel's own word for it: `Empty` while ffmpeg is between frames,
         /// and `Disconnected` once the reader has ended, which it only ever does
         /// for good.
-        pub(super) fn swap(&mut self, showing: &mut Vec<u8>) -> Next {
+        pub(super) fn next(&mut self, showing: &mut Vec<u8>) -> Next {
             let Some(channels) = self.channels.as_ref() else {
                 return Next::Ended;
             };
@@ -391,6 +395,217 @@ mod ffmpeg {
             .map(String::from),
         );
         argv
+    }
+}
+
+/// The feed in a page: a `<video>` playing the page's own camera, read back
+/// through a canvas.
+#[cfg(target_arch = "wasm32")]
+mod video {
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::{
+        CanvasRenderingContext2d, ContextAttributes2d, HtmlCanvasElement, HtmlMediaElement,
+        HtmlVideoElement, MediaStream, MediaStreamConstraints, MediaStreamTrack,
+    };
+
+    use std::time::Duration;
+
+    use web_time::Instant;
+
+    use super::{Input, Next};
+
+    /// A browser's word for what went wrong, as the one line every refusal
+    /// is.
+    fn js(e: JsValue) -> String {
+        format!("{e:?}")
+    }
+
+    /// A `<video>` where a terminal has an ffmpeg, playing the page's own
+    /// camera whatever device the graph named: a graph is written for the
+    /// rig, and a browser has one camera to offer, behind its own prompt.
+    /// A file has no way into a page — a graph there is a preset — so a
+    /// capture is the whole of it.
+    ///
+    /// The pixels come back through a 2D canvas the size of a bank layer,
+    /// the video drawn onto it letterboxed as ffmpeg's `pad` would, and read
+    /// out as the same tightly packed RGBA8 the pipe delivers — so past
+    /// [`Feed::next`] there is one upload path, not a browser one. A frame
+    /// is a fresh copy out of the canvas rather than one of two buffers going
+    /// round: the page owns the bytes until they are read, and there is
+    /// nothing to hand back.
+    pub(super) struct Feed {
+        video: HtmlVideoElement,
+        stream: MediaStream,
+        canvas: CanvasRenderingContext2d,
+        size: (u32, u32),
+        /// Where the picture landed last time: `x, y, width, height`. A
+        /// camera can change shape mid-run, and the bars are repainted when
+        /// it does.
+        place: (f64, f64, f64, f64),
+        /// The video's clock at the last read. For a stream Chrome's clock is
+        /// the frame on show, so an unchanged one is no new frame. A browser
+        /// whose clock runs free only reads more often; one whose clock
+        /// never moves for a stream is what [`STALE`] is for.
+        read_at: f64,
+        /// When the last read was, for the clock that never moves.
+        read_when: Instant,
+    }
+
+    /// How long an unchanged clock is believed before the frame is read
+    /// anyway: a camera's own rate, so a browser that pins a stream's clock
+    /// at zero plays at that rate instead of freezing on its first frame.
+    const STALE: Duration = Duration::from_millis(33);
+
+    impl Feed {
+        /// Resolves once the camera is playing and a first frame has been
+        /// read off it. A camera the visitor has yet to allow waits here for
+        /// them — that is a prompt, not an error; a camera refused is one.
+        pub(super) async fn open(
+            input: &Input,
+            size: (u32, u32),
+        ) -> Result<(Feed, Vec<u8>), String> {
+            let Input::Capture { .. } = input else {
+                return Err(format!("{input}: a page plays only a capture"));
+            };
+            log::info!("{input}: the page's camera stands in");
+            let document = crate::web::document()?;
+            let video: HtmlVideoElement = document
+                .create_element("video")
+                .map_err(js)?
+                .dyn_into()
+                .map_err(|_| "the page will not make a video".to_string())?;
+            // Muted is what lets it play without a click, and inline is
+            // what lets a phone render it anywhere but its own player.
+            video.set_muted(true);
+            video.set_attribute("playsinline", "").map_err(js)?;
+            let constraints = MediaStreamConstraints::new();
+            constraints.set_video_bool(true);
+            constraints.set_audio_bool(false);
+            let asked = web_sys::window()
+                .ok_or("no window")?
+                .navigator()
+                .media_devices()
+                .map_err(js)?
+                .get_user_media_with_constraints(&constraints)
+                .map_err(js)?;
+            let stream: MediaStream = JsFuture::from(asked)
+                .await
+                .map_err(|e| format!("{input}: no camera: {}", js(e)))?
+                .dyn_into()
+                .map_err(|_| format!("{input}: getUserMedia gave no stream"))?;
+            video.set_src_object(Some(&stream));
+            JsFuture::from(video.play().map_err(js)?)
+                .await
+                .map_err(|e| format!("{input}: will not play: {}", js(e)))?;
+
+            let backing: HtmlCanvasElement = document
+                .create_element("canvas")
+                .map_err(js)?
+                .dyn_into()
+                .map_err(|_| "the page will not make a canvas".to_string())?;
+            backing.set_width(size.0);
+            backing.set_height(size.1);
+            let options = ContextAttributes2d::new();
+            // Opaque, so the bars are black rather than clear; and read
+            // every frame, so the browser keeps it where a read is a copy
+            // and not a trip back from the GPU.
+            options.set_alpha(false);
+            options.set_will_read_frequently(true);
+            let canvas: CanvasRenderingContext2d = backing
+                .get_context_with_context_options("2d", &options)
+                .map_err(js)?
+                .ok_or("no 2d context")?
+                .dyn_into()
+                .map_err(|_| "not a 2d context".to_string())?;
+            let mut feed = Feed {
+                video,
+                stream,
+                canvas,
+                size,
+                place: (0.0, 0.0, 0.0, 0.0),
+                read_at: 0.0,
+                read_when: Instant::now(),
+            };
+            let mut first = Vec::new();
+            feed.take(&mut first)?;
+            Ok((feed, first))
+        }
+
+        /// The video's current frame, letterboxed, as one bank layer's
+        /// bytes. The clock is taken before the draw, so a frame that lands
+        /// between the two is the next read's and not lost to it.
+        fn take(&mut self, into: &mut Vec<u8>) -> Result<(), String> {
+            self.read_at = self.video.current_time();
+            self.read_when = Instant::now();
+            let (vw, vh) = (
+                self.video.video_width() as f64,
+                self.video.video_height() as f64,
+            );
+            if vw == 0.0 || vh == 0.0 {
+                return Err("the camera is playing, but has no picture".to_string());
+            }
+            // Letterboxed, not stretched, for the same reason the pipe's
+            // filter letterboxes: an input's own shape is not the monitor's.
+            let (w, h) = (self.size.0 as f64, self.size.1 as f64);
+            let scale = (w / vw).min(h / vh);
+            let (dw, dh) = (vw * scale, vh * scale);
+            let place = ((w - dw) / 2.0, (h - dh) / 2.0, dw, dh);
+            if place != self.place {
+                self.canvas.set_fill_style_str("#000");
+                self.canvas.fill_rect(0.0, 0.0, w, h);
+                self.place = place;
+            }
+            let (x, y, dw, dh) = place;
+            self.canvas
+                .draw_image_with_html_video_element_and_dw_and_dh(&self.video, x, y, dw, dh)
+                .map_err(js)?;
+            let data = self
+                .canvas
+                .get_image_data(0.0, 0.0, w, h)
+                .map_err(js)?
+                .data();
+            *into = data.0;
+            Ok(())
+        }
+
+        /// A frame whenever the camera has a new one; a camera the visitor
+        /// took away — every track ended, so the stream is no longer active
+        /// — ends it. Not the element's own `ended`: a stream has no end to
+        /// reach, so that stays false whatever happens to the camera.
+        pub(super) fn next(&mut self, showing: &mut Vec<u8>) -> Next {
+            if !self.stream.active() {
+                return Next::Ended;
+            }
+            // Below HAVE_CURRENT_DATA a draw of the video paints nothing,
+            // and the read after it would hand back the frame before.
+            if self.video.ready_state() < HtmlMediaElement::HAVE_CURRENT_DATA {
+                return Next::Waiting;
+            }
+            if self.video.current_time() == self.read_at && self.read_when.elapsed() < STALE {
+                return Next::Waiting;
+            }
+            match self.take(showing) {
+                Ok(()) => Next::Frame,
+                Err(why) => {
+                    log::warn!("the camera ended: {why}");
+                    Next::Ended
+                }
+            }
+        }
+    }
+
+    impl Drop for Feed {
+        /// The camera's light goes out with the feed, rather than staying
+        /// on for a stream nothing reads.
+        fn drop(&mut self) {
+            let _ = self.video.pause();
+            for track in self.stream.get_tracks().iter() {
+                if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
+                    track.stop();
+                }
+            }
+        }
     }
 }
 

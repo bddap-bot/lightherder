@@ -48,7 +48,6 @@ web-sys = { version = "0.3", features = [
   "ImageData",
   "Location",
   "MediaDevices",
-  "MediaError",
   "MediaStream",
   "MediaStreamConstraints",
   "MediaStreamTrack",
