@@ -290,7 +290,6 @@ fn place(c: &mut Canvas, spot: Spot, label: &str) {
 /// Every binding the map has on `page`, with nothing else filtered out: a
 /// select row is built as wide as the graph, so a button that exists is a
 /// node that exists. What the panel draws dim is what the map left unbound.
-/// The buttons are on every page; only the faders turn over.
 fn labels(map: &Map, page: Page) -> impl Iterator<Item = (u8, String)> + '_ {
     let faders = map
         .fader
@@ -754,8 +753,6 @@ mod tests {
             texels_differing(&rasterize(&factory, Page::One), &rasterize(&map, Page::One)),
             0
         );
-        // Page 2 of the factory map is bare strips under the same buttons,
-        // and says which page it is; the binding lights its strip there.
         let bare = rasterize(&factory, Page::Two);
         let bound = rasterize(&map, Page::Two);
         assert!(texels_differing(&rasterize(&factory, Page::One), &bare) > 100);
@@ -768,7 +765,7 @@ mod tests {
             let mut want = Canvas::new(PANEL_W, PANEL_H);
             let caption = format!("page {page}");
             want.text(PAD, PAGE_Y, &caption, STRIPS_X, LIT);
-            let w = caption.len() as i32 * GLYPH;
+            let w = (caption.len() as i32 + 1) * GLYPH;
             let raster = rasterize(&factory, page);
             assert_eq!(
                 box_of(&raster.pixels, raster.width as i32, PAD, PAGE_Y, w, GLYPH),

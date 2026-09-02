@@ -242,7 +242,8 @@ controller is `/dev/snd/midiC<card>D0`, and reading it gives the wire bytes.
 
 Out of the box, with no configuration. The select rows are the exception to
 "out of the box": they are the graph's, and on the default `single` rig — one
-camera, one monitor, no inputs — all three are dead.
+camera, one monitor, no inputs — all three are dead but for R8, the page
+button on every rig.
 
 | control | is |
 |---|---|
@@ -296,9 +297,9 @@ knob already is.** A fader sends where it is standing, so without that,
 plugging in mid-piece throws every knob to wherever its fader was left — with
 the headroom fader slamming a monitor to white. Sweep the fader and it picks
 its knob up on the way past, and from then on the fader is the knob. It lets
-go on a reset and a change of focus — the two ways the whole panel moves
-without a fader moving with it — on a page turn, after which every fader is
-standing over some other knob — on a cut, which moves the two crosspoints
+go on a reset and a change of focus — the whole panel moving without a fader
+moving with it — on a page turn, after which every fader is standing over
+some other knob, on a cut, which moves the two crosspoints
 without theirs, and on an unplug, after which nothing knows where a fader is
 standing.
 

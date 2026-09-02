@@ -84,7 +84,6 @@ pub struct Map {
 pub struct Fader {
     pub(crate) cc: u8,
     pub(crate) knob: Knob,
-    /// The buttons are on both pages; only the faders turn over.
     #[serde(default)]
     pub(crate) page: Page,
 }
@@ -814,8 +813,7 @@ impl Midi {
         self.page
     }
 
-    /// Turn the faders and rotaries over to the other page. Every grip is
-    /// let go: a fader that was the knob on one page is standing nowhere
+    /// Every grip is let go: a fader that was the knob on one page is standing nowhere
     /// near the knob it names on the other.
     pub fn turn_page(&mut self) {
         self.page = match self.page {
@@ -2037,7 +2035,6 @@ mod tests {
         let mut map = Map::nano_kontrol2(&widest);
         map.fader.push(on_page_two(4, Knob::Noise));
         map.validate(&widest).unwrap();
-        // The same control twice on one page is the clash it always was.
         map.fader.push(on_page_two(4, Knob::Bloom));
         assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
         // A button is not paged, so a fader on page 2 cannot share its
@@ -2064,7 +2061,6 @@ mod tests {
     fn the_page_button_turns_the_faders_over_and_lets_go_of_every_grip() {
         let params = crate::config::widest();
         let mut map = Map::nano_kontrol2(&params);
-        // Fader 5 is contrast on page 1 and, here, noise on page 2.
         map.fader.push(on_page_two(4, Knob::Noise));
         let mut midi = Midi::new(map, &params).unwrap();
         assert_eq!(midi.page(), Page::One);
