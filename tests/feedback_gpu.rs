@@ -1851,7 +1851,7 @@ fn feed_inputs(h: &mut Harness, params: &Params) {
                 quartered_frame(h.feedback.size(), [[200; 3], [30; 3], [200; 3], [30; 3]])
             }
             _ => {
-                let mut source = Source::open(input, h.feedback.size())
+                let mut source = pollster::block_on(Source::open(input, h.feedback.size()))
                     .unwrap_or_else(|e| panic!("input {i}: {e}"));
                 source
                     .frame()

@@ -38,10 +38,21 @@ console_log = "1.0"
 wasm-bindgen = "=0.2.127"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
+  "CanvasRenderingContext2d",
+  "ContextAttributes2d",
   "Document",
   "Element",
   "HtmlCanvasElement",
+  "HtmlMediaElement",
+  "HtmlVideoElement",
+  "ImageData",
   "Location",
+  "MediaDevices",
+  "MediaError",
+  "MediaStream",
+  "MediaStreamConstraints",
+  "MediaStreamTrack",
+  "Navigator",
   "UrlSearchParams",
   "Window",
 ] }

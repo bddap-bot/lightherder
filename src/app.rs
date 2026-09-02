@@ -171,13 +171,10 @@ fn start(event_loop: EventLoop<()>, mut app: App) -> Result<(), Box<dyn std::err
 /// instead of inside `resumed`.
 pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     crate::feedback::bank_fits(&params, cli.resolution)?;
-    let sources = params
-        .inputs
-        .iter()
-        .map(|input| Source::open(input, cli.resolution))
-        .collect::<Result<Vec<Source>, String>>()?;
+    let mut sources = Vec::with_capacity(params.inputs.len());
     for input in &params.inputs {
         log::info!("input: {input}");
+        sources.push(Source::open(input, cli.resolution).await?);
     }
     // Read before the window opens, like the inputs and for the same reason:
     // a map that will not load is a terminal error, not a surface that turns
@@ -906,7 +903,7 @@ mod tests {
         let sources = params
             .inputs
             .iter()
-            .map(|input| Source::open(input, resolution))
+            .map(|input| pollster::block_on(Source::open(input, resolution)))
             .collect::<Result<Vec<Source>, String>>()
             .unwrap();
         Some(App {
