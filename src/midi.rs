@@ -481,6 +481,9 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
         // records it for as long as a hand stays on it.
         button(60, "snap"),
         button(45, "record"),
+        // The switcher's foot pedal, on the marker that was left: held, not
+        // latched, like record beside it.
+        button(61, "cut"),
     ]);
     out
 }
@@ -1179,6 +1182,10 @@ mod tests {
             card.contains("nanoKONTROL"),
             "the card does not name the surface"
         );
+        assert!(
+            card.contains("  marker prev  the focused monitor shows only the focused input (or camera) while this is held down (cut)"),
+            "the cut is not on marker prev"
+        );
     }
 
     fn cc(control: u8, value: u8) -> Vec<u8> {
@@ -1658,6 +1665,7 @@ mod tests {
                 button(59, "rate +"),
                 button(60, "snap"),
                 button(45, "record"),
+                button(61, "cut"),
             ]
         );
         // And fader 1 is dead on a rig with nothing to send into: a fader
@@ -1668,8 +1676,7 @@ mod tests {
         // And the buttons it leaves alone even on the widest rig: one bound
         // here is one a blind slip can find. The Record row runs out past
         // the inputs, which is what a row as wide as its kind looks like.
-        let spare =
-            (R_ROW + crate::config::cap(Node::Input) as u8..R_ROW + ROW_BUTTONS as u8).chain([61]);
+        let spare = R_ROW + crate::config::cap(Node::Input) as u8..R_ROW + ROW_BUTTONS as u8;
         for cc in spare {
             assert!(
                 !map.button.iter().any(|b| b.cc == cc),

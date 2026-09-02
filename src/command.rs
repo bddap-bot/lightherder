@@ -42,6 +42,11 @@ pub enum Action {
     Overlay,
     Screencap,
     Record(Edge),
+    /// The switcher's momentary cut, the rig's foot pedal: while held, the
+    /// focused monitor shows its focused source whole and nothing else, and
+    /// letting go puts its crosspoints back as they were. Held rather than
+    /// latched because the trap is the flick back.
+    Cut(Edge),
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -57,6 +62,7 @@ pub enum Edge {
 pub fn released(action: Action) -> Option<Action> {
     match action {
         Action::Record(Edge::Down) => Some(Action::Record(Edge::Up)),
+        Action::Cut(Edge::Down) => Some(Action::Cut(Edge::Up)),
         _ => None,
     }
 }
@@ -105,6 +111,11 @@ const COMMANDS: &[Command] = &[
         "record",
         Action::Record(Edge::Down),
         "record the display for as long as this is held down",
+    ),
+    cmd(
+        "cut",
+        Action::Cut(Edge::Down),
+        "the focused monitor shows only the focused input (or camera) while this is held down",
     ),
 ];
 
@@ -225,14 +236,19 @@ mod tests {
         assert_eq!(action_for_name("help"), Some(Action::Overlay));
         assert_eq!(action_for_name("snap"), Some(Action::Screencap));
         assert_eq!(action_for_name("record"), Some(Action::Record(Edge::Down)));
+        assert_eq!(action_for_name("cut"), Some(Action::Cut(Edge::Down)));
         assert_eq!(describes("reset").as_deref(), Some("reset every knob"));
     }
 
     #[test]
-    fn letting_go_is_the_recording_s_alone() {
+    fn letting_go_reaches_only_the_held_commands() {
         assert_eq!(
             released(Action::Record(Edge::Down)),
             Some(Action::Record(Edge::Up))
+        );
+        assert_eq!(
+            released(Action::Cut(Edge::Down)),
+            Some(Action::Cut(Edge::Up))
         );
         // Every other binding is a press, so a release of one must reach
         // nothing rather than firing it a second time.
@@ -240,7 +256,7 @@ mod tests {
             let action = action_for_name(&name).expect("every name resolves");
             assert_eq!(
                 released(action).is_some(),
-                action == Action::Record(Edge::Down),
+                matches!(action, Action::Record(Edge::Down) | Action::Cut(Edge::Down)),
                 "{name}"
             );
         }

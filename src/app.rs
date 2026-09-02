@@ -17,7 +17,7 @@ use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::midi::{Map, Midi};
 use crate::overlay::Overlay;
-use crate::params::{Focus, Knob, Params, Seed};
+use crate::params::{Crosspoints, Focus, Knob, Params, Seed};
 use crate::present::Present;
 use crate::tempo::Tempo;
 
@@ -71,6 +71,10 @@ pub struct App {
     /// tiled bank. Which monitor is not kept here — that is the focus, and
     /// two indices for one question is one of them going stale.
     solo: bool,
+    /// The crosspoints the held cut took, and from which monitor. Pinned to
+    /// that monitor rather than to the focus, so a select pressed mid-hold
+    /// cannot make the release write one monitor's column onto another.
+    cut: Option<(usize, Crosspoints)>,
     /// Passes and presents since the last rate line, and when that was. Two
     /// counts because they are two clocks — see [`App::meter`], where the
     /// difference between them is the whole of what the line says.
@@ -194,6 +198,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             fullscreen: cli.fullscreen,
             overlay_shown: false,
             solo: false,
+            cut: None,
             passes: 0,
             presents: 0,
             metered: Instant::now(),
@@ -383,6 +388,8 @@ impl App {
     /// only the knobs the next pass reads have moved.
     fn reset(&mut self) {
         self.params = self.initial.clone();
+        // The column the cut took was a column of the panel that is gone.
+        self.cut = None;
         // The whole panel just moved without a fader moving with it — and
         // without a hand moving with it either, so the knob "the last knob
         // turned" names was turned on a panel that is gone.
@@ -540,6 +547,21 @@ impl App {
             Action::Screencap => self.screencap(),
             Action::Record(Edge::Down) => self.record(),
             Action::Record(Edge::Up) => self.stop_recording(),
+            Action::Cut(Edge::Down) => {
+                if self.cut.is_none() {
+                    let prior = self.params.cut(self.focus);
+                    self.cut = Some((self.focus.monitor, prior));
+                    self.midi.release();
+                    log::info!("cut: {}", self.params.describe(self.focus));
+                }
+            }
+            Action::Cut(Edge::Up) => {
+                if let Some((monitor, prior)) = self.cut.take() {
+                    self.params.set_crosspoints(monitor, &prior);
+                    self.midi.release();
+                    log::info!("{}", self.params.describe(self.focus));
+                }
+            }
         }
     }
 
@@ -826,6 +848,7 @@ mod tests {
             fullscreen: false,
             overlay_shown: false,
             solo: false,
+            cut: None,
             passes: 0,
             presents: 0,
             metered: Instant::now(),
@@ -1026,6 +1049,21 @@ mod tests {
             surface.wire.panel_becomes(lamp(33) | lamp(48)),
             "the record button stayed lit after the finger left"
         );
+        // The cut is the other held button, on marker prev.
+        surface.press(61);
+        app.surface_frame();
+        assert!(app.cut.is_some(), "the press was never played");
+        assert!(
+            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(61)),
+            "the cut button never lit under the finger"
+        );
+        surface.release(61);
+        app.surface_frame();
+        assert!(app.cut.is_none(), "the release was never played");
+        assert!(
+            surface.wire.panel_becomes(lamp(33) | lamp(48)),
+            "the cut button stayed lit after the finger left"
+        );
     }
 
     /// A fader moving `knob` by `delta` from wherever it stands. The surface
@@ -1199,6 +1237,99 @@ mod tests {
         assert_eq!(app.soloed(), Some(0));
         app.act(Action::Solo);
         assert_eq!(app.soloed(), None);
+    }
+
+    #[test]
+    fn a_cut_shows_the_focused_camera_alone_and_letting_go_puts_the_column_back() {
+        // No inputs on this graph, so the cut is to the focused camera. The
+        // whole graph is compared before and after: a cut that leaked into
+        // another monitor's column, or a release that put back one value
+        // short, would both show here.
+        let Some(mut app) = playing(config::crossed()) else {
+            return;
+        };
+        let before = app.params.clone();
+        assert_eq!(before.routing[0], vec![0.0, 1.0]);
+        app.act(Action::Cut(Edge::Down));
+        assert_eq!(app.params.routing[0], vec![1.0, 0.0]);
+        assert_eq!(app.params.routing[1], before.routing[1]);
+        // A second down with the first still held takes nothing: the column
+        // it would save is the cut's own, and a release must not put that
+        // back.
+        app.act(Action::Cut(Edge::Down));
+        // The focus moving under a held cut moves nothing: the release owes
+        // the column to the monitor it was taken from.
+        app.act(Action::Focus(Node::Monitor, 1));
+        app.act(Action::Cut(Edge::Up));
+        assert_eq!(app.params, before);
+        // Letting go of nothing is nothing.
+        app.act(Action::Cut(Edge::Up));
+        assert_eq!(app.params, before);
+    }
+
+    #[test]
+    fn a_cut_on_a_rig_with_an_input_shows_that_input_alone() {
+        let Some(mut app) = playing(config::external()) else {
+            return;
+        };
+        let before = app.params.clone();
+        app.act(Action::Cut(Edge::Down));
+        assert_eq!(app.params.routing, vec![vec![0.0]]);
+        assert_eq!(app.params.routing_inputs, vec![vec![1.0]]);
+        app.act(Action::Cut(Edge::Up));
+        assert_eq!(app.params, before);
+    }
+
+    #[test]
+    fn a_reset_under_a_held_cut_wins_over_the_release() {
+        // The column the cut saved was a column of a panel the reset has
+        // replaced, so putting it back would undo the reset one monitor at
+        // a time.
+        let Some(mut app) = playing(config::crossed()) else {
+            return;
+        };
+        turn(&mut app, Knob::Route, -0.5);
+        app.act(Action::Cut(Edge::Down));
+        app.act(Action::Reset);
+        assert_eq!(app.params, app.initial);
+        app.act(Action::Cut(Edge::Up));
+        assert_eq!(app.params, app.initial);
+    }
+
+    #[test]
+    fn a_cut_takes_the_crosspoint_out_of_the_hands_of_the_fader_holding_it() {
+        // Route is fader 8, control 7. Catch it by sweeping from the bottom
+        // to the middle, then cut: the crosspoint has moved without the
+        // fader, so the next touch of that fader must not throw it back.
+        let Some(mut app) = playing(config::crossed()) else {
+            return;
+        };
+        surface(&mut app, 7, 0);
+        surface(&mut app, 7, 64);
+        let held = app.params.knob(Knob::Route, app.focus);
+        assert!(
+            (held - 64.0 / 127.0).abs() < 1e-3,
+            "the fader never caught: {held}"
+        );
+        app.act(Action::Cut(Edge::Down));
+        assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
+        surface(&mut app, 7, 65);
+        assert_eq!(
+            app.params.knob(Knob::Route, app.focus),
+            1.0,
+            "the fader kept its grip through the cut"
+        );
+        // And on the way back: the release moves the crosspoint again.
+        app.act(Action::Cut(Edge::Up));
+        assert!((app.params.knob(Knob::Route, app.focus) - held).abs() < 1e-6);
+        surface(&mut app, 7, 66);
+        assert!(
+            (app.params.knob(Knob::Route, app.focus) - held).abs() < 1e-6,
+            "the fader kept its grip through the release"
+        );
+        // A sweep back through the knob catches it again.
+        surface(&mut app, 7, 40);
+        assert!((app.params.knob(Knob::Route, app.focus) - 40.0 / 127.0).abs() < 1e-3);
     }
 
     #[test]

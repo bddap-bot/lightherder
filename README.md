@@ -248,7 +248,7 @@ camera, one monitor, no inputs — all three are dead.
 | \|◀ track prev, ▶\| track next | the tempo: slower / faster, four presses to halve or double it |
 | ● marker set | write what the display is showing to a file |
 | ● record | record the display for as long as it is held down |
-| marker prev | nothing |
+| marker prev | **cut**: while held, the focused monitor shows the focused input alone — or, on a rig with no inputs, the focused camera — and letting go puts its crosspoints back; lit while held |
 
 So the left hand works one monitor, the right hand one camera, and the two
 crosspoints bracket the front panel: outside light enters at fader 1 and loop
@@ -396,7 +396,7 @@ command = "mon 1"       # focus monitor 1, off a control the surface has spare
 A fader names a **knob** and spans its whole travel — for the two knobs that
 wrap, rotation and hue, that is one full revolution from bottom to top. A
 button names a **command**, spelled the way the overlay captions it: `blank`,
-`reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `rate -`,
+`reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `rate -`,
 `rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
 as many of each as a graph may legally hold.
 

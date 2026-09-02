@@ -450,6 +450,15 @@ impl Default for Params {
     }
 }
 
+/// One monitor's column of the switcher: what it shows of every camera and
+/// of every input. Both halves together, because a cut takes the whole
+/// column and a release owes the whole column back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Crosspoints {
+    pub cameras: Vec<f32>,
+    pub inputs: Vec<f32>,
+}
+
 /// A kind of node the focus points at, and so one of the surface's three
 /// rows of select buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -821,6 +830,38 @@ impl Params {
     /// counts equal by anything but coincidence.
     pub fn layers(&self) -> usize {
         self.monitors.len() + self.inputs.len()
+    }
+
+    pub fn crosspoints(&self, monitor: usize) -> Crosspoints {
+        Crosspoints {
+            cameras: self.routing[monitor].clone(),
+            inputs: self.routing_inputs.iter().map(|row| row[monitor]).collect(),
+        }
+    }
+
+    pub fn set_crosspoints(&mut self, monitor: usize, points: &Crosspoints) {
+        self.routing[monitor].clone_from(&points.cameras);
+        for (row, level) in self.routing_inputs.iter_mut().zip(&points.inputs) {
+            row[monitor] = *level;
+        }
+    }
+
+    /// The switcher's cut: the focused monitor shows the focused input whole
+    /// — or, on a graph with no inputs, the focused camera — and nothing
+    /// else. Returns the column as it stood, which is what letting go puts
+    /// back.
+    pub fn cut(&mut self, focus: Focus) -> Crosspoints {
+        let prior = self.crosspoints(focus.monitor);
+        let mut whole = Crosspoints {
+            cameras: vec![0.0; prior.cameras.len()],
+            inputs: vec![0.0; prior.inputs.len()],
+        };
+        match whole.inputs.get_mut(focus.input) {
+            Some(input) => *input = 1.0,
+            None => whole.cameras[focus.camera] = 1.0,
+        }
+        self.set_crosspoints(focus.monitor, &whole);
+        prior
     }
 
     /// Put `knob` at `value` outright, which is what a fader does: it sends
