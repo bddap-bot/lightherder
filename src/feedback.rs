@@ -64,7 +64,7 @@ pub fn bank_bytes(params: &Params, size: (u32, u32)) -> u64 {
 
 /// Whether that fits in [`MAX_BANK_BYTES`] and in one texture array, with
 /// the figures in the refusal: a resolution is chosen at the command line
-/// and the layer count comes from the graph and its longest delay, so no one
+/// and the layer count comes from the graph and its reach, so no one
 /// of them alone is what went wrong.
 pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
     let shape = Shape::of(params);
@@ -215,7 +215,7 @@ pub(crate) fn reachable_taps(params: &Params) -> usize {
     through_cameras + params.inputs.len()
 }
 
-/// One flattened edge of the graph, mirrored in `shaders/feedback.wgsl`.
+/// One flattened edge of the graph, flipped in `shaders/feedback.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Tap {
@@ -245,7 +245,7 @@ struct Tap {
     keyvec: [f32; 4],
 }
 
-/// Per-monitor uniforms, mirrored by hand in `shaders/feedback.wgsl`, which
+/// Per-monitor uniforms, flipped by hand in `shaders/feedback.wgsl`, which
 /// documents what each lane carries. The sizes are held together by
 /// `min_binding_size` below.
 #[repr(C)]
@@ -632,7 +632,7 @@ impl Feedback {
         assert_eq!(
             Shape::of(params),
             self.shape,
-            "the graph's monitors, inputs and longest delay are baked into the bank at creation"
+            "the graph's monitors, inputs and reach are baked into the bank at creation"
         );
         // Everything else the tap flattening assumes — row lengths, weight
         // signs, the tap cap — is the loader's contract, re-asserted here so
@@ -904,7 +904,7 @@ mod tests {
         );
         // The full delay is 260 layers, more than a texture array holds
         // however small the monitors — refused by depth, not by bytes.
-        most.delay = crate::params::Camera::MAX_DELAY;
+        most.delay = crate::params::Params::MAX_DELAY;
         let why = bank_fits(&most, (640, 480)).unwrap_err();
         assert!(
             why.contains("260 bank layers") && why.contains("256 layers"),

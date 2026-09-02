@@ -47,8 +47,7 @@ pub enum Action {
     /// is the flick back.
     Cut(Edge),
     Page,
-    /// Mirror the focused camera's picture, and again to put it back. A
-    /// latch on a button with a lamp, not a knob: a mirror is on or off.
+    /// A latch on a button with a lamp, not a knob: a flip is on or off.
     Flip(Axis),
 }
 

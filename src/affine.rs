@@ -100,8 +100,8 @@ impl Framing {
     }
 }
 
-/// The two ways a picture is mirrored, in the order the pair of flips is
-/// written down.
+/// In the order the pair of flips is written down, which is the order
+/// [`Framing::flipped`] reads them out in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
     X,
@@ -113,14 +113,15 @@ impl Axis {
 }
 
 impl Framing {
-    pub fn mirror(&mut self, axis: Axis) -> &mut bool {
-        match axis {
+    pub fn flip(&mut self, axis: Axis) {
+        let flip = match axis {
             Axis::X => &mut self.flip_x,
             Axis::Y => &mut self.flip_y,
-        }
+        };
+        *flip = !*flip;
     }
 
-    pub fn mirrored(&self) -> [bool; 2] {
+    pub fn flipped(&self) -> [bool; 2] {
         [self.flip_x, self.flip_y]
     }
 }
@@ -157,7 +158,7 @@ pub fn screen_to_uv(aspect: f32) -> Affine2 {
 /// numbers mean the same thing at any resolution.
 ///
 /// The flips are the last stage of the framing, so they mirror the picture the
-/// camera has already panned, turned and zoomed: a pan right on a mirrored
+/// camera has already panned, turned and zoomed: a pan right on a flipped
 /// path lands left. A mirror is its own inverse, so the forward flip is the
 /// one composed here.
 pub fn sample_transform(framing: &Framing, aspect: f32) -> Affine2 {
@@ -179,6 +180,18 @@ pub fn sample_transform(framing: &Framing, aspect: f32) -> Affine2 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_flip_by_axis_is_the_field_of_that_name_in_the_order_written() {
+        let mut framing = super::Framing::identity();
+        framing.flip(super::Axis::X);
+        assert!(framing.flip_x && !framing.flip_y);
+        assert_eq!(framing.flipped(), [true, false]);
+        framing.flip(super::Axis::Y);
+        framing.flip(super::Axis::X);
+        assert!(!framing.flip_x && framing.flip_y);
+        assert_eq!(framing.flipped(), [false, true]);
+    }
+
     use super::*;
     use std::f32::consts::FRAC_PI_2;
 
@@ -225,7 +238,7 @@ mod tests {
     #[test]
     fn the_flip_mirrors_the_pan_and_not_the_other_way_round() {
         // The left edge shows the spot that was a quarter right of centre:
-        // panned to the half, then mirrored. Had the mirror come first the
+        // panned to the half, then flipped. Had the mirror come first the
         // left edge would read from 1.25, off the monitor.
         let t = sample_transform(
             &Framing {

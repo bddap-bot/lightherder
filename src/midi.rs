@@ -321,7 +321,7 @@ impl Map {
                     "cc {}: {:?} is {}",
                     f.cc,
                     f.knob.name(),
-                    f.knob.why_off(params)
+                    f.knob.off_because(params).expect("is_on said no")
                 ));
             }
         }
@@ -573,13 +573,12 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
     out
 }
 
-/// What the lamps say that the focus alone cannot: one fact about the
-/// focused monitor, two about the focused camera, and two latched modes of
-/// the display. The caller owns every one of them.
+/// What the lamps say that the focus alone cannot. The caller owns every
+/// one of them.
 #[derive(Clone, Copy, Debug)]
 pub struct Shown {
     pub seed: Seed,
-    pub mirrored: [bool; 2],
+    pub flipped: [bool; 2],
     pub overlay: bool,
     pub solo: bool,
 }
@@ -588,7 +587,7 @@ impl Default for Shown {
     fn default() -> Shown {
         Shown {
             seed: Seed::Dark,
-            mirrored: [false; 2],
+            flipped: [false; 2],
             overlay: false,
             solo: false,
         }
@@ -992,7 +991,7 @@ impl Midi {
             | when(shown.solo, Action::Solo)
             | when(self.page == Page::Two, Action::Page);
         for axis in Axis::ALL {
-            want |= when(shown.mirrored[axis as usize], Action::Flip(axis));
+            want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
         for (button, held) in self.map.button.iter().zip(&self.held) {
             if *held {
@@ -1995,7 +1994,7 @@ mod tests {
             .err()
             .expect("a map the instrument would refuse");
         assert!(
-            why.contains(r#""send" is a level on an input, and this graph has 0"#),
+            why.contains(r#""send" is a level on an input, and this graph has none"#),
             "{why}"
         );
 
@@ -2217,7 +2216,7 @@ mod tests {
     }
 
     #[test]
-    fn the_page_button_is_lit_page_two() {
+    fn the_page_button_is_lit_on_page_two() {
         let (mut midi, _) = surface();
         let focus = at(2, 1);
         let lamp = crate::lamps::lamp(PAGE);
@@ -2236,11 +2235,11 @@ mod tests {
         let x = crate::lamps::lamp(FLIP_X);
         let y = crate::lamps::lamp(FLIP_Y);
         assert_eq!(base & (x | y), 0);
-        let lit = |mirrored| {
+        let lit = |flipped| {
             midi.wanted(
                 focus,
                 Shown {
-                    mirrored,
+                    flipped,
                     ..Shown::default()
                 },
             ) & !base

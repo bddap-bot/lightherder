@@ -260,7 +260,7 @@ pub struct Camera {
     pub delay: u32,
 }
 
-impl Camera {
+impl Params {
     /// The most reach a graph's delay units may have: the thirty frames the
     /// original's dial up to. A bound because the reach is bought in bank:
     /// every frame of it is another copy of every monitor.
@@ -692,10 +692,11 @@ impl Knob {
     /// Whether the knob is a value of the graph or a grip on other knobs.
     /// The rigid gain is the only one of the latter: it reads as the mean of
     /// the three channel knobs and turns all three, so it is a reading rather
-    /// than a field — which is what [`Params::knob_mut`]'s `unreachable!`
-    /// says too. Anything walking the graph's *values* wants the fields, and
-    /// would otherwise name a knob no config can write when a channel is at
-    /// fault.
+    /// than a field. Anything walking the graph's *values* wants the fields,
+    /// and would otherwise name a knob no config can write when a channel is
+    /// at fault. Not the same fact as [`Params::knob_mut`]'s reach: the
+    /// delay owns a field too, a count of frames that is no `f32`, so a walk
+    /// over the fields goes through [`Params::set`] and never `knob_mut`.
     pub const fn owns_a_field(self) -> bool {
         !matches!(self, Knob::Gain)
     }
@@ -759,22 +760,19 @@ impl Knob {
     /// [`crate::midi::Map`] refuses a hand-written binding of one, off this
     /// one answer.
     pub fn is_on(self, params: &Params) -> bool {
-        match self {
-            Knob::Send => params.count(Node::Input) > 0,
-            Knob::Delay => params.delay > 0,
-            _ => true,
-        }
+        self.off_because(params).is_none()
     }
 
-    /// Why [`Knob::is_on`] said no, for the refusal.
-    pub fn why_off(self, params: &Params) -> String {
+    /// Why the graph has nothing for this knob to act on, for the refusal.
+    pub fn off_because(self, params: &Params) -> Option<String> {
         match self {
-            Knob::Send => format!(
-                "a level on an input, and this graph has {}",
-                params.count(Node::Input)
-            ),
-            Knob::Delay => "a frame delay unit, and this graph's reach is 0".to_string(),
-            _ => unreachable!("{:?} is on every graph", self),
+            Knob::Send if params.count(Node::Input) == 0 => {
+                Some("a level on an input, and this graph has none".to_string())
+            }
+            Knob::Delay if params.delay == 0 => {
+                Some("a frame delay unit, and this graph's reach is 0".to_string())
+            }
+            _ => None,
         }
     }
 
@@ -869,7 +867,7 @@ impl Params {
 
     /// How many frames of every monitor the bank keeps as a ring: the one a
     /// pass is drawing, the one every camera reads, and one more per frame
-    /// of the longest delay any camera asks for.
+    /// of the graph's reach.
     pub fn history(&self) -> usize {
         2 + self.delay as usize
     }
@@ -978,14 +976,13 @@ impl Params {
         // step once against the tightest channel, so hitting the rail slides
         // all three together instead of flattening the colour offsets.
         if knob == Knob::Gain {
-            let step = rigid_gain_step(&self.cameras[focus.camera].gain, delta);
+            let ends = knob.limit(self).ends();
+            let step = rigid_gain_step(&self.cameras[focus.camera].gain, delta, ends);
             for channel in [Knob::GainR, Knob::GainG, Knob::GainB] {
                 self.nudge(channel, step, focus);
             }
             return;
         }
-        // The delay is a count of frames: the nearest whole one, inside the
-        // reach the graph bought.
         if knob == Knob::Delay {
             let (low, high) = knob.limit(self).ends();
             let camera = &mut self.cameras[focus.camera];
@@ -1098,8 +1095,7 @@ impl Params {
     }
 }
 
-fn rigid_gain_step(gain: &[f32; 3], delta: f32) -> f32 {
-    let (low, high) = Knob::Gain.limit(&identity_graph()).ends();
+fn rigid_gain_step(gain: &[f32; 3], delta: f32, (low, high): (f32, f32)) -> f32 {
     let travel = gain
         .iter()
         .map(|c| if delta >= 0.0 { high - c } else { c - low })
@@ -1507,6 +1503,11 @@ mod tests {
         assert_eq!(params.cameras[0].delay, 4, "the reach is the rail");
         assert_eq!(params.cameras[1].delay, 0, "the other cable is its own");
         assert!(params.describe(focus).contains("delay 4/4"));
+        params.set(Knob::Delay, 3.0, focus);
+        assert!(
+            params.describe(focus).contains("delay 3/4"),
+            "cable, then reach"
+        );
         params.reset(Knob::Delay, focus);
         assert_eq!(params.cameras[0].delay, 0);
         // With no reach there is nothing to dial, and the knob says so.
@@ -1521,7 +1522,7 @@ mod tests {
         // An identity outside the travel is one the reset can never land on,
         // and `nudge` would quietly clamp it to a rail instead of saying so.
         for knob in Knob::ALL {
-            let (low, high) = knob.limit(&identity_graph()).ends();
+            let (low, high) = knob.limit(&p()).ends();
             let at = knob.identity();
             assert!(at >= low && at <= high, "{} is {at}", knob.name());
         }

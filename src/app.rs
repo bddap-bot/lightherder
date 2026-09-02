@@ -401,7 +401,7 @@ impl App {
     fn shown(&self) -> Shown {
         Shown {
             seed: self.params.monitors[self.focus.monitor].seed,
-            mirrored: self.params.cameras[self.focus.camera].framing.mirrored(),
+            flipped: self.params.cameras[self.focus.camera].framing.flipped(),
             overlay: self.overlay_shown,
             solo: self.solo,
         }
@@ -579,11 +579,11 @@ impl App {
             }
             Action::Flip(axis) => {
                 let framing = &mut self.params.cameras[self.focus.camera].framing;
-                *framing.mirror(axis) ^= true;
+                framing.flip(axis);
                 log::info!(
-                    "camera {} mirrored {:?}",
+                    "camera {} flipped {:?}",
                     self.focus.camera + 1,
-                    framing.mirrored()
+                    framing.flipped()
                 );
             }
         }
@@ -898,12 +898,12 @@ mod tests {
         let started = app.params.clone();
         app.act(Action::Focus(Node::Camera, 1));
         app.act(Action::Flip(Axis::X));
-        assert_eq!(app.shown().mirrored, [true, false]);
+        assert_eq!(app.shown().flipped, [true, false]);
         let mut want = started.clone();
         want.cameras[1].framing.flip_x = true;
         assert_eq!(app.params, want, "only the focused camera, only that axis");
         app.act(Action::Flip(Axis::Y));
-        assert_eq!(app.shown().mirrored, [true, true]);
+        assert_eq!(app.shown().flipped, [true, true]);
         app.act(Action::Flip(Axis::X));
         app.act(Action::Flip(Axis::Y));
         assert_eq!(app.params, started);

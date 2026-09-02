@@ -276,7 +276,7 @@ cameras, Mute the monitors, Record the inputs.
 
 **A row is the choice its kind offers, and nothing else.** The surface is
 built for the graph about to be played. A rig of one camera and two monitors
-binds M1 and M2 and leaves twenty-one select buttons dead — unlit, silent,
+binds M1 and M2 and leaves nineteen select buttons dead — unlit, silent,
 and free for a `midi.toml` to claim; R6–R8 are the flips and the page on every rig. The Solo row is dead there
 because one camera is no choice: a button that selects the only camera there
 is selects what is already selected, and the rule is that a button is
@@ -288,8 +288,8 @@ bring the knobs to; a `midi.toml` that binds a select button on a node the
 graph has not got — or the send on a rig with no input to send — is refused
 the same way, rather than lighting a button that lies or spending a fader on
 silence. Nothing is bound to quit — the window manager ends the instrument,
-and a slipped finger on the surface must not be able to. Every knob is on the
-factory map, on one page or the other; page 2 keeps the rotaries the camera's,
+and a slipped finger on the surface must not be able to. Every knob the graph has is on
+the factory map, on one page or the other; page 2 keeps the rotaries the camera's,
 puts its delay on fader 8, and leaves the other faders free for a `midi.toml`
 to claim.
 
@@ -495,7 +495,8 @@ graph is its frame delay units' reach, 0 to 30 frames, and defaults to none;
 `delay` on a camera is the unit on that camera's cable, whole frames up to
 the reach on top of the one pass every camera is behind by. The reach is
 bought at load — a frame of it is another copy of every monitor in the bank —
-and is as far as the delay fader goes. `framing` may also set `flip_x` and
+and is as far as the delay fader goes; a camera's `delay` past it is refused.
+`framing` may also set `flip_x` and
 `flip_y`, the original's router-output mirrors, applied to the framed
 picture as a whole. `seed` is
 `{ white_blob = <brightness> }` or `"dark"`, and defaults to `"dark"` — a

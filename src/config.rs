@@ -546,11 +546,11 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // every monitor, and the ring is sized from it at load. A camera past
     // the reach is caught by the walk over the knobs above, since the reach
     // is the delay knob's rail.
-    if params.delay > Camera::MAX_DELAY {
+    if params.delay > Params::MAX_DELAY {
         return Err(format!(
             "the delay units reach {} frames; at most {}",
             params.delay,
-            Camera::MAX_DELAY
+            Params::MAX_DELAY
         ));
     }
     // The flattened routing-times-look products are what the shader iterates,
@@ -1107,8 +1107,8 @@ mod tests {
             p.cameras[0].delay = delay;
             p
         };
-        assert!(validate(&with(Camera::MAX_DELAY, Camera::MAX_DELAY)).is_ok());
-        let why = validate(&with(Camera::MAX_DELAY + 1, 0)).unwrap_err();
+        assert!(validate(&with(Params::MAX_DELAY, Params::MAX_DELAY)).is_ok());
+        let why = validate(&with(Params::MAX_DELAY + 1, 0)).unwrap_err();
         assert!(why.contains("reach 31"), "{why}");
         assert_eq!(
             validate(&with(3, 4)).unwrap_err(),

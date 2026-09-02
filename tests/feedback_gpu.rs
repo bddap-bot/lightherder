@@ -2333,10 +2333,10 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
         inputs: Vec::new(),
         routing: vec![vec![0.0], vec![1.0]],
         routing_inputs: Vec::new(),
-        delay: Camera::MAX_DELAY,
+        delay: Params::MAX_DELAY,
     };
     let mut undelayed: Option<Vec<u8>> = None;
-    for delay in [0, 1, 2, Camera::MAX_DELAY] {
+    for delay in [0, 1, 2, Params::MAX_DELAY] {
         let mut p = flash(delay);
         let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
             return;
