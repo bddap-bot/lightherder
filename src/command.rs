@@ -45,7 +45,6 @@ pub enum Action {
     /// The switcher's foot pedal. Held rather than latched because the trap
     /// is the flick back.
     Cut(Edge),
-    /// Turn the faders and rotaries over to their other page of knobs.
     Page,
 }
 

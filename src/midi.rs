@@ -84,14 +84,13 @@ pub struct Map {
 pub struct Fader {
     pub(crate) cc: u8,
     pub(crate) knob: Knob,
-    /// Which page of knobs this binding is on. The page button turns the
-    /// faders and rotaries over between the two; the buttons are on both.
+    /// The buttons are on both pages; only the faders turn over.
     #[serde(default)]
     pub(crate) page: Page,
 }
 
-/// One of the two pages a fader is on. Two and not N: the button that turns
-/// the page has one lamp, and lit-or-dark is exactly two pages.
+/// Two and not N: the button that turns the page has one lamp, and
+/// lit-or-dark is exactly two pages.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "u8")]
 pub enum Page {
@@ -102,13 +101,6 @@ pub enum Page {
 
 impl Page {
     pub const ALL: [Page; 2] = [Page::One, Page::Two];
-
-    pub fn turned(self) -> Page {
-        match self {
-            Page::One => Page::Two,
-            Page::Two => Page::One,
-        }
-    }
 }
 
 impl TryFrom<u8> for Page {
@@ -125,7 +117,10 @@ impl TryFrom<u8> for Page {
 
 impl std::fmt::Display for Page {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", *self as u8 + 1)
+        f.write_str(match self {
+            Page::One => "1",
+            Page::Two => "2",
+        })
     }
 }
 
@@ -226,8 +221,8 @@ impl Map {
         for f in &self.fader {
             let control = silkscreen(&self.device, f.cc);
             let page = match f.page {
-                Page::One => "",
-                Page::Two => " (page 2)",
+                Page::One => String::new(),
+                Page::Two => format!(" (page {})", f.page),
             };
             out.push_str(&format!("  {control:<12} {}{page}\n", f.knob.name()));
         }
@@ -274,27 +269,32 @@ impl Map {
         if self.device.is_empty() {
             return Err("device is empty, which every card's line contains".into());
         }
-        // A fader may carry one knob a page; a button is on every page, so
-        // its number is nobody else's on any of them.
-        let mut seen: Vec<(u8, Option<Page>)> = Vec::new();
-        for (cc, page) in self
-            .fader
-            .iter()
-            .map(|f| (f.cc, Some(f.page)))
-            .chain(self.button.iter().map(|b| (b.cc, None)))
-        {
+        let mut seen: Vec<(u8, Page)> = Vec::new();
+        let faders = self.fader.iter().map(|f| (f.cc, vec![f.page]));
+        let buttons = self.button.iter().map(|b| (b.cc, Page::ALL.to_vec()));
+        for (cc, pages) in faders.chain(buttons) {
             if cc > 127 {
                 return Err(format!("cc {cc} is not a control number; they stop at 127"));
             }
-            let clashes = |(had, on): &(u8, Option<Page>)| {
-                *had == cc && (on.is_none() || page.is_none() || *on == page)
-            };
-            if seen.iter().any(clashes) {
-                return Err(format!("cc {cc} is bound twice"));
+            for page in pages {
+                if seen.contains(&(cc, page)) {
+                    return Err(format!("cc {cc} is bound twice"));
+                }
+                seen.push((cc, page));
             }
-            seen.push((cc, page));
         }
+        let turns = self
+            .button
+            .iter()
+            .any(|b| action_for_name(&b.command) == Some(Action::Page));
         for f in &self.fader {
+            if f.page == Page::Two && !turns {
+                return Err(format!(
+                    "cc {}: {:?} is on page 2, and no button turns the page",
+                    f.cc,
+                    f.knob.name()
+                ));
+            }
             // At load and not at play: the only other place to say it is
             // inside the frame loop, where one sweep says it 127 times.
             if !f.knob.is_on(params) {
@@ -414,6 +414,12 @@ const R_ROW: u8 = 64;
 /// panel is eight channel strips wide. A node past this has no button, which
 /// is what [`crate::config::validate`] refuses a graph for.
 pub const ROW_BUTTONS: usize = 8;
+
+/// The page button: the last of the Record row, which every legal graph
+/// leaves dead — the inputs stop short of it — so it is the one select
+/// button no rig can claim, and the page costs the transport nothing.
+pub(crate) const PAGE: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
+const _: () = assert!(crate::config::cap(Node::Input) < ROW_BUTTONS);
 
 pub(crate) fn spot(cc: u8) -> Option<Spot> {
     let block = |first: u8| (cc >= first && cc < first + ROW_BUTTONS as u8).then(|| cc - first);
@@ -542,12 +548,6 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
     ]);
     out
 }
-
-/// The page button: the last of the Record row, which every legal graph
-/// leaves dead — the inputs stop short of it — so it is the one select
-/// button no rig can claim, and the page costs the transport nothing.
-pub(crate) const PAGE: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
-const _: () = assert!(crate::config::cap(Node::Input) < ROW_BUTTONS);
 
 /// One thing off the wire. A knob or a button is a control change; a system
 /// exclusive frame is how the surface answers a question about itself, which
@@ -733,7 +733,6 @@ pub struct Midi {
     port: Option<Port>,
     /// One per entry of `map.fader`, in the same order.
     pickup: Vec<Pickup>,
-    /// The page the faders and rotaries are on.
     page: Page,
     /// One per entry of `map.button`: whether it is being held. A button is
     /// acted on when it goes down, so a surface whose buttons latch — the
@@ -819,7 +818,10 @@ impl Midi {
     /// let go: a fader that was the knob on one page is standing nowhere
     /// near the knob it names on the other.
     pub fn turn_page(&mut self) {
-        self.page = self.page.turned();
+        self.page = match self.page {
+            Page::One => Page::Two,
+            Page::Two => Page::One,
+        };
         self.release();
     }
 
@@ -1764,7 +1766,6 @@ mod tests {
         // here is one a blind slip can find. The Record row runs out past
         // the inputs, which is what a row as wide as its kind looks like —
         // all but its last button, which is the page's on every rig.
-        assert_eq!(PAGE, 71);
         let spare = R_ROW + crate::config::cap(Node::Input) as u8..PAGE;
         for cc in spare {
             assert!(
@@ -1996,7 +1997,8 @@ mod tests {
         let map: Map = toml::from_str(
             "device = \"nanoKONTROL\"\n\
              [[fader]]\ncc = 0\nknob = \"hue\"\n\
-             [[fader]]\ncc = 0\nknob = \"noise\"\npage = 2\n",
+             [[fader]]\ncc = 0\nknob = \"noise\"\npage = 2\n\
+             [[button]]\ncc = 71\ncommand = \"page\"\n",
         )
         .unwrap();
         assert_eq!(
@@ -2046,6 +2048,16 @@ mod tests {
         let mut map = Map::nano_kontrol2(&widest);
         map.fader.insert(0, on_page_two(62, Knob::Noise));
         assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
+        // A knob on page 2 of a map with no button to turn the page is a
+        // knob nothing can reach, refused the way a select on equipment
+        // the graph has not got is.
+        let mut map = Map::nano_kontrol2(&widest);
+        map.fader.push(on_page_two(4, Knob::Noise));
+        map.button.retain(|b| b.command != "page");
+        let why = map.validate(&widest).unwrap_err();
+        assert!(why.contains("page 2") && why.contains("no button"), "{why}");
+        map.button.push(button(90, "page"));
+        map.validate(&widest).unwrap();
     }
 
     #[test]

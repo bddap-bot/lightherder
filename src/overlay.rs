@@ -62,6 +62,7 @@ const PANEL_H: i32 = 152;
 /// The pitch of the plain text lines: overflow bindings under the panel, and
 /// the whole listing for a surface whose shape this crate does not know.
 const LINE: i32 = 10;
+const PAGE_Y: i32 = 20;
 
 /// An RGBA image being drawn. Every mark goes through [`Canvas::set`], which
 /// drops texels outside the image — so a caption longer than the room it was
@@ -331,9 +332,8 @@ fn rasterize(map: &Map, page: Page) -> Raster {
         transport_button(&mut c, t.row, t.col, DIM);
     }
     group_labels(&mut c);
-    // Which page the knobs are on: the one fact the picture carries that
-    // the device does not print, in the room left of the rotaries.
-    c.text(PAD, 20, &format!("page {page}"), STRIPS_X, LIT);
+    // The one fact the picture carries that the device does not print.
+    c.text(PAD, PAGE_Y, &format!("page {page}"), STRIPS_X, LIT);
     for (cc, label) in labels(map, page) {
         if let Some(spot) = spot(cc) {
             place(&mut c, spot, &label);
@@ -377,8 +377,7 @@ fn listing(map: &Map, page: Page) -> Raster {
 /// target.
 pub struct Overlay {
     pipeline: wgpu::RenderPipeline,
-    /// One image a page, indexed by the page: both are drawn at startup so
-    /// a page turn mid-piece costs a frame nothing.
+    /// Both drawn at startup, so a page turn mid-piece costs a frame nothing.
     pages: [Image; 2],
 }
 
@@ -390,7 +389,6 @@ struct Image {
 /// How far the panel stands off the target's corner, in target texels.
 const MARGIN: f32 = 24.0;
 
-/// The raster uploaded, as a texture view the pass can sample.
 fn upload(device: &wgpu::Device, queue: &wgpu::Queue, raster: &Raster) -> wgpu::TextureView {
     let size = wgpu::Extent3d {
         width: raster.width,
@@ -768,18 +766,13 @@ mod tests {
         // The page's own caption, against the word drawn alone.
         for page in Page::ALL {
             let mut want = Canvas::new(PANEL_W, PANEL_H);
-            want.text(PAD, 20, &format!("page {page}"), STRIPS_X, LIT);
+            let caption = format!("page {page}");
+            want.text(PAD, PAGE_Y, &caption, STRIPS_X, LIT);
+            let w = caption.len() as i32 * GLYPH;
             let raster = rasterize(&factory, page);
             assert_eq!(
-                box_of(
-                    &raster.pixels,
-                    raster.width as i32,
-                    PAD,
-                    20,
-                    7 * GLYPH,
-                    GLYPH
-                ),
-                box_of(&want.pixels, want.width, PAD, 20, 7 * GLYPH, GLYPH),
+                box_of(&raster.pixels, raster.width as i32, PAD, PAGE_Y, w, GLYPH),
+                box_of(&want.pixels, want.width, PAD, PAGE_Y, w, GLYPH),
                 "page {page}"
             );
         }

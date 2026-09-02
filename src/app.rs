@@ -577,9 +577,7 @@ impl App {
         }
     }
 
-    /// The overlay to draw: the live page of knobs, or none while it is
-    /// hidden.
-    fn overlay(&self) -> Option<Page> {
+    fn overlay_page(&self) -> Option<Page> {
         self.overlay_shown.then(|| self.midi.page())
     }
 
@@ -601,7 +599,7 @@ impl App {
             &live.present,
             &live.feedback,
             solo,
-            self.overlay().map(|page| (&live.overlay, page)),
+            self.overlay_page().map(|page| (&live.overlay, page)),
         )
     }
 
@@ -784,7 +782,7 @@ impl ApplicationHandler for App {
                 // it is up here: the solo is the focus's and the focus is not
                 // the window's.
                 let solo = self.soloed();
-                let overlay = self.overlay();
+                let overlay = self.overlay_page();
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };

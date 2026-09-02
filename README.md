@@ -272,8 +272,8 @@ cameras, Mute the monitors, Record the inputs.
 
 **A row is the choice its kind offers, and nothing else.** The surface is
 built for the graph about to be played. A rig of one camera and two monitors
-binds M1 and M2 and leaves the other twenty-two select buttons dead — unlit,
-silent, and free for a `midi.toml` to claim. The Solo row is dead there
+binds M1 and M2 and leaves twenty-one select buttons dead — unlit, silent,
+and free for a `midi.toml` to claim; R8 is the page button on every rig. The Solo row is dead there
 because one camera is no choice: a button that selects the only camera there
 is selects what is already selected, and the rule is that a button is
 owed to equipment, not spent on it. Dead is the point.
@@ -406,6 +406,10 @@ knob = "noise"
 page = 2            # the same control, once the page button has turned the knobs over
 
 [[button]]
+cc = 71
+command = "page"
+
+[[button]]
 cc = 41
 command = "blank"   # any command name the card prints
 
@@ -417,8 +421,8 @@ command = "mon 1"       # focus monitor 1, off a control the surface has spare
 A fader names a **knob** and spans its whole travel — for the two knobs that
 wrap, rotation and hue, that is one full revolution from bottom to top. A
 fader is on `page` 1 unless it says 2; the buttons are on both pages, so a
-control may carry one knob a page and a button on no page. The factory map
-binds nothing on page 2. A
+control may carry one knob a page and a button on no page; a map with a knob
+on page 2 and no `page` button is refused. A
 button names a **command**, spelled the way the overlay captions it: `blank`,
 `reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `page`, `rate -`,
 `rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
