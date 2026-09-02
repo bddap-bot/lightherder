@@ -832,8 +832,8 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config;
     use crate::affine::Axis;
+    use crate::config;
     use crate::params::{Node, Seed};
 
     /// An instrument playing `params`, headless: no window has opened, so
