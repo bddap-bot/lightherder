@@ -185,7 +185,7 @@ impl Capture {
         present: &Present,
         monitors: &Feedback,
         solo: Option<usize>,
-        overlay: Option<&Overlay>,
+        overlay: Option<(&Overlay, crate::midi::Page)>,
     ) -> Result<(), String> {
         let due = match self.clock.as_mut() {
             Some(clock) => clock.take_due(Instant::now()),

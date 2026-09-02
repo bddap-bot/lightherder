@@ -15,7 +15,7 @@ use crate::command::{Action, Edge};
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
-use crate::midi::{Map, Midi};
+use crate::midi::{Map, Midi, Page};
 use crate::overlay::Overlay;
 use crate::params::{Crosspoints, Focus, Knob, Params, Seed};
 use crate::present::Present;
@@ -335,7 +335,7 @@ impl Live {
     /// with no texture to give is the one way a present does nothing, and
     /// the caller counts the ones that landed so that a stale surface reads
     /// as the rate it really is.
-    fn show(&mut self, gpu: &Gpu, solo: Option<usize>, overlay_shown: bool) -> bool {
+    fn show(&mut self, gpu: &Gpu, solo: Option<usize>, overlay: Option<Page>) -> bool {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -359,7 +359,7 @@ impl Live {
             &frame.texture,
             &self.feedback,
             solo,
-            overlay_shown.then_some(&self.overlay),
+            overlay.map(|page| (&self.overlay, page)),
         );
         gpu.queue.present(frame);
         true
@@ -570,7 +570,17 @@ impl App {
                     log::info!("{}", self.params.describe(self.focus));
                 }
             }
+            Action::Page => {
+                self.midi.turn_page();
+                log::info!("knob page {}", self.midi.page());
+            }
         }
+    }
+
+    /// The overlay to draw: the live page of knobs, or none while it is
+    /// hidden.
+    fn overlay(&self) -> Option<Page> {
+        self.overlay_shown.then(|| self.midi.page())
     }
 
     /// Draw the display into `capture` and hand it whatever falls due.
@@ -591,7 +601,7 @@ impl App {
             &live.present,
             &live.feedback,
             solo,
-            self.overlay_shown.then_some(&live.overlay),
+            self.overlay().map(|page| (&live.overlay, page)),
         )
     }
 
@@ -774,6 +784,7 @@ impl ApplicationHandler for App {
                 // it is up here: the solo is the focus's and the focus is not
                 // the window's.
                 let solo = self.soloed();
+                let overlay = self.overlay();
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
@@ -790,7 +801,7 @@ impl ApplicationHandler for App {
                 // all, which the chain below would spin on, or stops handing
                 // them out and leaves a second per frame inside the acquire.
                 // The piece plays on through either; only the picture waits.
-                let shown = !self.covered && live.show(&self.gpu, solo, self.overlay_shown);
+                let shown = !self.covered && live.show(&self.gpu, solo, overlay);
                 // Under Fifo the present waits for the blank, so a frame that
                 // went out is the one thing that can ask for the next at the
                 // display's rate. One that did not paces nothing.

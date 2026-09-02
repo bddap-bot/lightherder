@@ -252,6 +252,7 @@ camera, one monitor, no inputs — all three are dead.
 | S 1–8 | focus camera 1–8, as many as the graph has a choice of |
 | M 1–8 | focus monitor 1–8, likewise |
 | R 1–4 | focus input 1–4, likewise |
+| R 8 | **page**: the faders and rotaries on their other page of knobs; lit on page 2 |
 | marker next | blank the monitors |
 | ◀◀ rewind | put the last knob turned back to its identity |
 | ■ stop | reset every knob |
@@ -296,7 +297,8 @@ plugging in mid-piece throws every knob to wherever its fader was left — with
 the headroom fader slamming a monitor to white. Sweep the fader and it picks
 its knob up on the way past, and from then on the fader is the knob. It lets
 go on a reset and a change of focus — the two ways the whole panel moves
-without a fader moving with it — on a cut, which moves the two crosspoints
+without a fader moving with it — on a page turn, after which every fader is
+standing over some other knob — on a cut, which moves the two crosspoints
 without theirs, and on an unplug, after which nothing knows where a fader is
 standing.
 
@@ -398,6 +400,11 @@ device = "nanoKONTROL"
 cc = 0
 knob = "hue"        # any knob name the card prints
 
+[[fader]]
+cc = 0
+knob = "noise"
+page = 2            # the same control, once the page button has turned the knobs over
+
 [[button]]
 cc = 41
 command = "blank"   # any command name the card prints
@@ -409,8 +416,11 @@ command = "mon 1"       # focus monitor 1, off a control the surface has spare
 
 A fader names a **knob** and spans its whole travel — for the two knobs that
 wrap, rotation and hue, that is one full revolution from bottom to top. A
+fader is on `page` 1 unless it says 2; the buttons are on both pages, so a
+control may carry one knob a page and a button on no page. The factory map
+binds nothing on page 2. A
 button names a **command**, spelled the way the overlay captions it: `blank`,
-`reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `rate -`,
+`reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `page`, `rate -`,
 `rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
 as many of each as a graph may legally hold.
 

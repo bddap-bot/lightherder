@@ -84,6 +84,49 @@ pub struct Map {
 pub struct Fader {
     pub(crate) cc: u8,
     pub(crate) knob: Knob,
+    /// Which page of knobs this binding is on. The page button turns the
+    /// faders and rotaries over between the two; the buttons are on both.
+    #[serde(default)]
+    pub(crate) page: Page,
+}
+
+/// One of the two pages a fader is on. Two and not N: the button that turns
+/// the page has one lamp, and lit-or-dark is exactly two pages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "u8")]
+pub enum Page {
+    #[default]
+    One,
+    Two,
+}
+
+impl Page {
+    pub const ALL: [Page; 2] = [Page::One, Page::Two];
+
+    pub fn turned(self) -> Page {
+        match self {
+            Page::One => Page::Two,
+            Page::Two => Page::One,
+        }
+    }
+}
+
+impl TryFrom<u8> for Page {
+    type Error = String;
+
+    fn try_from(page: u8) -> Result<Page, String> {
+        match page {
+            1 => Ok(Page::One),
+            2 => Ok(Page::Two),
+            _ => Err(format!("page {page} is not a page; there are 1 and 2")),
+        }
+    }
+}
+
+impl std::fmt::Display for Page {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", *self as u8 + 1)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -96,7 +139,11 @@ pub struct Button {
 }
 
 const fn fader(cc: u8, knob: Knob) -> Fader {
-    Fader { cc, knob }
+    Fader {
+        cc,
+        knob,
+        page: Page::One,
+    }
 }
 
 /// A relative `XDG_CONFIG_HOME` is ignored the way the spec says to.
@@ -178,7 +225,11 @@ impl Map {
         );
         for f in &self.fader {
             let control = silkscreen(&self.device, f.cc);
-            out.push_str(&format!("  {control:<12} {}\n", f.knob.name()));
+            let page = match f.page {
+                Page::One => "",
+                Page::Two => " (page 2)",
+            };
+            out.push_str(&format!("  {control:<12} {}{page}\n", f.knob.name()));
         }
         for b in &self.button {
             let control = silkscreen(&self.device, b.cc);
@@ -223,20 +274,25 @@ impl Map {
         if self.device.is_empty() {
             return Err("device is empty, which every card's line contains".into());
         }
-        let mut seen: Vec<u8> = Vec::new();
-        for cc in self
+        // A fader may carry one knob a page; a button is on every page, so
+        // its number is nobody else's on any of them.
+        let mut seen: Vec<(u8, Option<Page>)> = Vec::new();
+        for (cc, page) in self
             .fader
             .iter()
-            .map(|f| f.cc)
-            .chain(self.button.iter().map(|b| b.cc))
+            .map(|f| (f.cc, Some(f.page)))
+            .chain(self.button.iter().map(|b| (b.cc, None)))
         {
             if cc > 127 {
                 return Err(format!("cc {cc} is not a control number; they stop at 127"));
             }
-            if seen.contains(&cc) {
+            let clashes = |(had, on): &(u8, Option<Page>)| {
+                *had == cc && (on.is_none() || page.is_none() || *on == page)
+            };
+            if seen.iter().any(clashes) {
                 return Err(format!("cc {cc} is bound twice"));
             }
-            seen.push(cc);
+            seen.push((cc, page));
         }
         for f in &self.fader {
             // At load and not at play: the only other place to say it is
@@ -482,9 +538,16 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
         button(60, "snap"),
         button(45, "record"),
         button(61, "cut"),
+        button(PAGE, "page"),
     ]);
     out
 }
+
+/// The page button: the last of the Record row, which every legal graph
+/// leaves dead — the inputs stop short of it — so it is the one select
+/// button no rig can claim, and the page costs the transport nothing.
+pub(crate) const PAGE: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
+const _: () = assert!(crate::config::cap(Node::Input) < ROW_BUTTONS);
 
 /// One thing off the wire. A knob or a button is a control change; a system
 /// exclusive frame is how the surface answers a question about itself, which
@@ -670,6 +733,8 @@ pub struct Midi {
     port: Option<Port>,
     /// One per entry of `map.fader`, in the same order.
     pickup: Vec<Pickup>,
+    /// The page the faders and rotaries are on.
+    page: Page,
     /// One per entry of `map.button`: whether it is being held. A button is
     /// acted on when it goes down, so a surface whose buttons latch — the
     /// nanoKONTROL2 can be set either way — plays every other press. Cleared
@@ -728,6 +793,7 @@ impl Midi {
         Ok(Midi {
             action,
             pickup: vec![Pickup::default(); map.fader.len()],
+            page: Page::One,
             held: vec![false; map.button.len()],
             map,
             snd: PathBuf::from(DEV_SND),
@@ -743,6 +809,18 @@ impl Midi {
     /// factory shipped it.
     pub fn map(&self) -> &Map {
         &self.map
+    }
+
+    pub fn page(&self) -> Page {
+        self.page
+    }
+
+    /// Turn the faders and rotaries over to the other page. Every grip is
+    /// let go: a fader that was the knob on one page is standing nowhere
+    /// near the knob it names on the other.
+    pub fn turn_page(&mut self) {
+        self.page = self.page.turned();
+        self.release();
     }
 
     /// Look somewhere other than the real ALSA for the surface. Tests only.
@@ -865,7 +943,8 @@ impl Midi {
             want | self.lamp_of(Action::Focus(node, focus.at(node)))
         }) | when(seed.lit(), Action::Seed)
             | when(overlay, Action::Overlay)
-            | when(solo, Action::Solo);
+            | when(solo, Action::Solo)
+            | when(self.page == Page::Two, Action::Page);
         for (button, held) in self.map.button.iter().zip(&self.held) {
             if *held {
                 want |= lamp(button.cc);
@@ -967,7 +1046,12 @@ impl Midi {
         params: &Params,
         focus: Focus,
     ) -> Option<Action> {
-        if let Some(i) = self.map.fader.iter().position(|f| f.cc == message.control) {
+        if let Some(i) = self
+            .map
+            .fader
+            .iter()
+            .position(|f| f.cc == message.control && f.page == self.page)
+        {
             let knob = self.map.fader[i].knob;
             let fader = f32::from(message.value) / 127.0;
             return self.pickup[i]
@@ -1668,6 +1752,7 @@ mod tests {
                 button(60, "snap"),
                 button(45, "record"),
                 button(61, "cut"),
+                button(71, "page"),
             ]
         );
         // And fader 1 is dead on a rig with nothing to send into: a fader
@@ -1677,8 +1762,10 @@ mod tests {
         assert!(!no_inputs.fader.iter().any(|f| f.cc == 0));
         // And the buttons it leaves alone even on the widest rig: one bound
         // here is one a blind slip can find. The Record row runs out past
-        // the inputs, which is what a row as wide as its kind looks like.
-        let spare = R_ROW + crate::config::cap(Node::Input) as u8..R_ROW + ROW_BUTTONS as u8;
+        // the inputs, which is what a row as wide as its kind looks like —
+        // all but its last button, which is the page's on every rig.
+        assert_eq!(PAGE, 71);
+        let spare = R_ROW + crate::config::cap(Node::Input) as u8..PAGE;
         for cc in spare {
             assert!(
                 !map.button.iter().any(|b| b.cc == cc),
@@ -1894,6 +1981,125 @@ mod tests {
         assert_eq!(map.fader, [fader(0, Knob::Hue)]);
         assert_eq!(map.button, [button(41, "mon 2")]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn on_page_two(cc: u8, knob: Knob) -> Fader {
+        Fader {
+            cc,
+            knob,
+            page: Page::Two,
+        }
+    }
+
+    #[test]
+    fn a_fader_s_page_is_read_from_the_file_and_is_one_unless_it_says() {
+        let map: Map = toml::from_str(
+            "device = \"nanoKONTROL\"\n\
+             [[fader]]\ncc = 0\nknob = \"hue\"\n\
+             [[fader]]\ncc = 0\nknob = \"noise\"\npage = 2\n",
+        )
+        .unwrap();
+        assert_eq!(
+            map.fader,
+            [fader(0, Knob::Hue), on_page_two(0, Knob::Noise)]
+        );
+        map.validate(&crate::config::widest()).unwrap();
+        // The button has one lamp, so there are two pages and no third.
+        let why = toml::from_str::<Map>(
+            "device = \"nanoKONTROL\"\n[[fader]]\ncc = 0\nknob = \"hue\"\npage = 3\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(why.contains("page 3"), "{why}");
+        assert!(toml::from_str::<Map>(
+            "device = \"nanoKONTROL\"\n[[fader]]\ncc = 0\nknob = \"hue\"\npage = 0\n"
+        )
+        .is_err());
+        // And the card says which page a knob is on, since the silkscreen
+        // cannot.
+        assert!(
+            map.card().contains("  fader 1      hue\n"),
+            "{}",
+            map.card()
+        );
+        assert!(
+            map.card().contains("  fader 1      noise (page 2)\n"),
+            "{}",
+            map.card()
+        );
+    }
+
+    #[test]
+    fn a_control_may_carry_one_knob_a_page_and_a_button_is_on_every_page() {
+        let widest = crate::config::widest();
+        let mut map = Map::nano_kontrol2(&widest);
+        map.fader.push(on_page_two(4, Knob::Noise));
+        map.validate(&widest).unwrap();
+        // The same control twice on one page is the clash it always was.
+        map.fader.push(on_page_two(4, Knob::Bloom));
+        assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
+        // A button is not paged, so a fader on page 2 cannot share its
+        // number, whichever of the two the file names first.
+        let mut map = Map::nano_kontrol2(&widest);
+        map.fader.push(on_page_two(62, Knob::Noise));
+        assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
+        let mut map = Map::nano_kontrol2(&widest);
+        map.fader.insert(0, on_page_two(62, Knob::Noise));
+        assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
+    }
+
+    #[test]
+    fn the_page_button_turns_the_faders_over_and_lets_go_of_every_grip() {
+        let params = crate::config::widest();
+        let mut map = Map::nano_kontrol2(&params);
+        // Fader 5 is contrast on page 1 and, here, noise on page 2.
+        map.fader.push(on_page_two(4, Knob::Noise));
+        let mut midi = Midi::new(map, &params).unwrap();
+        assert_eq!(midi.page(), Page::One);
+        // Sweep up from the bottom past contrast (a quarter of the way up)
+        // and the fader is contrast's.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 0)), []);
+        assert!(matches!(
+            feed(&mut midi, &params, &cc(4, 40))[..],
+            [Action::Set(Knob::Contrast, _)]
+        ));
+        // The page button is a press like any other, and the turn is the
+        // caller's to make, because the page is drawn and lit from here.
+        assert_eq!(feed(&mut midi, &params, &cc(PAGE, 127)), [Action::Page]);
+        assert_eq!(feed(&mut midi, &params, &cc(PAGE, 0)), []);
+        midi.turn_page();
+        assert_eq!(midi.page(), Page::Two);
+        // The same fader is now noise's, and it is standing at 40 while
+        // noise sits at zero — so it has to come down to it first.
+        assert_eq!(feed(&mut midi, &params, &cc(4, 60)), []);
+        assert!(matches!(
+            feed(&mut midi, &params, &cc(4, 0))[..],
+            [Action::Set(Knob::Noise, v)] if v.abs() < 1e-6
+        ));
+        // A page-1 knob on a control page 2 binds nothing to is dead there:
+        // gamma's fader moves nothing rather than moving gamma.
+        assert_eq!(feed(&mut midi, &params, &cc(5, 127)), []);
+        // And back: contrast's grip was let go with the turn, so the fader
+        // standing at the bottom has to pass a quarter again.
+        midi.turn_page();
+        assert_eq!(midi.page(), Page::One);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 10)), []);
+        assert!(matches!(
+            feed(&mut midi, &params, &cc(4, 40))[..],
+            [Action::Set(Knob::Contrast, _)]
+        ));
+    }
+
+    #[test]
+    fn the_page_button_is_lit_on_page_two() {
+        let (mut midi, _) = surface();
+        let focus = at(2, 1);
+        let lamp = crate::lamps::lamp(PAGE);
+        assert_eq!(midi.wanted(focus, Seed::Dark, false, false) & lamp, 0);
+        midi.turn_page();
+        assert_eq!(midi.wanted(focus, Seed::Dark, false, false) & lamp, lamp);
+        midi.turn_page();
+        assert_eq!(midi.wanted(focus, Seed::Dark, false, false) & lamp, 0);
     }
 
     #[test]
@@ -2281,8 +2487,9 @@ mod tests {
             }
             // And the rest of the row, past what this rig has, reaches
             // nothing: a dead button is the point of building the row from
-            // the graph.
-            for control in row + width as u8..row + 8 {
+            // the graph. All but the last of the Record row, which the
+            // inputs never reach and the page takes.
+            for control in (row + width as u8..row + 8).filter(|cc| *cc != PAGE) {
                 assert_eq!(
                     feed(&mut midi, &params, &cc(control, 127)),
                     [],
@@ -2290,6 +2497,7 @@ mod tests {
                 );
             }
         }
+        assert_eq!(feed(&mut midi, &params, &cc(PAGE, 127)), [Action::Page]);
         // The transport strip: rewind puts one knob back, stop the whole
         // panel, cycle lifts the overlay, the track pair moves the tempo.
         assert_eq!(

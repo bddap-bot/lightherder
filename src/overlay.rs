@@ -12,7 +12,7 @@
 //! render architecture, and a texture built at startup works the same in a
 //! browser as on the deployed display.
 
-use crate::midi::{nano_kontrol2, spot, Map, Spot, TRANSPORT};
+use crate::midi::{nano_kontrol2, spot, Map, Page, Spot, TRANSPORT};
 
 /// The image, `width * height` RGBA texels, row 0 at the top.
 struct Raster {
@@ -286,30 +286,37 @@ fn place(c: &mut Canvas, spot: Spot, label: &str) {
 /// A button is captioned with the very name a `midi.toml` binds it by, so the
 /// panel and the file say one thing.
 ///
-/// Every binding the map has, with nothing filtered out: a select row is
-/// built as wide as the graph, so a button that exists is a node that
-/// exists. What the panel draws dim is what the map left unbound.
-fn labels<'a>(map: &'a Map) -> impl Iterator<Item = (u8, String)> + 'a {
-    let faders = map.fader.iter().map(|f| (f.cc, f.knob.name().to_string()));
+/// Every binding the map has on `page`, with nothing else filtered out: a
+/// select row is built as wide as the graph, so a button that exists is a
+/// node that exists. What the panel draws dim is what the map left unbound.
+/// The buttons are on every page; only the faders turn over.
+fn labels(map: &Map, page: Page) -> impl Iterator<Item = (u8, String)> + '_ {
+    let faders = map
+        .fader
+        .iter()
+        .filter(move |f| f.page == page)
+        .map(|f| (f.cc, f.knob.name().to_string()));
     let buttons = map.button.iter().map(|b| (b.cc, b.command.clone()));
     faders.chain(buttons)
 }
 
-/// The whole image for the map in force. The map is built for the graph
-/// being played, so the graph itself is not wanted here: the buttons a rig
-/// has are the buttons its map binds.
+/// The whole image for the map in force, on one page of its knobs. The map
+/// is built for the graph being played, so the graph itself is not wanted
+/// here: the buttons a rig has are the buttons its map binds.
 ///
 /// A surface this crate knows the shape of is drawn as that panel; any other
 /// is a listing, because a drawn panel the performer's hands cannot find is
 /// worse than the list they can read — the same retreat
 /// [`crate::midi::silkscreen`] makes to numbers.
-fn rasterize(map: &Map) -> Raster {
+fn rasterize(map: &Map, page: Page) -> Raster {
     if !nano_kontrol2(&map.device) {
-        return listing(map);
+        return listing(map, page);
     }
     // Bindings off the panel — control numbers no silkscreen names — still
     // exist and must not vanish from the help: they get lines below it.
-    let spare: Vec<(u8, String)> = labels(map).filter(|(cc, _)| spot(*cc).is_none()).collect();
+    let spare: Vec<(u8, String)> = labels(map, page)
+        .filter(|(cc, _)| spot(*cc).is_none())
+        .collect();
     let height = PANEL_H
         + if spare.is_empty() {
             0
@@ -324,7 +331,10 @@ fn rasterize(map: &Map) -> Raster {
         transport_button(&mut c, t.row, t.col, DIM);
     }
     group_labels(&mut c);
-    for (cc, label) in labels(map) {
+    // Which page the knobs are on: the one fact the picture carries that
+    // the device does not print, in the room left of the rotaries.
+    c.text(PAD, 20, &format!("page {page}"), STRIPS_X, LIT);
+    for (cc, label) in labels(map, page) {
         if let Some(spot) = spot(cc) {
             place(&mut c, spot, &label);
         }
@@ -341,9 +351,10 @@ fn rasterize(map: &Map) -> Raster {
 }
 
 /// One line per binding for a surface whose panel this crate cannot draw.
-fn listing(map: &Map) -> Raster {
-    let lines: Vec<String> = std::iter::once(map.device.clone())
-        .chain(labels(map).map(|(cc, label)| format!("cc {cc:<3} {label}")))
+fn listing(map: &Map, page: Page) -> Raster {
+    let lines: Vec<String> = [map.device.clone(), format!("page {page}")]
+        .into_iter()
+        .chain(labels(map, page).map(|(cc, label)| format!("cc {cc:<3} {label}")))
         .collect();
     let widest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
     let mut c = Canvas::new(
@@ -366,12 +377,55 @@ fn listing(map: &Map) -> Raster {
 /// target.
 pub struct Overlay {
     pipeline: wgpu::RenderPipeline,
+    /// One image a page, indexed by the page: both are drawn at startup so
+    /// a page turn mid-piece costs a frame nothing.
+    pages: [Image; 2],
+}
+
+struct Image {
     bind_group: wgpu::BindGroup,
     size: (u32, u32),
 }
 
 /// How far the panel stands off the target's corner, in target texels.
 const MARGIN: f32 = 24.0;
+
+/// The raster uploaded, as a texture view the pass can sample.
+fn upload(device: &wgpu::Device, queue: &wgpu::Queue, raster: &Raster) -> wgpu::TextureView {
+    let size = wgpu::Extent3d {
+        width: raster.width,
+        height: raster.height,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("overlay"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        // sRGB because the raster's texels are display colours, and the
+        // blend wants them decoded the same way the monitors are.
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &raster.pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(raster.width * 4),
+            rows_per_image: None,
+        },
+        size,
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
 
 impl Overlay {
     /// `format` is the present target's, because the overlay draws into the
@@ -382,39 +436,6 @@ impl Overlay {
         format: wgpu::TextureFormat,
         map: &Map,
     ) -> Overlay {
-        let raster = rasterize(map);
-        let size = wgpu::Extent3d {
-            width: raster.width,
-            height: raster.height,
-            depth_or_array_layers: 1,
-        };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("overlay"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // sRGB because the raster's texels are display colours, and the
-            // blend wants them decoded the same way the monitors are.
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &raster.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(raster.width * 4),
-                rows_per_image: None,
-            },
-            size,
-        );
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("overlay"),
             entries: &[
@@ -442,20 +463,27 @@ impl Overlay {
             label: Some("overlay"),
             ..Default::default()
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("overlay"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
+        let pages = Page::ALL.map(|page| {
+            let raster = rasterize(map, page);
+            let view = upload(device, queue, &raster);
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("overlay"),
+                layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+            Image {
+                bind_group,
+                size: (raster.width, raster.height),
+            }
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/overlay.wgsl"));
         let pipeline = crate::fullscreen_pipeline(
@@ -467,19 +495,16 @@ impl Overlay {
             Some(wgpu::BlendState::ALPHA_BLENDING),
             "overlay",
         );
-        Overlay {
-            pipeline,
-            bind_group,
-            size: (raster.width, raster.height),
-        }
+        Overlay { pipeline, pages }
     }
 
-    /// Blit into the bottom-right of a pass already drawing to a target of
-    /// `target_size`. Scaled by a whole number where one fits inside ninety
-    /// percent of the target — texel-crisp — and shrunk to fit where none
-    /// does.
-    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass, target_size: (u32, u32)) {
-        let (w, h) = (self.size.0 as f32, self.size.1 as f32);
+    /// Blit `page`'s panel into the bottom-right of a pass already drawing
+    /// to a target of `target_size`. Scaled by a whole number where one fits
+    /// inside ninety percent of the target — texel-crisp — and shrunk to fit
+    /// where none does.
+    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass, target_size: (u32, u32), page: Page) {
+        let image = &self.pages[page as usize];
+        let (w, h) = (image.size.0 as f32, image.size.1 as f32);
         let room = (
             target_size.0 as f32 * 0.9 / w,
             target_size.1 as f32 * 0.9 / h,
@@ -499,7 +524,7 @@ impl Overlay {
             1.0,
         );
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(0, &image.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }
@@ -548,7 +573,7 @@ mod tests {
 
     #[test]
     fn the_left_cluster_is_arranged_the_way_the_surface_is() {
-        let raster = rasterize(&Map::nano_kontrol2(&crate::config::widest()));
+        let raster = rasterize(&Map::nano_kontrol2(&crate::config::widest()), Page::One);
         // Every expectation below is in the strip's own texels, so the
         // strip's own place has to be claimed outright: it starts at the
         // panel's edge and its widest row stops short of the channel
@@ -594,7 +619,7 @@ mod tests {
 
     #[test]
     fn the_factory_panel_is_drawn_and_captioned() {
-        let raster = rasterize(&Map::nano_kontrol2(&crate::config::widest()));
+        let raster = rasterize(&Map::nano_kontrol2(&crate::config::widest()), Page::One);
         assert_eq!(
             (raster.width, raster.height),
             (PANEL_W as u32, PANEL_H as u32)
@@ -610,10 +635,10 @@ mod tests {
         // The rule inherited from rl's controls display: a picture that
         // drifts from the map in force is disallowed. Move one knob in the
         // map and the picture must move with it.
-        let before = rasterize(&Map::nano_kontrol2(&crate::config::widest()));
+        let before = rasterize(&Map::nano_kontrol2(&crate::config::widest()), Page::One);
         let mut moved = Map::nano_kontrol2(&crate::config::widest());
         moved.fader[0].knob = crate::params::Knob::Noise;
-        let moved = rasterize(&moved);
+        let moved = rasterize(&moved, Page::One);
         assert!(texels_differing(&before, &moved) > 100);
     }
 
@@ -624,7 +649,7 @@ mod tests {
             cc: 100,
             command: "blank".into(),
         });
-        let raster = rasterize(&map);
+        let raster = rasterize(&map, Page::One);
         assert!(raster.height > PANEL_H as u32);
     }
 
@@ -635,15 +660,16 @@ mod tests {
         let params = crate::config::single();
         let mut map = Map::nano_kontrol2(&params);
         map.device = "Launchpad".into();
-        let raster = rasterize(&map);
+        let raster = rasterize(&map, Page::One);
         // A listing is one line per binding plus the device's own, and
         // nothing panel-shaped about it.
         assert_eq!(
             raster.height,
-            ((labels(&map).count() + 1) as i32 * LINE + 2 * PAD) as u32
+            ((labels(&map, Page::One).count() + 2) as i32 * LINE + 2 * PAD) as u32
         );
         assert!(
-            labels(&map).count() < labels(&Map::nano_kontrol2(&crate::config::widest())).count()
+            labels(&map, Page::One).count()
+                < labels(&Map::nano_kontrol2(&crate::config::widest()), Page::One).count()
         );
         assert!(lit_texels(&raster) > 100);
     }
@@ -704,12 +730,59 @@ mod tests {
         band_of(node, i, |c| strip_chrome(c, i))
     }
 
-    fn selects(node: Node, i: u8) -> Vec<[u8; 4]> {
-        let caption = format!("{} {}", node.short(), i + 1);
+    fn captioned(node: Node, i: u8, caption: &str) -> Vec<[u8; 4]> {
         band_of(node, i, |c| {
             strip_chrome(c, i);
-            place(c, spot_of(node, i), &caption);
+            place(c, spot_of(node, i), caption);
         })
+    }
+
+    fn selects(node: Node, i: u8) -> Vec<[u8; 4]> {
+        captioned(node, i, &format!("{} {}", node.short(), i + 1))
+    }
+
+    #[test]
+    fn the_picture_is_the_page_the_knobs_are_on() {
+        let widest = crate::config::widest();
+        let factory = Map::nano_kontrol2(&widest);
+        let mut map = factory.clone();
+        map.fader.push(crate::midi::Fader {
+            cc: 1,
+            knob: crate::params::Knob::Noise,
+            page: Page::Two,
+        });
+        // Page 1 is untouched by a binding on page 2, texel for texel.
+        assert_eq!(
+            texels_differing(&rasterize(&factory, Page::One), &rasterize(&map, Page::One)),
+            0
+        );
+        // Page 2 of the factory map is bare strips under the same buttons,
+        // and says which page it is; the binding lights its strip there.
+        let bare = rasterize(&factory, Page::Two);
+        let bound = rasterize(&map, Page::Two);
+        assert!(texels_differing(&rasterize(&factory, Page::One), &bare) > 100);
+        assert!(texels_differing(&bare, &bound) > 100);
+        let under_fader_2 = |r: &Raster| marked_texels(r, strip_x(1), 124, STRIP_W, GLYPH);
+        assert_eq!(under_fader_2(&bare), 0);
+        assert!(under_fader_2(&bound) > 0);
+        // The page's own caption, against the word drawn alone.
+        for page in Page::ALL {
+            let mut want = Canvas::new(PANEL_W, PANEL_H);
+            want.text(PAD, 20, &format!("page {page}"), STRIPS_X, LIT);
+            let raster = rasterize(&factory, page);
+            assert_eq!(
+                box_of(
+                    &raster.pixels,
+                    raster.width as i32,
+                    PAD,
+                    20,
+                    7 * GLYPH,
+                    GLYPH
+                ),
+                box_of(&want.pixels, want.width, PAD, 20, 7 * GLYPH, GLYPH),
+                "page {page}"
+            );
+        }
     }
 
     #[test]
@@ -721,16 +794,19 @@ mod tests {
         // the rig has one of is no choice, so its whole row is chrome.
         for (cameras, monitors, inputs) in [(1, 1, 0), (4, 2, 1), (1, 8, 0), (8, 8, 4)] {
             let params = crate::config::shaped(cameras, monitors, inputs);
-            let raster = rasterize(&Map::nano_kontrol2(&params));
+            let raster = rasterize(&Map::nano_kontrol2(&params), Page::One);
             for node in Node::ALL {
                 let bound = match params.count(node) {
                     0 | 1 => 0,
                     have => have,
                 };
                 for i in 0..crate::midi::ROW_BUTTONS as u8 {
-                    let want = match (i as usize) < bound {
-                        true => selects(node, i),
-                        false => asleep(node, i),
+                    let want = if (i as usize) < bound {
+                        selects(node, i)
+                    } else if crate::midi::row_of(node) + i == crate::midi::PAGE {
+                        captioned(node, i, "page")
+                    } else {
+                        asleep(node, i)
                     };
                     assert_eq!(
                         band(&raster.pixels, raster.width as i32, node, i),

@@ -45,6 +45,8 @@ pub enum Action {
     /// The switcher's foot pedal. Held rather than latched because the trap
     /// is the flick back.
     Cut(Edge),
+    /// Turn the faders and rotaries over to their other page of knobs.
+    Page,
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -114,6 +116,11 @@ const COMMANDS: &[Command] = &[
         "cut",
         Action::Cut(Edge::Down),
         "the focused monitor shows only the focused input (or camera) while this is held down",
+    ),
+    cmd(
+        "page",
+        Action::Page,
+        "the faders and rotaries on their other page of knobs; lit on page 2",
     ),
 ];
 
@@ -235,6 +242,7 @@ mod tests {
         assert_eq!(action_for_name("snap"), Some(Action::Screencap));
         assert_eq!(action_for_name("record"), Some(Action::Record(Edge::Down)));
         assert_eq!(action_for_name("cut"), Some(Action::Cut(Edge::Down)));
+        assert_eq!(action_for_name("page"), Some(Action::Page));
         assert_eq!(describes("reset").as_deref(), Some("reset every knob"));
     }
 
