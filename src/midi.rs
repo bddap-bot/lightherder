@@ -87,10 +87,7 @@ pub struct Fader {
     pub(crate) knob: Knob,
     #[serde(default)]
     pub(crate) page: Page,
-    /// How much the middle of the travel is flattened: 0 is a straight line
-    /// from one end of the knob to the other, 1 puts the fader's middle
-    /// where a move barely tells, so the hand has a wider arc there and the
-    /// ends of the travel do the rest of the work. Blair's sensitivity knob.
+    /// 0 to 1, held there by [`Map::validate`]; see [`bend`].
     #[serde(default)]
     pub(crate) curve: f32,
 }
@@ -159,16 +156,7 @@ const fn page_two(cc: u8, knob: Knob) -> Fader {
 
 /// Half way to flat: the level knobs get finer near the middle without the
 /// dead band a fully flat middle leaves under seven bits of fader.
-const FLATTENED: f32 = 0.5;
-
-const fn flattened(cc: u8, knob: Knob) -> Fader {
-    Fader {
-        cc,
-        knob,
-        page: Page::One,
-        curve: FLATTENED,
-    }
-}
+const HALF_FLAT: f32 = 0.5;
 
 /// A relative `XDG_CONFIG_HOME` is ignored the way the spec says to.
 pub fn map_path() -> PathBuf {
@@ -222,8 +210,14 @@ impl Map {
                 .chain([
                     fader(1, Knob::Hue),
                     fader(2, Knob::Saturation),
-                    flattened(3, Knob::Brightness),
-                    flattened(4, Knob::Contrast),
+                    Fader {
+                        curve: HALF_FLAT,
+                        ..fader(3, Knob::Brightness)
+                    },
+                    Fader {
+                        curve: HALF_FLAT,
+                        ..fader(4, Knob::Contrast)
+                    },
                     fader(5, Knob::Gamma),
                     fader(6, Knob::Headroom),
                     fader(7, Knob::Route),
@@ -737,28 +731,28 @@ impl Stream {
 /// would take. The travel is the knob's own, read off [`Limit::ends`] — a
 /// phase's is one full turn, and this is not the place that decides how long
 /// a turn is.
-fn value_at(knob: Knob, curve: f32, position: f32, params: &Params) -> f32 {
-    let (low, high) = knob.limit(params).ends();
-    low + shape(curve, position) * (high - low)
+fn value_at(fader: Fader, position: f32, params: &Params) -> f32 {
+    let (low, high) = fader.knob.limit(params).ends();
+    low + bend(fader.curve, position) * (high - low)
 }
 
-/// A fader's travel bent by its `curve`: the ends and the middle stay put,
-/// and between them the line gives way to a cubic that is level at the
-/// middle. Both are monotone, so any mix of them is.
-fn shape(curve: f32, position: f32) -> f32 {
+/// The original's sensitivity knob: a line from end to end at 0, and at 1 a
+/// cubic that is level at the middle, so the hand has a wide arc of fine
+/// change there and the ends do the coarse work. Both are monotone, so any
+/// mix of them is — which is what the pickup's sweep relies on.
+fn bend(curve: f32, position: f32) -> f32 {
     let x = position - 0.5;
     0.5 + (1.0 - curve) * x + 4.0 * curve * x * x * x
 }
 
-/// The inverse of [`shape`] by bisection, which is all a monotone function
-/// needs and beats a cubic formula that has to pick its root. The curve's
-/// middle is level, so the inverse is steep there, and the answer is good to
-/// a fraction of a fader step rather than to the last bit.
-fn unshape(curve: f32, shaped: f32) -> f32 {
+/// The inverse of [`bend`], by bisection: a closed form needs a branch for
+/// the straight line and cube roots that lose f32 accuracy, and this needs
+/// only that the curve is monotone.
+fn unbend(curve: f32, bent: f32) -> f32 {
     let (mut low, mut high) = (0.0f32, 1.0f32);
     for _ in 0..32 {
         let mid = (low + high) / 2.0;
-        if shape(curve, mid) < shaped {
+        if bend(curve, mid) < bent {
             low = mid;
         } else {
             high = mid;
@@ -772,9 +766,9 @@ fn unshape(curve: f32, shaped: f32) -> f32 {
 /// `Params::nudge` or loaded through `config::validate` and both hold it
 /// inside the very same [`Limit`] — the two ends of a fader are the two ends
 /// of the knob, with nothing past either.
-fn position_of(knob: Knob, curve: f32, value: f32, params: &Params) -> f32 {
-    let (low, high) = knob.limit(params).ends();
-    unshape(curve, (value - low) / (high - low))
+fn position_of(fader: Fader, value: f32, params: &Params) -> f32 {
+    let (low, high) = fader.knob.limit(params).ends();
+    unbend(fader.curve, (value - low) / (high - low))
 }
 
 /// One fader's grip on its knob.
@@ -798,16 +792,16 @@ struct Pickup {
 const STEP: f32 = 1.0 / 127.0;
 
 impl Pickup {
-    /// Whether this move of the fader reaches its knob, which is at `value`.
-    fn catches(&mut self, fader: f32, wired: Fader, params: &Params, focus: Focus) -> bool {
-        let knob = wired.knob;
+    /// Whether this move of the fader, to `position`, reaches its knob.
+    fn catches(&mut self, position: f32, fader: Fader, params: &Params, focus: Focus) -> bool {
+        let knob = fader.knob;
         let value = params.knob(knob, focus);
-        let was = self.was.replace(fader).unwrap_or(fader);
+        let was = self.was.replace(position).unwrap_or(position);
         let reaches = |target: f32| {
-            let (from, to) = (was - target, fader - target);
+            let (from, to) = (was - target, position - target);
             from.min(to) <= STEP && from.max(to) >= -STEP
         };
-        let at = position_of(knob, wired.curve, value, params);
+        let at = position_of(fader, value, params);
         self.caught |= match knob.limit(params) {
             // A phase's two fader ends are the same angle, so a knob sitting
             // on the seam is reachable from either — and `wrap_pi` puts it
@@ -1165,13 +1159,11 @@ impl Midi {
             .iter()
             .position(|f| f.cc == message.control && f.page == self.page)
         {
-            let wired = self.map.fader[i];
-            let fader = f32::from(message.value) / 127.0;
+            let fader = self.map.fader[i];
+            let position = f32::from(message.value) / 127.0;
             return self.pickup[i]
-                .catches(fader, wired, params, focus)
-                .then(|| {
-                    Action::Set(wired.knob, value_at(wired.knob, wired.curve, fader, params))
-                });
+                .catches(position, fader, params, focus)
+                .then(|| Action::Set(fader.knob, value_at(fader, position, params)));
         }
         let i = self
             .map
@@ -1865,8 +1857,14 @@ mod tests {
                 fader(0, Knob::Send),
                 fader(1, Knob::Hue),
                 fader(2, Knob::Saturation),
-                flattened(3, Knob::Brightness),
-                flattened(4, Knob::Contrast),
+                Fader {
+                    curve: HALF_FLAT,
+                    ..fader(3, Knob::Brightness)
+                },
+                Fader {
+                    curve: HALF_FLAT,
+                    ..fader(4, Knob::Contrast)
+                },
                 fader(5, Knob::Gamma),
                 fader(6, Knob::Headroom),
                 fader(7, Knob::Route),
@@ -2341,37 +2339,41 @@ mod tests {
             // The ends and the middle: two points fix any straight line, and
             // the third is what a square law would miss.
             assert!(
-                (value_at(knob, 0.0, 0.0, &params) - low).abs() < 1e-6,
+                (value_at(fader(0, knob), 0.0, &params) - low).abs() < 1e-6,
                 "{}",
                 knob.name()
             );
             assert!(
-                (value_at(knob, 0.0, 1.0, &params) - high).abs() < 1e-6,
+                (value_at(fader(0, knob), 1.0, &params) - high).abs() < 1e-6,
                 "{}",
                 knob.name()
             );
             let middle = (low + high) / 2.0;
             assert!(
-                (value_at(knob, 0.0, 0.5, &params) - middle).abs() < 1e-6,
+                (value_at(fader(0, knob), 0.5, &params) - middle).abs() < 1e-6,
                 "{}: {} not {middle}",
                 knob.name(),
-                value_at(knob, 0.0, 0.5, &params)
+                value_at(fader(0, knob), 0.5, &params)
             );
             for step in 0..=127 {
                 let position = step as f32 / 127.0;
-                let round = position_of(knob, 0.0, value_at(knob, 0.0, position, &params), &params);
+                let round = position_of(
+                    fader(0, knob),
+                    value_at(fader(0, knob), position, &params),
+                    &params,
+                );
                 assert!((round - position).abs() < 1e-5, "{}", knob.name());
             }
         }
         // Against numbers worked out by hand rather than by the inverse, so a
         // curve and its own inverse cannot agree their way past this.
-        assert!((position_of(Knob::Saturation, 0.0, 1.0, &params) - 0.25).abs() < 1e-6);
-        assert!((value_at(Knob::Saturation, 0.0, 0.75, &params) - 3.0).abs() < 1e-6);
+        assert!((position_of(fader(2, Knob::Saturation), 1.0, &params) - 0.25).abs() < 1e-6);
+        assert!((value_at(fader(2, Knob::Saturation), 0.75, &params) - 3.0).abs() < 1e-6);
         // A phase makes one full revolution, ending where it set out.
-        assert!(value_at(Knob::Hue, 0.0, 0.5, &params).abs() < 1e-6);
+        assert!(value_at(fader(1, Knob::Hue), 0.5, &params).abs() < 1e-6);
         assert!(
-            (value_at(Knob::Hue, 0.0, 1.0, &params)
-                - value_at(Knob::Hue, 0.0, 0.0, &params)
+            (value_at(fader(1, Knob::Hue), 1.0, &params)
+                - value_at(fader(1, Knob::Hue), 0.0, &params)
                 - std::f32::consts::TAU)
                 .abs()
                 < 1e-5
@@ -2498,33 +2500,33 @@ mod tests {
 
     #[test]
     fn the_curve_keeps_the_ends_and_the_middle_and_flattens_between() {
-        for curve in [0.0, FLATTENED, 1.0] {
-            assert!(shape(curve, 0.0).abs() < 1e-6, "{curve}");
-            assert!((shape(curve, 1.0) - 1.0).abs() < 1e-6, "{curve}");
-            assert!((shape(curve, 0.5) - 0.5).abs() < 1e-6, "{curve}");
+        for curve in [0.0, HALF_FLAT, 1.0] {
+            assert!(bend(curve, 0.0).abs() < 1e-6, "{curve}");
+            assert!((bend(curve, 1.0) - 1.0).abs() < 1e-6, "{curve}");
+            assert!((bend(curve, 0.5) - 0.5).abs() < 1e-6, "{curve}");
             // Monotone, or a fader could go up while its knob came down;
             // and back through the inverse to within a fraction of a step.
             for step in 1..=127 {
                 let position = step as f32 / 127.0;
-                let here = shape(curve, position);
+                let here = bend(curve, position);
                 assert!(
-                    here >= shape(curve, (step - 1) as f32 / 127.0),
+                    here >= bend(curve, (step - 1) as f32 / 127.0),
                     "{curve} at {step}"
                 );
                 assert!(
-                    (unshape(curve, here) - position).abs() < STEP / 8.0,
+                    (unbend(curve, here) - position).abs() < STEP / 8.0,
                     "{curve} at {step}"
                 );
             }
         }
         // By hand, not by the inverse: three quarters up.
-        assert!((shape(0.0, 0.75) - 0.75).abs() < 1e-6);
-        assert!((shape(FLATTENED, 0.75) - 0.65625).abs() < 1e-6);
-        assert!((shape(1.0, 0.75) - 0.5625).abs() < 1e-6);
+        assert!((bend(0.0, 0.75) - 0.75).abs() < 1e-6);
+        assert!((bend(HALF_FLAT, 0.75) - 0.65625).abs() < 1e-6);
+        assert!((bend(1.0, 0.75) - 0.5625).abs() < 1e-6);
         // Level at the middle: one fader step from the centre moves the knob
         // a straight step, or not at all.
-        assert!((shape(0.0, 0.5 + STEP) - 0.5 - STEP).abs() < 1e-6);
-        assert!((shape(1.0, 0.5 + STEP) - 0.5).abs() < 1e-5);
+        assert!((bend(0.0, 0.5 + STEP) - 0.5 - STEP).abs() < 1e-6);
+        assert!((bend(1.0, 0.5 + STEP) - 0.5).abs() < 1e-5);
     }
 
     #[test]
@@ -2549,6 +2551,24 @@ mod tests {
         assert!(matches!(
             feed(&mut midi, &params, &cc(4, 0))[..],
             [Action::Set(Knob::Contrast, v)] if v.abs() < 1e-6
+        ));
+        // Fully flat, where the two spaces part company most: contrast at
+        // 2.02 is a hair over the middle of its travel, at 64.1 on a straight
+        // line — and at 77 through the curve, because the curve is level
+        // there. A sweep over the straight place must not catch it.
+        let mut map = Map::nano_kontrol2(&params);
+        map.fader[4] = Fader {
+            curve: 1.0,
+            ..fader(4, Knob::Contrast)
+        };
+        let mut midi = Midi::new(map, &params).unwrap();
+        let mut params = params;
+        params.monitors[0].colour.contrast = 2.02;
+        assert_eq!(feed(&mut midi, &params, &cc(4, 60)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(4, 70)), []);
+        assert!(matches!(
+            feed(&mut midi, &params, &cc(4, 80))[..],
+            [Action::Set(Knob::Contrast, _)]
         ));
     }
 

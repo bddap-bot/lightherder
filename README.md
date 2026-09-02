@@ -436,7 +436,8 @@ says otherwise, bends its travel the way the original's sensitivity knob does:
 the ends and the middle stay where they are, and at 1 the middle is level, so
 the hand has a wide arc of fine change there and the ends do the coarse work;
 outside 0 to 1 is refused. The factory map bends brightness and contrast half
-way. The pickup reads the fader through its curve, so a curved fader still
+way; a `midi.toml` that binds either starts them straight again unless it says
+`curve` itself. The pickup reads the fader through its curve, so a curved fader still
 catches its knob where the knob stands. A
 button names a **command**, spelled the way the overlay captions it: `blank`,
 `reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `reverse`, `page`, `flip x`, `flip y`, `rate -`,
