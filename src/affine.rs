@@ -131,10 +131,10 @@ pub fn screen_to_uv(aspect: f32) -> Affine2 {
 /// height, so rotation stays circular on a non-square monitor and the framing
 /// numbers mean the same thing at any resolution.
 ///
-/// The flips sit where the original's do, on the router output between the
-/// switcher and the monitor, so they mirror the picture the camera has
-/// already framed: a pan right on a mirrored path lands left. A mirror is its
-/// own inverse, so the forward flip is the one composed here.
+/// The flips are the last stage of the framing, so they mirror the picture the
+/// camera has already panned, turned and zoomed: a pan right on a mirrored
+/// path lands left. A mirror is its own inverse, so the forward flip is the
+/// one composed here.
 pub fn sample_transform(framing: &Framing, aspect: f32) -> Affine2 {
     let inv_zoom = 1.0 / framing.zoom;
     let mirror = |on: bool| if on { -1.0 } else { 1.0 };
@@ -199,9 +199,9 @@ mod tests {
 
     #[test]
     fn the_flip_mirrors_the_pan_and_not_the_other_way_round() {
-        // On the router output, past the camera: a spot a quarter right of
-        // centre pans to the half and comes out of the mirror at the left
-        // edge. Mirroring before the pan would put it at the centre instead.
+        // The left edge shows the spot that was a quarter right of centre:
+        // panned to the half, then mirrored. Had the mirror come first the
+        // left edge would read from 1.25, off the monitor.
         let t = sample_transform(
             &Framing {
                 translate: [0.25, 0.0],
