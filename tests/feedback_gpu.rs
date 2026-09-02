@@ -54,6 +54,7 @@ fn graph(s: &Single) -> Params {
             character: s.character,
             key: Key::OFF,
             look: vec![1.0],
+            delay: 0,
         }],
         monitors: vec![Monitor {
             colour: s.colour,
@@ -1097,6 +1098,7 @@ fn plain_camera(look: Vec<f32>) -> Camera {
         character: Character::CLEAN,
         key: Key::OFF,
         look,
+        delay: 0,
     }
 }
 
@@ -2272,4 +2274,63 @@ fn probed(path: &std::path::Path, entry: &str) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
+    // A one-pass flash on monitor 0, and a camera on it routed to monitor 1
+    // with `delay` frames on its cable: monitor 1 lights on pass delay + 1
+    // and on no other, and the frame it shows then is byte for byte the one
+    // an undelayed camera shows on pass 1 — a delay moves when a frame
+    // arrives, never what arrives. The longest delay is in the set because
+    // it reads the slab the same pass overwrites.
+    let flash = |delay: u32| Params {
+        cameras: vec![Camera {
+            delay,
+            ..plain_camera(one_hot(2, 0))
+        }],
+        monitors: vec![
+            Monitor {
+                seed: Seed::WhiteBlob(1.0),
+                ..silent_monitor()
+            },
+            silent_monitor(),
+        ],
+        inputs: Vec::new(),
+        routing: vec![vec![0.0], vec![1.0]],
+        routing_inputs: Vec::new(),
+    };
+    let mut undelayed: Option<Vec<u8>> = None;
+    for delay in [0, 1, 2, Camera::MAX_DELAY] {
+        let mut p = flash(delay);
+        let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+            return;
+        };
+        let seed = h.feedback.blob_uv();
+        let (u, v) = tile(2, 1, seed[0], seed[1]);
+        for pass in 0..=delay + 2 {
+            h.step_graph(&p);
+            p.monitors[0].seed = Seed::Dark;
+            let img = h.read();
+            let lit = img.at(u, v);
+            if pass == delay + 1 {
+                assert!(
+                    lit > 200.0,
+                    "delay {delay}: the flash never arrived on pass {pass}: {lit}"
+                );
+                match &undelayed {
+                    None => undelayed = Some(img.pixels),
+                    Some(reference) => assert!(
+                        &img.pixels == reference,
+                        "delay {delay}: the delayed frame is not the undelayed one"
+                    ),
+                }
+            } else {
+                assert!(
+                    lit < 2.0,
+                    "delay {delay}: monitor 1 lit on pass {pass}: {lit}"
+                );
+            }
+        }
+    }
 }

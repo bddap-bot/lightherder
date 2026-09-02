@@ -251,6 +251,20 @@ pub struct Camera {
     /// switcher takes it, on [`Params::routing`]. That is what makes every
     /// camera recursive by construction rather than by convention.
     pub look: Vec<f32>,
+    /// The frame delay unit on this camera's cable: how many passes old the
+    /// frames it hands on are, past the one pass every camera is behind by.
+    /// Zero is the cable alone. What it does to the picture is the
+    /// original's: a sudden movement comes back as an echoing pulse, a
+    /// smooth one as a frozen smear.
+    #[serde(default)]
+    pub delay: u32,
+}
+
+impl Camera {
+    /// The most delay a camera may be given: the thirty frames the
+    /// original's delay units dial up to. A bound because the delay is
+    /// bought in bank: every frame of it is another copy of every monitor.
+    pub const MAX_DELAY: u32 = 30;
 }
 
 fn unity_gain() -> [f32; 3] {
@@ -272,6 +286,7 @@ fn identity_graph() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look: vec![1.0],
+            delay: 0,
         }],
         monitors: vec![Monitor::default()],
         // An input, so the send has a crosspoint to read its identity out of
@@ -820,17 +835,30 @@ impl Params {
         }
     }
 
-    /// The layers of the source bank: the monitors, then the inputs. An
-    /// input's layer is its index past the monitors — which is why
-    /// `Feedback::new` takes the graph rather than a count it could be handed
-    /// the wrong one of.
+    /// How many past frames of every monitor the bank keeps: one for the
+    /// frame every camera reads, plus one per frame of the longest delay any
+    /// camera asks for.
+    pub fn history(&self) -> usize {
+        1 + self
+            .cameras
+            .iter()
+            .map(|camera| camera.delay as usize)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The layers of the source bank: [`Params::history`] frames of the
+    /// monitors, oldest to newest as a ring, then the inputs. An input's
+    /// layer is its index past the whole ring — which is why `Feedback::new`
+    /// takes the graph rather than a count it could be handed the wrong one
+    /// of.
     ///
     /// Not the switcher's source count, which is the cameras and the inputs:
     /// a monitor is a layer because something samples it, and a camera is a
     /// switcher source because something routes it, and no graph has both
     /// counts equal by anything but coincidence.
     pub fn layers(&self) -> usize {
-        self.monitors.len() + self.inputs.len()
+        self.history() * self.monitors.len() + self.inputs.len()
     }
 
     /// The switcher's cut: the focused monitor shows the focused input whole

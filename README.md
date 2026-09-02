@@ -460,7 +460,10 @@ monitors = [{ seed = { white_blob = 0.1 } }]
 routing = [[0.98]]
 ```
 
-`look` is the camera's beam splitter, a weight per monitor. `seed` is
+`look` is the camera's beam splitter, a weight per monitor. `delay` is a
+frame delay unit on the camera's cable, 0 to 30 frames on top of the one
+pass every camera is behind by, and defaults to none; the board does not
+reach it yet. `seed` is
 `{ white_blob = <brightness> }` or `"dark"`, and defaults to `"dark"` — a
 monitor lit only by what the switcher hands it. `routing[m][c]` is how much
 of camera `c` monitor `m` shows and `routing_inputs[i][m]` how much of input
@@ -563,8 +566,10 @@ conversion and two writes of a whole frame every frame. `webcam` is measured
 with none — `--bench` steps the graph, and a device that is not there uploads
 nothing — so its row is the passes and not the wire.
 
-The bank itself is what grows: two copies of every monitor and input at eight
-bytes a texel, half a gigabyte for `insanity` at 4K, and refused past two.
+The bank itself is what grows: at eight bytes a texel, a ring holding every
+monitor once per frame of the longest camera delay plus one, the stage a pass
+draws on, and every input — half a gigabyte for `insanity` at 4K, and refused
+past two.
 
 ## Playing it
 
@@ -624,9 +629,12 @@ lens widens the spot without changing how much light is in the frame, the
 bleed carries colour sideways while leaving luma where it was, the grain
 differs frame to frame and arrives on an unlit monitor, the rail bends a peak
 onto the curve it claims while leaving everything under its knee alone, and
-two paths in one graph take their character separately. External inputs get
+two paths in one graph take their character separately. A camera with a
+frame delay hands on the frame it saw that many passes ago — monitor 1 lights
+on pass delay + 1 and no other, and the frame is byte for byte the undelayed
+one. External inputs get
 the same: what was written to an input's layer is what the monitor it is
-patched to shows, it is current in whichever bank the cameras read, blanking
+patched to shows, it is current in the bank the cameras read, blanking
 the monitors leaves it alone, the switcher sums it with a camera on one
 monitor, and it arrives square on however the cameras are framed.
 On a machine with no adapter each one prints the reason straight to the

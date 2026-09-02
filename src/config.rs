@@ -53,6 +53,7 @@ pub(crate) fn rig(cameras: usize, monitors: usize, inputs: usize) -> Params {
                 character: Character::CLEAN,
                 key: Key::OFF,
                 look: (0..monitors).map(|m| f32::from(m == c)).collect(),
+                delay: 0,
             })
             .collect(),
         monitors: (0..monitors).map(|_| Monitor::default()).collect(),
@@ -79,6 +80,7 @@ pub fn single() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look: vec![1.0],
+            delay: 0,
         }],
         monitors: vec![Monitor {
             seed: Seed::BLOB,
@@ -130,6 +132,7 @@ pub fn crossed() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look,
+            delay: 0,
         }
     };
     Params {
@@ -177,6 +180,7 @@ pub fn insanity() -> Params {
                 character: Character::CLEAN,
                 key: Key::OFF,
                 look,
+                delay: 0,
             }
         })
         .collect();
@@ -216,6 +220,7 @@ pub fn external() -> Params {
             character: Character::CLEAN,
             key: Key::OFF,
             look: vec![1.0],
+            delay: 0,
         }],
         monitors: vec![Monitor::default()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
@@ -265,6 +270,7 @@ pub fn webcam() -> Params {
             ..Key::OFF
         },
         look: one_hot(2, window),
+        delay: 0,
     };
     let mut looking_at_the_loop = external().cameras.remove(0);
     looking_at_the_loop.look = one_hot(2, loop_monitor);
@@ -521,6 +527,17 @@ pub fn validate(params: &Params) -> Result<(), String> {
                 };
                 return Err(format!("{what} is {value}; it runs {low} to {high}"));
             }
+        }
+    }
+    // Bought in bank rather than in taps: a frame of delay is a copy of every
+    // monitor, and the ring is sized from the longest one at load.
+    for (c, camera) in params.cameras.iter().enumerate() {
+        if camera.delay > Camera::MAX_DELAY {
+            return Err(format!(
+                "camera {c} asks for {} frames of delay; at most {}",
+                camera.delay,
+                Camera::MAX_DELAY
+            ));
         }
     }
     // The flattened routing-times-look products are what the shader iterates,
@@ -1066,6 +1083,28 @@ mod tests {
     }
 
     #[test]
+    fn a_delay_past_the_units_range_is_refused() {
+        let with = |delay: u32| {
+            let mut p = single();
+            p.cameras[0].delay = delay;
+            p
+        };
+        assert!(validate(&with(Camera::MAX_DELAY)).is_ok());
+        let why = validate(&with(Camera::MAX_DELAY + 1)).unwrap_err();
+        assert!(why.contains("camera 0") && why.contains("31"), "{why}");
+        // Read from a file, and absent from one: no delay unit on the cable.
+        let p: Params = toml::from_str(
+            "cameras = [{ look = [1.0], delay = 4 }, { look = [1.0] }]\n\
+             monitors = [{}]\n\
+             routing = [[1.0, 0.0]]\n",
+        )
+        .unwrap();
+        assert_eq!(p.cameras[0].delay, 4);
+        assert_eq!(p.cameras[1].delay, 0);
+        assert_eq!(p.history(), 5);
+    }
+
+    #[test]
     fn the_tap_bound_holds_for_every_setting_of_the_switcher_and_not_just_the_one_on_disk() {
         // `taps_of` drops a crosspoint at zero and `Knob::Route` can raise
         // one, so the count validate holds against has to be the reachable
@@ -1074,7 +1113,7 @@ mod tests {
         for (name, params) in presets() {
             let reachable = crate::feedback::reachable_taps(&params);
             for m in 0..params.monitors.len() {
-                let now = crate::feedback::taps_of(&params, m).count();
+                let now = crate::feedback::taps_of(&params, m, 0).count();
                 assert!(
                     now <= reachable,
                     "{name}: monitor {m} has {now} of {reachable}"
@@ -1091,7 +1130,7 @@ mod tests {
             }
             for m in 0..all_on.monitors.len() {
                 assert_eq!(
-                    crate::feedback::taps_of(&all_on, m).count(),
+                    crate::feedback::taps_of(&all_on, m, 0).count(),
                     reachable,
                     "{name}: monitor {m} with the whole switcher up"
                 );
@@ -1100,7 +1139,7 @@ mod tests {
         // And `crossed` is a graph where the two differ, so none of the above
         // is comparing a number with itself.
         let crossed = crossed();
-        assert_eq!(crate::feedback::taps_of(&crossed, 0).count(), 2);
+        assert_eq!(crate::feedback::taps_of(&crossed, 0, 0).count(), 2);
         assert_eq!(crate::feedback::reachable_taps(&crossed), 4);
 
         // The zero-weight rule on the switcher's input half, which the sweep
@@ -1109,7 +1148,7 @@ mod tests {
         // no promise about a second later.
         let mut sent_nowhere = external();
         sent_nowhere.routing_inputs[0][0] = 0.0;
-        assert_eq!(crate::feedback::taps_of(&sent_nowhere, 0).count(), 1);
+        assert_eq!(crate::feedback::taps_of(&sent_nowhere, 0, 0).count(), 1);
         assert_eq!(crate::feedback::reachable_taps(&sent_nowhere), 2);
     }
 
@@ -1172,6 +1211,7 @@ mod tests {
                     character: Character::CLEAN,
                     key: Key::OFF,
                     look: vec![1.0; MAX_MONITORS],
+                    delay: 0,
                 })
                 .collect(),
             monitors: (0..MAX_MONITORS).map(|_| Monitor::default()).collect(),
@@ -1184,7 +1224,7 @@ mod tests {
                 .collect(),
         };
         for m in 0..MAX_MONITORS {
-            assert!(crate::feedback::taps_of(&params, m).count() <= MAX_TAPS);
+            assert!(crate::feedback::taps_of(&params, m, 0).count() <= MAX_TAPS);
         }
         let why = validate(&params).unwrap_err();
         assert!(why.contains("switcher is turned up"), "{why}");
