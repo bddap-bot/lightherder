@@ -2363,8 +2363,8 @@ mod tests {
         };
         assert_eq!(delay(&mut midi, 0), None);
         assert_eq!(delay(&mut midi, 63), None);
-        assert_eq!(delay(&mut midi, 127), Some(1.0));
-        assert_eq!(delay(&mut midi, 64), None);
+        assert_eq!(delay(&mut midi, 64), Some(1.0));
+        assert_eq!(delay(&mut midi, 127), None);
         assert_eq!(delay(&mut midi, 0), Some(-1.0));
         midi.coarser();
         midi.coarser();
