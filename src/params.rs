@@ -400,12 +400,8 @@ pub struct Monitor {
     /// A real amplifier always has rails, so there is no setting that turns
     /// this off, and [`Monitor::KNEE_AT_WHITE`] is not one pretending to be.
     pub headroom: f32,
-    /// The switcher's period mode on this monitor's column: every this many
-    /// passes its two strongest sources trade levels, the way
-    /// [`Params::reverse`] trades them, so the monitor beats between two
-    /// pictures at a division of the tempo. Zero is the mode off, and the
-    /// only latch it has: the knob at its floor.
-    #[serde(default)]
+    /// Passes between reversals of this monitor's column. Zero is the mode
+    /// off, and the only latch it has: the knob at its floor.
     pub period: u32,
 }
 
@@ -421,8 +417,8 @@ impl Default for Monitor {
 }
 
 impl Monitor {
-    /// The longest period: a second at the default tempo. The original's
-    /// rates are unverified; a beat slower than one a second is a hand on
+    /// The longest period, in passes: a second at the default tempo. The
+    /// original's rates are unverified; a beat slower than that is a hand on
     /// the reversal, not a rhythm.
     pub const MAX_PERIOD: u32 = 60;
 
@@ -587,8 +583,6 @@ pub enum Knob {
     Contrast,
     Gamma,
     Headroom,
-    /// The switcher's period mode on the monitor's column, in whole passes;
-    /// zero is off.
     Period,
     /// The switcher crosspoint the focus's camera and monitor name between
     /// them: how much of the focused camera the focused monitor shows.
@@ -791,6 +785,9 @@ impl Knob {
             Knob::Delay if params.delay == 0 => {
                 Some("a frame delay unit, and this graph's reach is 0".to_string())
             }
+            Knob::Period if params.count(Node::Camera) + params.count(Node::Input) < 2 => {
+                Some("a column with two sources to trade, and this graph has one".to_string())
+            }
             _ => None,
         }
     }
@@ -852,7 +849,6 @@ impl Knob {
             // whole picture into the darkest eighth, which is a sound worth
             // having; the top is well clear of anything a monitor displays.
             Knob::Headroom => Limit::Clamp(0.125, 8.0),
-            // Whole passes; the floor is the mode off.
             Knob::Period => Limit::Clamp(0.0, Monitor::MAX_PERIOD as f32),
             // A crosspoint is a fraction of what it is switching. Above 1.0
             // it would be an amplifier, which is what the loop gain already
@@ -943,21 +939,20 @@ impl Params {
         true
     }
 
-    /// The switcher's period mode, on pass number `pass` of the run: every
-    /// monitor whose period divides it reverses. Whether any did, since a
-    /// reversal moves the crosspoint knobs without their faders.
+    /// Every monitor whose period divides `pass` reverses. Whether the
+    /// `focused` one did: its crosspoint knobs are the only ones a fader can
+    /// be holding, and a reversal moves them without it.
     ///
     /// Counted from the start of the run rather than from when a period was
-    /// dialled in, so every monitor in the mode beats on one grid — a period
-    /// of four lands on every other beat of a period of two — which is what
-    /// the original's quantizing is for. A pass is a beat of the tempo, so
-    /// nothing here reads a clock.
-    pub fn beat(&mut self, pass: u64) -> bool {
+    /// dialled in, so every monitor in the mode beats on one grid, which is
+    /// what the original's quantizing is for. A pass is a beat of the tempo,
+    /// so nothing here reads a clock.
+    pub fn beat(&mut self, pass: u64, focused: usize) -> bool {
         let mut moved = false;
         for monitor in 0..self.monitors.len() {
             let period = u64::from(self.monitors[monitor].period);
-            if period != 0 && pass.is_multiple_of(period) {
-                moved |= self.reverse(monitor);
+            if period != 0 && pass.is_multiple_of(period) && self.reverse(monitor) {
+                moved |= monitor == focused;
             }
         }
         moved
@@ -1061,7 +1056,7 @@ impl Params {
             return;
         }
         let limit = knob.limit(self);
-        if let Some(count) = self.count_mut(knob, focus) {
+        if let Some(count) = self.whole_mut(knob, focus) {
             let (low, high) = limit.ends();
             *count = (*count as f32 + delta).round().clamp(low, high) as u32;
             return;
@@ -1073,10 +1068,7 @@ impl Params {
         };
     }
 
-    /// The knobs that count rather than measure: the delay in frames, the
-    /// period in passes. `None` for the rest, whose field is an `f32` on
-    /// [`Params::knob_mut`].
-    fn count_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut u32> {
+    fn whole_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut u32> {
         match knob {
             Knob::Delay => Some(&mut self.cameras[focus.camera].delay),
             Knob::Period => Some(&mut self.monitors[focus.monitor].period),
@@ -1588,7 +1580,7 @@ mod tests {
         let (row, swapped) = (vec![0.75, 0.25], vec![0.25, 0.75]);
         params.monitors[0].period = 3;
         for pass in 1..=12u64 {
-            let moved = params.beat(pass);
+            let moved = params.beat(pass, 0);
             assert_eq!(moved, pass % 3 == 0, "pass {pass}");
             let expect = if (pass / 3) % 2 == 1 { &swapped } else { &row };
             assert_eq!(&params.routing[0], expect, "pass {pass}");
@@ -1598,29 +1590,41 @@ mod tests {
                 "pass {pass}: the other column"
             );
         }
-        // Off is the floor, and off is off from that pass on.
         params.monitors[0].period = 0;
         for pass in 13..=30u64 {
-            assert!(!params.beat(pass), "pass {pass}");
+            assert!(!params.beat(pass, 0), "pass {pass}");
             assert_eq!(params.routing[0], row);
         }
-        // One grid for every monitor in the mode: a period of two lands
-        // on every beat of a period of four, so on the fourth pass both
-        // columns move together.
+        // One grid for every monitor in the mode; only the focused monitor's
+        // move is reported, since only its faders can be holding a knob.
         params.routing[1] = vec![0.6, 0.4];
         params.monitors[0].period = 4;
         params.monitors[1].period = 2;
-        assert!(params.beat(2));
+        assert!(
+            !params.beat(2, 0),
+            "monitor 1's beat reported as monitor 0's"
+        );
         assert_eq!(params.routing[0], row, "not this monitor's beat");
         assert_eq!(params.routing[1], [0.4, 0.6]);
-        assert!(params.beat(4));
+        assert!(params.beat(4, 0));
         assert_eq!(params.routing[0], swapped);
         assert_eq!(params.routing[1], [0.6, 0.4]);
-        // A beat on a column whose two sources tie moves nothing, and says
-        // so, like the button.
+        assert!(params.beat(6, 1));
+        assert_eq!(params.routing[1], [0.4, 0.6]);
         params.routing[1] = vec![0.5, 0.5];
-        assert!(!params.beat(6));
+        assert!(!params.beat(8, 1), "a tie moved");
         assert_eq!(params.routing[1], [0.5, 0.5]);
+    }
+
+    #[test]
+    fn the_period_is_off_the_map_on_a_graph_with_one_source() {
+        let mut params = crate::config::single();
+        assert!(!Knob::Period.is_on(&params));
+        params.delay = 0;
+        let why = Knob::Period.off_because(&params).unwrap();
+        assert!(why.contains("two sources"), "{why}");
+        assert!(Knob::Period.is_on(&crate::config::crossed()));
+        assert!(Knob::Period.is_on(&p()));
     }
 
     #[test]

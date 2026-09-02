@@ -700,6 +700,7 @@ mod tests {
         assert_eq!(params.monitors[0].colour, Colour::NEUTRAL);
         assert_eq!(params.monitors[0].seed, Seed::Dark);
         assert_eq!(params.monitors[0].headroom, Monitor::KNEE_AT_WHITE);
+        assert_eq!(params.monitors[0].period, 0);
     }
 
     #[test]

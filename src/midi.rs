@@ -184,9 +184,9 @@ impl Map {
     /// keyer's four. Its fader 8 is the focused camera's delay — where page
     /// 1's fader 8 is how much of that camera the monitor shows, page 2's is
     /// how late — on a graph whose delay units have any reach, and dead
-    /// otherwise, like the send. Beside it, page 2's fader 7 is the focused
-    /// monitor's period: the two knobs that count passes, together. The
-    /// other page-2 faders are free for a `midi.toml` to claim.
+    /// otherwise, like the send. Page 2's fader 7 is the focused monitor's period,
+    /// on a graph with two sources to trade. The other page-2 faders are
+    /// free for a `midi.toml` to claim.
     ///
     /// `params` decides the rest of the layout: the send is bound only where
     /// there is one, and the select rows are as wide as the graph and no
@@ -222,8 +222,12 @@ impl Map {
                     page_two(21, Knob::KeySoftness),
                     page_two(22, Knob::KeyHue),
                     page_two(23, Knob::KeyTolerance),
-                    page_two(6, Knob::Period),
                 ])
+                .chain(
+                    Knob::Period
+                        .is_on(params)
+                        .then(|| page_two(6, Knob::Period)),
+                )
                 .chain(Knob::Delay.is_on(params).then(|| page_two(7, Knob::Delay)))
                 .collect(),
             button: nano_buttons(params),
