@@ -75,7 +75,7 @@ pub fn single() -> Params {
             framing: Framing {
                 zoom: 0.994,
                 rotation: 0.05,
-                translate: [0.0, 0.0],
+                ..Framing::identity()
             },
             gain: [0.980, 0.986, 0.992],
             character: Character::CLEAN,
@@ -127,7 +127,7 @@ pub fn crossed() -> Params {
             framing: Framing {
                 zoom: 0.994,
                 rotation,
-                translate: [0.0, 0.0],
+                ..Framing::identity()
             },
             gain,
             character: Character::CLEAN,
@@ -173,7 +173,7 @@ pub fn insanity() -> Params {
                 framing: Framing {
                     zoom: 0.990 + 0.004 * c as f32,
                     rotation: 0.04 + 0.02 * c as f32,
-                    translate: [0.0, 0.0],
+                    ..Framing::identity()
                 },
                 // Each camera favours a different channel, so the mix on any
                 // monitor carries chroma for the hue knobs to turn.
@@ -215,7 +215,7 @@ pub fn external() -> Params {
             framing: Framing {
                 zoom: 0.994,
                 rotation: 0.05,
-                translate: [0.0, 0.0],
+                ..Framing::identity()
             },
             gain: [0.985; 3],
             character: Character::CLEAN,
@@ -1013,7 +1013,7 @@ mod tests {
         std::fs::write(
             &path,
             "cameras = [{ look = [0.5], gain = [0.9, 0.85, 0.8], delay = 4,\n\
-             \x20 framing = { zoom = 0.994, rotation = 0.05, translate = [0.01, -0.02] },\n\
+             \x20 framing = { zoom = 0.994, rotation = 0.05, translate = [0.01, -0.02], flip_x = true, flip_y = true },\n\
              \x20 character = { bloom = 0.1, bloom_radius = 0.04, chroma_bleed = 0.02, noise = 0.01 },\n\
              \x20 key = { threshold = 0.2, softness = 0.06, hue = 1.2, tolerance = 0.3 } }]\n\
              monitors = [{ seed = { white_blob = 0.2 }, headroom = 1.5,\n\
@@ -1032,6 +1032,7 @@ mod tests {
         assert_eq!(camera.framing.zoom, 0.994);
         assert_eq!(camera.framing.rotation, 0.05);
         assert_eq!(camera.framing.translate, [0.01, -0.02]);
+        assert!(camera.framing.flip_x && camera.framing.flip_y);
         assert_eq!(camera.character.bloom, 0.1);
         assert_eq!(camera.character.bloom_radius, 0.04);
         assert_eq!(camera.character.chroma_bleed, 0.02);

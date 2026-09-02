@@ -79,17 +79,23 @@ pub struct Framing {
     pub rotation: f32,
     /// Shift per pass, in screen units where the monitor is 1.0 tall.
     pub translate: [f32; 2],
+    /// Mirror the framed picture left for right.
+    pub flip_x: bool,
+    /// Mirror the framed picture top for bottom.
+    pub flip_y: bool,
 }
 
 impl Framing {
     /// A camera that reproduces its subject exactly: no zoom, no turn, no
-    /// shift. The serde default, so a config can frame only the cameras that
-    /// move.
+    /// shift, no mirror. The serde default, so a config can frame only the
+    /// cameras that move.
     pub fn identity() -> Framing {
         Framing {
             zoom: 1.0,
             rotation: 0.0,
             translate: [0.0, 0.0],
+            flip_x: false,
+            flip_y: false,
         }
     }
 }
@@ -124,9 +130,19 @@ pub fn screen_to_uv(aspect: f32) -> Affine2 {
 /// The intermediate space is centred, y-up and normalised to the monitor's
 /// height, so rotation stays circular on a non-square monitor and the framing
 /// numbers mean the same thing at any resolution.
+///
+/// The flips sit where the original's do, on the router output between the
+/// switcher and the monitor, so they mirror the picture the camera has
+/// already framed: a pan right on a mirrored path lands left. A mirror is its
+/// own inverse, so the forward flip is the one composed here.
 pub fn sample_transform(framing: &Framing, aspect: f32) -> Affine2 {
     let inv_zoom = 1.0 / framing.zoom;
+    let mirror = |on: bool| if on { -1.0 } else { 1.0 };
     uv_to_screen(aspect)
+        .then(&Affine2::scale(
+            mirror(framing.flip_x),
+            mirror(framing.flip_y),
+        ))
         .then(&Affine2::translation(
             -framing.translate[0],
             -framing.translate[1],
@@ -150,7 +166,55 @@ mod tests {
             zoom,
             rotation,
             translate,
+            ..Framing::identity()
         }
+    }
+
+    #[test]
+    fn a_flip_mirrors_the_framed_picture_about_the_centre() {
+        let flipped = |flip_x, flip_y| Framing {
+            flip_x,
+            flip_y,
+            ..Framing::identity()
+        };
+        // The right edge shows what was at the left, at the same height.
+        let t = sample_transform(&flipped(true, false), 16.0 / 9.0);
+        assert!(
+            close(t.apply([1.0, 0.3]), [0.0, 0.3]),
+            "{:?}",
+            t.apply([1.0, 0.3])
+        );
+        assert!(close(t.apply([0.5, 0.5]), [0.5, 0.5]));
+        // The bottom shows what was at the top.
+        let t = sample_transform(&flipped(false, true), 16.0 / 9.0);
+        assert!(
+            close(t.apply([0.3, 1.0]), [0.3, 0.0]),
+            "{:?}",
+            t.apply([0.3, 1.0])
+        );
+        // Both is a half turn.
+        let t = sample_transform(&flipped(true, true), 1.0);
+        assert!(close(t.apply([1.0, 1.0]), [0.0, 0.0]));
+    }
+
+    #[test]
+    fn the_flip_mirrors_the_pan_and_not_the_other_way_round() {
+        // On the router output, past the camera: a spot a quarter right of
+        // centre pans to the half and comes out of the mirror at the left
+        // edge. Mirroring before the pan would put it at the centre instead.
+        let t = sample_transform(
+            &Framing {
+                translate: [0.25, 0.0],
+                flip_x: true,
+                ..Framing::identity()
+            },
+            1.0,
+        );
+        assert!(
+            close(t.apply([0.0, 0.5]), [0.75, 0.5]),
+            "{:?}",
+            t.apply([0.0, 0.5])
+        );
     }
 
     #[test]

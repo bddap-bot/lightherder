@@ -176,7 +176,7 @@ impl Rig {
             framing: Framing {
                 zoom: 0.994,
                 rotation,
-                translate: [0.0, 0.0],
+                ..Framing::identity()
             },
             gain,
             character: Character::CLEAN,

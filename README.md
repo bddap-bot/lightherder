@@ -476,8 +476,10 @@ routing = [[0.98]]
 
 `look` is the camera's beam splitter, a weight per monitor. `delay` is a
 frame delay unit on the camera's cable, 0 to 30 frames on top of the one
-pass every camera is behind by, and defaults to none; the board does not
-reach it yet. `seed` is
+pass every camera is behind by, and defaults to none. `framing` may also
+set `flip_x` and `flip_y`, the original's router-output mirrors, applied to
+the framed picture as a whole. The board reaches neither delay nor the flips
+yet. `seed` is
 `{ white_blob = <brightness> }` or `"dark"`, and defaults to `"dark"` — a
 monitor lit only by what the switcher hands it. `routing[m][c]` is how much
 of camera `c` monitor `m` shows and `routing_inputs[i][m]` how much of input

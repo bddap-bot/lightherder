@@ -824,13 +824,21 @@ fn zero_gain_ends_the_loop_in_one_pass() {
 
 #[test]
 fn panning_moves_the_image_the_way_the_knobs_say() {
-    for (translate, offset, name) in [
+    // Straight, then through each mirror: a flipped path sends the framed
+    // picture, seed and pan together, to the other side of the monitor's
+    // centre on that axis.
+    let flips = [(false, false), (true, false), (false, true), (true, true)];
+    let pans = [
         ([0.15f32, 0.0], [0.15f32, 0.0], "right"),
         ([-0.15, 0.0], [-0.15, 0.0], "left"),
         // Screen units are y-up; texture v is not.
         ([0.0, 0.15], [0.0, -0.15], "up"),
         ([0.0, -0.15], [0.0, 0.15], "down"),
-    ] {
+    ];
+    for ((flip_x, flip_y), (translate, offset, name)) in flips
+        .iter()
+        .flat_map(|f| pans.iter().map(move |p| (*f, *p)))
+    {
         let Some(mut h) = square() else { return };
         let seed = h.feedback.blob_uv();
         h.step(&seeded());
@@ -841,18 +849,25 @@ fn panning_moves_the_image_the_way_the_knobs_say() {
             colour: Colour::NEUTRAL,
             framing: Framing {
                 translate,
+                flip_x,
+                flip_y,
                 ..frozen(seeded()).framing
             },
             ..Default::default()
         };
         h.step(&params);
 
-        // A square monitor, so a screen-unit shift is the same shift in uv.
-        let (u, v) = (seed[0] + offset[0], seed[1] + offset[1]);
+        // A square monitor, so a screen-unit shift is the same shift in uv,
+        // and a mirror is about the same 0.5 on either axis.
+        let mirror = |on: bool, x: f32| if on { 1.0 - x } else { x };
+        let (u, v) = (
+            mirror(flip_x, seed[0] + offset[0]),
+            mirror(flip_y, seed[1] + offset[1]),
+        );
         let img = h.read();
         assert!(
             img.at(u, v) > img.at(seed[0], seed[1]) && img.at(u, v) > 100.0,
-            "pan {name}: {} where it should have gone vs {} left behind",
+            "pan {name}, flip {flip_x}/{flip_y}: {} where it should have gone vs {} left behind",
             img.at(u, v),
             img.at(seed[0], seed[1]),
         );
@@ -873,8 +888,8 @@ fn pan_is_applied_in_the_frame_the_camera_moves_in() {
         colour: Colour::NEUTRAL,
         framing: Framing {
             zoom: 2.0,
-            rotation: 0.0,
             translate: [-0.3, 0.0],
+            ..Framing::identity()
         },
         ..Default::default()
     };
@@ -2295,8 +2310,7 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
                 gain: [0.9; 3],
                 framing: Framing {
                     zoom: 0.9,
-                    rotation: 0.0,
-                    translate: [0.0, 0.0],
+                    ..Framing::identity()
                 },
                 ..plain_camera(one_hot(2, 0))
             },
