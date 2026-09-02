@@ -277,7 +277,7 @@ cameras, Mute the monitors, Record the inputs.
 
 **A row is the choice its kind offers, and nothing else.** The surface is
 built for the graph about to be played. A rig of one camera and two monitors
-binds M1 and M2 and leaves nineteen select buttons dead — unlit, silent,
+binds M1 and M2 and leaves eighteen select buttons dead — unlit, silent,
 and free for a `midi.toml` to claim; R5–R8 are the reversal, the flips and the page on every rig. The Solo row is dead there
 because one camera is no choice: a button that selects the only camera there
 is selects what is already selected, and the rule is that a button is

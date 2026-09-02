@@ -890,10 +890,10 @@ impl Params {
         prior
     }
 
-    /// The switcher's source reversal: the monitor's two strongest sources,
-    /// camera or input, trade levels. `false` — and nothing moved — on a
-    /// column with fewer than two live sources: a monitor showing one thing
-    /// has nothing to reverse it with.
+    /// The switcher's source reversal, across cameras and inputs alike.
+    /// `false` — and nothing moved — on a column with fewer than two live
+    /// sources, or two at the same level: a monitor showing one thing has
+    /// nothing to reverse it with.
     pub fn reverse(&mut self, monitor: usize) -> bool {
         let mut column = self.column(monitor);
         let mut levels: Vec<&mut f32> = column
@@ -901,14 +901,23 @@ impl Params {
             .iter_mut()
             .chain(column.inputs.iter_mut())
             .collect();
-        levels.sort_by(|a, b| b.total_cmp(a));
-        let [a, b, ..] = &mut levels[..] else {
+        let strongest = |levels: &[&mut f32], but: Option<usize>| {
+            (0..levels.len())
+                .filter(|&i| Some(i) != but)
+                .max_by(|&i, &j| levels[i].total_cmp(levels[j]))
+        };
+        let Some(a) = strongest(&levels, None) else {
             return false;
         };
-        if **b <= 0.0 {
+        let Some(b) = strongest(&levels, Some(a)) else {
+            return false;
+        };
+        if *levels[b] <= 0.0 || *levels[a] == *levels[b] {
             return false;
         }
-        std::mem::swap(*a, *b);
+        let (high, low) = (*levels[a], *levels[b]);
+        *levels[a] = low;
+        *levels[b] = high;
         self.restore(&column);
         true
     }

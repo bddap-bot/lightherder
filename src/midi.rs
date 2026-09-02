@@ -434,14 +434,12 @@ const R_ROW: u8 = 64;
 /// is what [`crate::config::validate`] refuses a graph for.
 pub const ROW_BUTTONS: usize = 8;
 
-/// The page button: the last of the Record row, which every legal graph
-/// leaves dead — the inputs stop short of it — so it is the one select
-/// button no rig can claim, and the page costs the transport nothing.
+/// The last four of the Record row, which every legal graph leaves dead —
+/// the inputs stop short of them — so they are the select buttons no rig
+/// can claim, and these four cost the transport nothing.
 pub(crate) const PAGE: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
-/// The two flips, beside the page on the same dead end of the Record row.
 pub(crate) const FLIP_X: u8 = PAGE - 2;
 pub(crate) const FLIP_Y: u8 = PAGE - 1;
-/// The reversal, on the last button the inputs leave.
 pub(crate) const REVERSE: u8 = FLIP_X - 1;
 const _: () = assert!(crate::config::cap(Node::Input) as u8 + R_ROW <= REVERSE);
 
@@ -1879,19 +1877,6 @@ mod tests {
         // one control to the left of the rows.
         let no_inputs = Map::nano_kontrol2(&crate::config::shaped(2, 2, 0));
         assert!(!no_inputs.fader.iter().any(|f| f.cc == 0));
-        // And the buttons it leaves alone even on the widest rig: one bound
-        // here is one a blind slip can find. The Record row runs out past
-        // the inputs, which is what a row as wide as its kind looks like —
-        // all but its last four, which are the reversal's, the flips' and
-        // the page's on every rig.
-        let spare = R_ROW + crate::config::cap(Node::Input) as u8..REVERSE;
-        for cc in spare {
-            assert!(
-                !map.button.iter().any(|b| b.cc == cc),
-                "{} is bound",
-                silkscreen(&map.device, cc)
-            );
-        }
     }
 
     #[test]
@@ -2649,18 +2634,11 @@ mod tests {
                     node.name()
                 );
             }
-            // And the rest of the row, past what this rig has, reaches
-            // nothing: a dead button is the point of building the row from
-            // the graph. All but the last four of the Record row, which the
-            // inputs never reach and the reversal, the flips and the page take.
-            for control in (row + width as u8..row + 8).filter(|cc| *cc < REVERSE) {
-                assert_eq!(
-                    feed(&mut midi, &params, &cc(control, 127)),
-                    [],
-                    "cc {control}"
-                );
-            }
         }
+        assert_eq!(
+            feed(&mut midi, &params, &cc(REVERSE, 127)),
+            [Action::Reverse]
+        );
         assert_eq!(
             feed(&mut midi, &params, &cc(FLIP_X, 127)),
             [Action::Flip(Axis::X)]

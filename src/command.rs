@@ -46,9 +46,7 @@ pub enum Action {
     /// The switcher's foot pedal. Held rather than latched because the trap
     /// is the flick back.
     Cut(Edge),
-    /// The switcher's source reversal: the focused monitor's two strongest
-    /// sources trade levels. A press, since pressing it again is the reverse
-    /// of the reverse.
+    /// A press, since pressing it again is the reverse of the reverse.
     Reverse,
     Page,
     /// A latch on a button with a lamp, not a knob: a flip is on or off.

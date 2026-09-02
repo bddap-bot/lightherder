@@ -579,6 +579,11 @@ impl App {
                     self.midi.release_knob(Knob::Route);
                     self.midi.release_knob(Knob::Send);
                     log::info!("{}", self.params.describe(self.focus));
+                } else {
+                    log::info!(
+                        "monitor {} has no two sources to reverse",
+                        self.focus.monitor + 1
+                    );
                 }
             }
             Action::Page => {
@@ -1350,9 +1355,8 @@ mod tests {
 
     #[test]
     fn a_reversal_trades_the_two_strongest_sources_and_leaves_the_rest() {
-        // Monitor 2 shows camera 1 at 0.6, camera 2 at 0.1 and input 1 at
-        // 0.3: the reversal is between the camera and the input, and the
-        // weaker camera and the other monitor stay put.
+        // The reversal crosses the camera/input line; the weaker camera and
+        // the other monitor stay put.
         let mut params = config::shaped(2, 2, 1);
         params.routing = vec![vec![1.0, 0.0], vec![0.6, 0.1]];
         params.routing_inputs = vec![vec![0.0, 0.3]];
@@ -1372,7 +1376,7 @@ mod tests {
     #[test]
     fn a_reversal_on_a_monitor_with_one_source_moves_nothing() {
         // Crossed: each monitor shows one camera whole, which is nothing to
-        // reverse it with.
+        // reverse it with. Nor are two sources at one level.
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
@@ -1382,6 +1386,10 @@ mod tests {
             app.act(Action::Reverse);
             assert_eq!(app.params, before);
         }
+        app.params.routing = vec![vec![0.5, 0.5], vec![0.5, 0.5]];
+        let before = app.params.clone();
+        app.act(Action::Reverse);
+        assert_eq!(app.params, before);
     }
 
     #[test]
