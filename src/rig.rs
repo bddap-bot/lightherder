@@ -183,6 +183,7 @@ impl Rig {
             key: Key::OFF,
             look: Screen::ALL.map(|screen| glass(cam, screen)).to_vec(),
             delay: 0,
+            divider: 1,
         };
         let feeds = Screen::ALL.map(|screen| self.shows(screen));
         Params {

@@ -323,6 +323,25 @@ pub struct Camera {
     /// smooth one as a frozen smear.
     #[serde(default)]
     pub delay: u32,
+    /// This path's frame rate as a fraction of the graph's: the camera hands
+    /// on a fresh frame every `divider` passes and the same one in between,
+    /// at most [`Camera::MAX_DIVIDER`]. One is every pass. What it does is
+    /// the original's 24 or 30 fps router output on a 60 fps rig: a stutter,
+    /// and the image slower to fractal, with the tempo untouched.
+    #[serde(default = "undivided")]
+    pub divider: u32,
+}
+
+impl Camera {
+    /// The slowest path. 60 to 24 is not a whole divider, so the original's
+    /// 60, 30 and 24 are 1, 2 and 3 here — 20 fps for the last, which is
+    /// what a stutter a third the tempo looks like.
+    pub const MAX_DIVIDER: u32 = 3;
+
+    /// How many slabs past its delay this path's hold reaches back.
+    pub fn hold(&self) -> u32 {
+        self.divider - 1
+    }
 }
 
 impl Params {
@@ -330,6 +349,10 @@ impl Params {
     /// original's dial up to. A bound because the reach is bought in bank:
     /// every frame of it is another copy of every monitor.
     pub const MAX_DELAY: u32 = 30;
+}
+
+fn undivided() -> u32 {
+    1
 }
 
 fn unity_gain() -> [f32; 3] {
@@ -352,6 +375,7 @@ fn identity_graph() -> Params {
             key: Key::OFF,
             look: vec![1.0],
             delay: 0,
+            divider: 1,
         }],
         monitors: vec![Monitor::default()],
         // An input, so the send has a crosspoint to read its identity out of
@@ -973,10 +997,12 @@ impl Params {
     }
 
     /// How many frames of every monitor the bank keeps as a ring: the one a
-    /// pass is drawing, the one every camera reads, and one more per frame
-    /// of the graph's reach.
+    /// pass is drawing, the one every camera reads, one more per frame of
+    /// the graph's reach, and the longest hold on top — a held frame is one
+    /// the ring keeps that many passes past the delay.
     pub fn history(&self) -> usize {
-        2 + self.delay as usize
+        let hold = self.cameras.iter().map(Camera::hold).max().unwrap_or(0);
+        2 + self.delay as usize + hold as usize
     }
 
     /// The switcher's cut: the focused monitor shows the focused input whole

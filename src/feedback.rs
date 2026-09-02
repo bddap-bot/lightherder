@@ -18,7 +18,7 @@
 use bytemuck::Zeroable;
 
 use crate::affine::{sample_transform, Framing};
-use crate::params::{Character, Key, Params};
+use crate::params::{Camera, Character, Key, Params};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
@@ -135,26 +135,37 @@ impl Shape {
         self.history * self.monitors + i
     }
 
-    /// The slab holding the frame `delay` passes before the newest, which
-    /// sits in slab `newest`: a delay counts back round the ring. The slab
-    /// after the newest is the one being written, which no delay may reach.
-    fn back(self, newest: usize, delay: u32) -> usize {
-        let delay = delay as usize;
+    /// The slab holding the frame `back` passes before the newest, which
+    /// sits in slab `newest`: counting back round the ring. The slab after
+    /// the newest is the one being written, which no count may reach.
+    fn back(self, newest: usize, back: u32) -> usize {
+        let back = back as usize;
         assert!(
-            delay + 2 <= self.history,
-            "{delay} frames of delay in a ring of {}",
+            back + 2 <= self.history,
+            "{back} frames back in a ring of {}",
             self.history
         );
-        (newest + self.history - delay) % self.history
+        (newest + self.history - back) % self.history
+    }
+
+    /// The slab `camera` reads on pass number `pass`: its delay back, and
+    /// then as far again as the pass is into the camera's hold. The ring
+    /// moves on one slab a pass and so does the hold, so the slab stays put
+    /// for `divider` passes and then jumps — a path stepping at a fraction
+    /// of the tempo, with no frame copied to hold it.
+    fn read(self, newest: usize, camera: &Camera, pass: u64) -> usize {
+        let phase = (pass % camera.divider as u64) as u32;
+        self.back(newest, camera.delay + phase)
     }
 }
 
 /// The edges of monitor `m`'s pass while the newest frame sits in ring slab
-/// `newest`: (the camera the light came through if it came through one,
-/// source layer, routing weight times splitter weight). This is where the
-/// switcher's two kinds of column meet the one index space the bank is laid
-/// out in — a camera's taps read the ring as far back as its delay, an
-/// input's the layer [`Feedback::write_input`] writes its frame to.
+/// `newest`, on pass number `pass`: (the camera the light came through if
+/// it came through one, source layer, routing weight times splitter
+/// weight). This is where the switcher's two kinds of column meet the one
+/// index space the bank is laid out in — a camera's taps read the ring as
+/// far back as its delay and its hold, an input's the layer
+/// [`Feedback::write_input`] writes its frame to.
 ///
 /// A routed camera fans out over its beam splitter, since a camera watching
 /// two monitors is two taps. A patched input is exactly one tap and carries
@@ -167,6 +178,7 @@ pub(crate) fn taps_of(
     params: &Params,
     m: usize,
     newest: usize,
+    pass: u64,
 ) -> impl Iterator<Item = (Option<usize>, usize, f32)> + '_ {
     let shape = Shape::of(params);
     let through_cameras = params.routing[m]
@@ -181,7 +193,7 @@ pub(crate) fn taps_of(
                 .enumerate()
                 .filter(|(_, look)| **look > 0.0)
                 .map(move |(src, look)| {
-                    let layer = shape.monitor(shape.back(newest, camera.delay), src);
+                    let layer = shape.monitor(shape.read(newest, camera, pass), src);
                     (Some(c), layer, route * look)
                 })
         });
@@ -301,9 +313,10 @@ pub struct Feedback {
     /// The ring slab holding the newest frame — the one the present pass
     /// shows and an undelayed camera reads.
     newest: usize,
-    /// Seeds the grain, and only that. Wrapped well inside the integers f32
-    /// holds exactly, since that is what carries it to the shader.
-    frame: u32,
+    /// Passes taken. The grain reads it to move, and a divided camera to
+    /// know where in its hold it stands — so a wrap would be a hold cut
+    /// short, and it does not wrap.
+    pass: u64,
     uniforms: wgpu::Buffer,
     /// One frame in the bank's format, reused by every
     /// [`Feedback::write_input`]. An external input hands over a frame every
@@ -514,7 +527,7 @@ impl Feedback {
             // The ring is zero-initialised, so every slab is a black frame
             // and which one is newest does not matter yet.
             newest: 0,
-            frame: 0,
+            pass: 0,
             uniforms,
             scratch: Vec::new(),
             layout,
@@ -671,7 +684,7 @@ impl Feedback {
         for (m, monitor) in params.monitors.iter().enumerate() {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
-            for (c, src, w) in taps_of(params, m, self.newest) {
+            for (c, src, w) in taps_of(params, m, self.newest, self.pass) {
                 // There is no camera between the switcher and an input, so
                 // every stage a camera would have takes its identity and the
                 // layer arrives as itself — the monitor's own front panel is
@@ -756,7 +769,7 @@ impl Feedback {
                 analog: [
                     grain,
                     monitor.headroom,
-                    self.frame as f32,
+                    (self.pass % (1 << 24)) as f32,
                     monitor.sharpness,
                 ],
                 luma: {
@@ -798,9 +811,7 @@ impl Feedback {
         }
         queue.submit([encoder.finish()]);
         self.newest = next;
-        // Exact in f32 for two days at 60 Hz, and the grain is the only
-        // thing that reads it, so the wrap costs a repeat nobody will see.
-        self.frame = (self.frame + 1) % (1 << 24);
+        self.pass += 1;
     }
 }
 
@@ -868,6 +879,11 @@ mod tests {
         // an input is one layer past the ring, delayed or not.
         single.delay = 3;
         assert_eq!(single.history(), 5);
+        // A hold is more slabs of the ring past the reach, the longest one.
+        single.cameras[0].divider = 3;
+        assert_eq!(single.history(), 7);
+        assert_eq!(layers(&single), 7);
+        single.cameras[0].divider = 1;
         assert_eq!(layers(&single), 5);
         assert_eq!(bank_bytes(&single, (1920, 1080)), 5 * 1920 * 1080 * 8);
         single.inputs = vec![crate::input::Input::Pattern(crate::input::Pattern::Bars)];

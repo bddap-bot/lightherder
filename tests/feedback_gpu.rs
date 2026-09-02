@@ -55,6 +55,7 @@ fn graph(s: &Single) -> Params {
             key: Key::OFF,
             look: vec![1.0],
             delay: 0,
+            divider: 1,
         }],
         monitors: vec![Monitor {
             colour: s.colour,
@@ -1166,6 +1167,7 @@ fn plain_camera(look: Vec<f32>) -> Camera {
         key: Key::OFF,
         look,
         delay: 0,
+        divider: 1,
     }
 }
 
@@ -2643,4 +2645,77 @@ fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
         sharp.pixels, rest.pixels,
         "the mask found detail in a flat field"
     );
+}
+
+#[test]
+fn a_divided_camera_holds_each_frame_for_that_many_passes() {
+    // Monitor 0 is a blob that dims a step every pass and loops on nothing,
+    // so it is a clock. A camera on it routed to monitor 1 with `divider`
+    // shows the clock as it stood on the last pass that was a multiple of
+    // the divider, and the same frame until the next one — and that frame is
+    // byte for byte what the undivided camera shows on that pass, so a hold
+    // moves when a frame changes and never what it is. Once more with a
+    // frame of delay on the cable, so the hold counts on from the delay
+    // rather than over it.
+    let clock = |divider: u32, delay: u32| Params {
+        cameras: vec![Camera {
+            divider,
+            delay,
+            ..plain_camera(one_hot(2, 0))
+        }],
+        monitors: vec![
+            Monitor {
+                seed: Seed::WhiteBlob(1.0),
+                ..silent_monitor()
+            },
+            silent_monitor(),
+        ],
+        inputs: Vec::new(),
+        routing: vec![vec![0.0], vec![1.0]],
+        routing_inputs: Vec::new(),
+        delay,
+    };
+    for delay in [0, 1] {
+        let mut undivided: Vec<Vec<u8>> = Vec::new();
+        for divider in 1..=Camera::MAX_DIVIDER {
+            let mut p = clock(divider, delay);
+            let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+                return;
+            };
+            let passes = 3 * Camera::MAX_DIVIDER + 1;
+            let frames: Vec<Vec<u8>> = (0..passes)
+                .map(|pass| {
+                    p.monitors[0].seed = Seed::WhiteBlob(1.0 - 0.05 * pass as f32);
+                    h.step_graph(&p);
+                    h.present(Some(1));
+                    h.read().pixels
+                })
+                .collect();
+            if divider == 1 {
+                undivided = frames;
+                continue;
+            }
+            for (pass, frame) in frames.iter().enumerate() {
+                let fresh = pass - pass % divider as usize;
+                assert!(
+                    *frame == undivided[fresh],
+                    "delay {delay}, divider {divider}: pass {pass} is not the undivided pass {fresh}"
+                );
+            }
+            let lit = frames
+                .iter()
+                .step_by(divider as usize)
+                .filter(|frame| frame.iter().any(|b| *b > 200))
+                .count();
+            assert!(
+                lit >= 2,
+                "delay {delay}, divider {divider}: the clock never showed"
+            );
+            assert!(
+                frames[0] != frames[divider as usize]
+                    || frames[divider as usize] != frames[2 * divider as usize],
+                "delay {delay}, divider {divider}: the clock never moved"
+            );
+        }
+    }
 }

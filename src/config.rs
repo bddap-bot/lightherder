@@ -59,6 +59,7 @@ pub(crate) fn shaped(cameras: usize, monitors: usize, inputs: usize) -> Params {
                 key: Key::OFF,
                 look: (0..monitors).map(|m| f32::from(m == c)).collect(),
                 delay: 0,
+                divider: 1,
             })
             .collect(),
         monitors: (0..monitors).map(|_| Monitor::default()).collect(),
@@ -87,6 +88,7 @@ pub fn single() -> Params {
             key: Key::OFF,
             look: vec![1.0],
             delay: 0,
+            divider: 1,
         }],
         monitors: vec![Monitor {
             seed: Seed::BLOB,
@@ -140,6 +142,7 @@ pub fn crossed() -> Params {
             key: Key::OFF,
             look,
             delay: 0,
+            divider: 1,
         }
     };
     Params {
@@ -189,6 +192,7 @@ pub fn insanity() -> Params {
                 key: Key::OFF,
                 look,
                 delay: 0,
+                divider: 1,
             }
         })
         .collect();
@@ -230,6 +234,7 @@ pub fn external() -> Params {
             key: Key::OFF,
             look: vec![1.0],
             delay: 0,
+            divider: 1,
         }],
         monitors: vec![Monitor::default()],
         inputs: vec![Input::Pattern(Pattern::Bars)],
@@ -281,6 +286,7 @@ pub fn webcam() -> Params {
         },
         look: one_hot(2, window),
         delay: 0,
+        divider: 1,
     };
     let mut looking_at_the_loop = external().cameras.remove(0);
     looking_at_the_loop.look = one_hot(2, loop_monitor);
@@ -557,6 +563,18 @@ pub fn validate(params: &Params) -> Result<(), String> {
             params.delay,
             Params::MAX_DELAY
         ));
+    }
+    // Not a knob either, so the walk above does not see it: a divider of
+    // zero is a path that never hands on a frame, and one past the slowest
+    // is bank bought for a rate the original never ran at.
+    for (i, camera) in params.cameras.iter().enumerate() {
+        if !(1..=Camera::MAX_DIVIDER).contains(&camera.divider) {
+            return Err(format!(
+                "camera {i}'s divider is {}; it runs 1 to {}",
+                camera.divider,
+                Camera::MAX_DIVIDER
+            ));
+        }
     }
     // The flattened routing-times-look products are what the shader iterates,
     // and its uniform array is a fixed size. Bounded against every crosspoint
@@ -1024,7 +1042,7 @@ mod tests {
         let path = scratch("every-field");
         std::fs::write(
             &path,
-            "cameras = [{ look = [0.5], gain = [0.9, 0.85, 0.8], delay = 4,\n\
+            "cameras = [{ look = [0.5], gain = [0.9, 0.85, 0.8], delay = 4, divider = 3,\n\
              \x20 framing = { zoom = 0.994, rotation = 0.05, translate = [0.01, -0.02], flip_x = true, flip_y = true },\n\
              \x20 character = { bloom = 0.1, bloom_radius = 0.04, chroma_bleed = 0.02, noise = 0.01 },\n\
              \x20 key = { threshold = 0.2, softness = 0.06, hue = 1.2, tolerance = 0.3 } }]\n\
@@ -1043,6 +1061,7 @@ mod tests {
         let camera = &params.cameras[0];
         assert_eq!(camera.look, [0.5]);
         assert_eq!(camera.delay, 4);
+        assert_eq!(camera.divider, 3);
         assert_eq!(camera.gain, [0.9, 0.85, 0.8]);
         assert_eq!(camera.framing.zoom, 0.994);
         assert_eq!(camera.framing.rotation, 0.05);
@@ -1138,6 +1157,41 @@ mod tests {
     }
 
     #[test]
+    fn a_divider_outside_one_to_the_slowest_is_refused() {
+        let with = |divider: u32| {
+            let mut p = single();
+            p.cameras[0].divider = divider;
+            p
+        };
+        assert!(validate(&with(Camera::MAX_DIVIDER)).is_ok());
+        assert_eq!(
+            validate(&with(0)).unwrap_err(),
+            "camera 0's divider is 0; it runs 1 to 3"
+        );
+        assert_eq!(
+            validate(&with(Camera::MAX_DIVIDER + 1)).unwrap_err(),
+            "camera 0's divider is 4; it runs 1 to 3"
+        );
+        // Absent from a file: every pass. The ring grows by the longest
+        // hold, and a divided camera's delay still runs to the reach.
+        let p: Params = toml::from_str(
+            "cameras = [{ look = [1.0], divider = 3, delay = 4 }, { look = [1.0], divider = 2 }]\n\
+             monitors = [{}]\n\
+             routing = [[1.0, 0.0]]\n\
+             delay = 4\n",
+        )
+        .unwrap();
+        assert!(validate(&p).is_ok());
+        assert_eq!(p.cameras[0].divider, 3);
+        assert_eq!(p.cameras[1].divider, 2);
+        assert_eq!(p.history(), 8);
+        let p: Params =
+            toml::from_str("cameras = [{ look = [1.0] }]\nmonitors = [{}]\nrouting = [[1.0]]\n")
+                .unwrap();
+        assert_eq!(p.cameras[0].divider, 1);
+        assert_eq!(p.history(), 2);
+    }
+    #[test]
     fn the_tap_bound_holds_for_every_setting_of_the_switcher_and_not_just_the_one_on_disk() {
         // `taps_of` drops a crosspoint at zero and `Knob::Route` can raise
         // one, so the count validate holds against has to be the reachable
@@ -1146,7 +1200,7 @@ mod tests {
         for (name, params) in presets() {
             let reachable = crate::feedback::reachable_taps(&params);
             for m in 0..params.monitors.len() {
-                let now = crate::feedback::taps_of(&params, m, 0).count();
+                let now = crate::feedback::taps_of(&params, m, 0, 0).count();
                 assert!(
                     now <= reachable,
                     "{name}: monitor {m} has {now} of {reachable}"
@@ -1163,7 +1217,7 @@ mod tests {
             }
             for m in 0..all_on.monitors.len() {
                 assert_eq!(
-                    crate::feedback::taps_of(&all_on, m, 0).count(),
+                    crate::feedback::taps_of(&all_on, m, 0, 0).count(),
                     reachable,
                     "{name}: monitor {m} with the whole switcher up"
                 );
@@ -1172,7 +1226,7 @@ mod tests {
         // And `crossed` is a graph where the two differ, so none of the above
         // is comparing a number with itself.
         let crossed = crossed();
-        assert_eq!(crate::feedback::taps_of(&crossed, 0, 0).count(), 2);
+        assert_eq!(crate::feedback::taps_of(&crossed, 0, 0, 0).count(), 2);
         assert_eq!(crate::feedback::reachable_taps(&crossed), 4);
 
         // The zero-weight rule on the switcher's input half, which the sweep
@@ -1181,7 +1235,7 @@ mod tests {
         // no promise about a second later.
         let mut sent_nowhere = external();
         sent_nowhere.routing_inputs[0][0] = 0.0;
-        assert_eq!(crate::feedback::taps_of(&sent_nowhere, 0, 0).count(), 1);
+        assert_eq!(crate::feedback::taps_of(&sent_nowhere, 0, 0, 0).count(), 1);
         assert_eq!(crate::feedback::reachable_taps(&sent_nowhere), 2);
     }
 
@@ -1244,6 +1298,7 @@ mod tests {
                     key: Key::OFF,
                     look: vec![1.0; MAX_MONITORS],
                     delay: 0,
+                    divider: 1,
                 })
                 .collect(),
             monitors: (0..MAX_MONITORS).map(|_| Monitor::default()).collect(),
@@ -1257,7 +1312,7 @@ mod tests {
                 .collect(),
         };
         for m in 0..MAX_MONITORS {
-            assert!(crate::feedback::taps_of(&params, m, 0).count() <= MAX_TAPS);
+            assert!(crate::feedback::taps_of(&params, m, 0, 0).count() <= MAX_TAPS);
         }
         let why = validate(&params).unwrap_err();
         assert!(why.contains("switcher is turned up"), "{why}");

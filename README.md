@@ -514,6 +514,11 @@ graph is its frame delay units' reach, 0 to 30 frames, and defaults to none;
 the reach on top of the one pass every camera is behind by. The reach is
 bought at load — a frame of it is another copy of every monitor in the bank —
 and is as far as the delay fader goes; a camera's `delay` past it is refused.
+`divider` on a camera is that path's frame rate as a fraction of the graph's, 1 to 3
+and defaulting to 1: the camera hands on a fresh frame every that many passes
+and the same one in between — the original's 30 or 24 fps router output on a
+60 fps rig, a stutter and an image slower to fractal, at the same tempo. A
+hold is more ring, one slab per pass of it, bought at load like the reach.
 `period` on a monitor is the original's period mode on that switcher column:
 every that many passes the monitor's two strongest sources trade levels,
 counted on one grid from the start of the run so every monitor in the mode
@@ -629,7 +634,8 @@ with none — `--bench` steps the graph, and a device that is not there uploads
 nothing — so its row is the passes and not the wire.
 
 The bank itself is what grows: at eight bytes a texel, a ring holding every
-monitor twice plus once more per frame of the graph's delay reach, and every
+monitor twice plus once more per frame of the graph's delay reach and per pass of
+its longest hold, and every
 input once — half a gigabyte for `insanity` at 4K, refused past two, and
 refused past 256 layers whatever the resolution, which is what eight monitors
 at the full delay ask for.
