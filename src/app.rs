@@ -1450,10 +1450,22 @@ mod tests {
 
         app.act(Action::Reset);
         assert_eq!(app.params, started);
-        for _ in 0..8 {
+        for _ in 0..6 {
             app.beat();
         }
         assert_eq!(app.params, started, "a reset panel went on beating");
+        // And the grid restarted with the panel: ten passes in, a period of
+        // three dialled now beats on the third pass from here.
+        app.params.monitors[1].period = 3;
+        let row = app.params.routing[1].clone();
+        app.beat();
+        app.beat();
+        assert_eq!(
+            app.params.routing[1], row,
+            "the grid ran on through the reset"
+        );
+        app.beat();
+        assert_ne!(app.params.routing[1], row);
     }
 
     #[test]
