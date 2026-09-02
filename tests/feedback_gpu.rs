@@ -2282,13 +2282,29 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
     // with `delay` frames on its cable: monitor 1 lights on pass delay + 1
     // and on no other, and the frame it shows then is byte for byte the one
     // an undelayed camera shows on pass 1 — a delay moves when a frame
-    // arrives, never what arrives. The longest delay is in the set because
-    // it reads the slab the same pass overwrites.
+    // arrives, never what arrives. The camera zooms and dims so that a frame
+    // held for the delay and a frame sent round the camera that many more
+    // times come out different. A second camera, routed nowhere, holds the
+    // longest delay so that every ring is the deepest one: the short delays
+    // then read from its middle, and the longest from the slab just after
+    // the one being written.
     let flash = |delay: u32| Params {
-        cameras: vec![Camera {
-            delay,
-            ..plain_camera(one_hot(2, 0))
-        }],
+        cameras: vec![
+            Camera {
+                delay,
+                gain: [0.9; 3],
+                framing: Framing {
+                    zoom: 0.9,
+                    rotation: 0.0,
+                    translate: [0.0, 0.0],
+                },
+                ..plain_camera(one_hot(2, 0))
+            },
+            Camera {
+                delay: Camera::MAX_DELAY,
+                ..plain_camera(one_hot(2, 1))
+            },
+        ],
         monitors: vec![
             Monitor {
                 seed: Seed::WhiteBlob(1.0),
@@ -2297,7 +2313,7 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
             silent_monitor(),
         ],
         inputs: Vec::new(),
-        routing: vec![vec![0.0], vec![1.0]],
+        routing: vec![vec![0.0, 0.0], vec![1.0, 0.0]],
         routing_inputs: Vec::new(),
     };
     let mut undelayed: Option<Vec<u8>> = None;
@@ -2306,13 +2322,13 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
         let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
             return;
         };
-        let seed = h.feedback.blob_uv();
-        let (u, v) = tile(2, 1, seed[0], seed[1]);
+        let (u0, v0) = tile(2, 1, 0.0, 0.0);
+        let (u1, v1) = tile(2, 1, 1.0, 1.0);
         for pass in 0..=delay + 2 {
             h.step_graph(&p);
             p.monitors[0].seed = Seed::Dark;
             let img = h.read();
-            let lit = img.at(u, v);
+            let lit = img.brightest_in(u0, v0, u1, v1);
             if pass == delay + 1 {
                 assert!(
                     lit > 200.0,
@@ -2332,5 +2348,80 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn an_input_lands_past_the_whole_ring() {
+    // On an undelayed graph the ring is one slab and an input's layer is
+    // where it always was, so only a delayed graph can tell the layer an
+    // input is written to from the one its tap reads. The camera is routed
+    // nowhere and is there only to deepen the ring.
+    let p = Params {
+        cameras: vec![Camera {
+            delay: 5,
+            ..plain_camera(one_hot(1, 0))
+        }],
+        monitors: vec![silent_monitor()],
+        inputs: vec![Input::Pattern(Pattern::Bars)],
+        routing: vec![vec![0.0]],
+        routing_inputs: vec![vec![1.0]],
+    };
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    h.feedback
+        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [200; 3]));
+    h.step_graph(&p);
+    let shown = h.read().rgb_at(0.5, 0.5);
+    assert!(
+        shown.iter().all(|c| (c - 200.0).abs() <= 1.0),
+        "the monitor shows {shown:?}, not the input's flat 200"
+    );
+}
+
+#[test]
+fn blanking_the_monitors_empties_the_whole_ring() {
+    // A flash in flight down a delayed cable is in the ring and nowhere
+    // else, so a blank that left any slab alone would deliver it late: after
+    // the blank, monitor 1 stays dark for longer than the delay.
+    let delay = 4;
+    let mut p = Params {
+        cameras: vec![Camera {
+            delay,
+            ..plain_camera(one_hot(2, 0))
+        }],
+        monitors: vec![
+            Monitor {
+                seed: Seed::WhiteBlob(1.0),
+                ..silent_monitor()
+            },
+            silent_monitor(),
+        ],
+        inputs: Vec::new(),
+        routing: vec![vec![0.0], vec![1.0]],
+        routing_inputs: Vec::new(),
+    };
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+        return;
+    };
+    let (u0, v0) = tile(2, 1, 0.0, 0.0);
+    let (u1, v1) = tile(2, 1, 1.0, 1.0);
+    // Two flashes, two passes apart, so that both the slab the blank sees as
+    // newest and one further back hold light.
+    h.step_graph(&p);
+    p.monitors[0].seed = Seed::Dark;
+    h.step_graph(&p);
+    p.monitors[0].seed = Seed::WhiteBlob(1.0);
+    h.step_graph(&p);
+    p.monitors[0].seed = Seed::Dark;
+    h.feedback.clear(h.device, h.queue);
+    for pass in 0..=delay + 2 {
+        h.step_graph(&p);
+        let lit = h.read().brightest_in(u0, v0, u1, v1);
+        assert!(
+            lit < 2.0,
+            "a flash survived the blank: pass {pass} lit {lit}"
+        );
     }
 }

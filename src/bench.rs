@@ -100,8 +100,9 @@ pub async fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> 
     }
     let mean = total / (FRAMES / BATCH) as f64;
     println!(
-        "{name}: {} monitors and {} inputs at {width}x{height}, {:.2} GiB of bank",
+        "{name}: {} monitors {} frames deep and {} inputs at {width}x{height}, {:.2} GiB of bank",
         params.monitors.len(),
+        params.history(),
         params.inputs.len(),
         crate::feedback::bank_bytes(params, resolution) as f64 / (1u64 << 30) as f64,
     );

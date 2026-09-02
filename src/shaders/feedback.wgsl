@@ -111,13 +111,13 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
 // go nowhere.
 fn seen_at(uv: vec2<f32>, layer: i32) -> vec3<f32> {
     let inside = all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0));
-    if !inside {
-        return vec3<f32>(0.0);
-    }
+    var rgb: vec3<f32>;
     if layer < i32(u.info.z) {
-        return textureSampleLevel(lower, src_samp, uv, layer, 0.0).rgb;
+        rgb = textureSampleLevel(lower, src_samp, uv, layer, 0.0).rgb;
+    } else {
+        rgb = textureSampleLevel(upper, src_samp, uv, layer - i32(u.info.w), 0.0).rgb;
     }
-    return textureSampleLevel(upper, src_samp, uv, layer - i32(u.info.w), 0.0).rgb;
+    return select(vec3<f32>(0.0), rgb, inside);
 }
 
 // A cheap integer hash. The grain has to differ at every texel and every

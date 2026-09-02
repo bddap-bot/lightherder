@@ -847,20 +847,6 @@ impl Params {
             .unwrap_or(0)
     }
 
-    /// The layers of the source bank: [`Params::history`] frames of the
-    /// monitors, oldest to newest as a ring, then the inputs. An input's
-    /// layer is its index past the whole ring — which is why `Feedback::new`
-    /// takes the graph rather than a count it could be handed the wrong one
-    /// of.
-    ///
-    /// Not the switcher's source count, which is the cameras and the inputs:
-    /// a monitor is a layer because something samples it, and a camera is a
-    /// switcher source because something routes it, and no graph has both
-    /// counts equal by anything but coincidence.
-    pub fn layers(&self) -> usize {
-        self.history() * self.monitors.len() + self.inputs.len()
-    }
-
     /// The switcher's cut: the focused monitor shows the focused input whole
     /// — or, on a graph with no inputs, the focused camera — and nothing
     /// else. Returns the column as it stood, for [`Params::restore`].
