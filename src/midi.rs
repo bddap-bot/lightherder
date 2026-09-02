@@ -672,7 +672,9 @@ pub struct Midi {
     pickup: Vec<Pickup>,
     /// One per entry of `map.button`: whether it is being held. A button is
     /// acted on when it goes down, so a surface whose buttons latch — the
-    /// nanoKONTROL2 can be set either way — plays every other press.
+    /// nanoKONTROL2 can be set either way — plays every other press. Cleared
+    /// only by a release passing through [`Midi::action_for`], which is why
+    /// an unplug hands the caller one for every button.
     held: Vec<bool>,
     next_scan: Instant,
     /// The last thing that went wrong looking for the surface, so a device

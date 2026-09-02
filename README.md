@@ -282,9 +282,10 @@ knob already is.** A fader sends where it is standing, so without that,
 plugging in mid-piece throws every knob to wherever its fader was left — with
 the headroom fader slamming a monitor to white. Sweep the fader and it picks
 its knob up on the way past, and from then on the fader is the knob. It lets
-go on a reset and a change of focus — the two ways the panel moves without a
-fader moving with it — and on an unplug, after which nothing knows where a
-fader is standing.
+go on a reset and a change of focus — the two ways the whole panel moves
+without a fader moving with it — on a cut, which moves the two crosspoints
+without theirs, and on an unplug, after which nothing knows where a fader is
+standing.
 
 The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior.

@@ -454,7 +454,6 @@ impl Default for Params {
 /// of every input, and which monitor, so it can only ever go back where it
 /// came from. Both halves together, because a cut takes the whole column
 /// and a release owes the whole column back.
-#[derive(Clone, Debug, PartialEq)]
 pub struct Crosspoints {
     monitor: usize,
     cameras: Vec<f32>,
@@ -857,6 +856,7 @@ impl Params {
         prior
     }
 
+    /// Put a column back where [`Params::cut`] took it from.
     pub fn restore(&mut self, points: &Crosspoints) {
         self.routing[points.monitor].clone_from(&points.cameras);
         for (row, level) in self.routing_inputs.iter_mut().zip(&points.inputs) {

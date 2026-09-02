@@ -549,17 +549,22 @@ impl App {
             Action::Record(Edge::Up) => self.stop_recording(),
             // Both edges move the two crosspoint knobs without their faders,
             // and only those two, so only their grips are let go.
-            Action::Cut(Edge::Down) => {
-                if self.cut.is_none() {
-                    self.cut = Some(self.params.cut(self.focus));
-                    self.midi.release_knob(Knob::Route);
-                    self.midi.release_knob(Knob::Send);
-                    log::info!("cut: {}", self.params.describe(self.focus));
-                }
-            }
-            Action::Cut(Edge::Up) => {
-                if let Some(prior) = self.cut.take() {
-                    self.params.restore(&prior);
+            Action::Cut(edge) => {
+                let moved = match (edge, self.cut.take()) {
+                    (Edge::Down, None) => {
+                        self.cut = Some(self.params.cut(self.focus));
+                        true
+                    }
+                    (Edge::Up, Some(prior)) => {
+                        self.params.restore(&prior);
+                        true
+                    }
+                    (_, held) => {
+                        self.cut = held;
+                        false
+                    }
+                };
+                if moved {
                     self.midi.release_knob(Knob::Route);
                     self.midi.release_knob(Knob::Send);
                     log::info!("{}", self.params.describe(self.focus));
