@@ -242,8 +242,8 @@ controller is `/dev/snd/midiC<card>D0`, and reading it gives the wire bytes.
 
 Out of the box, with no configuration. The select rows are the exception to
 "out of the box": they are the graph's, and on the default `single` rig — one
-camera, one monitor, no inputs — all three are dead but for R6–R8, the flips
-and the page on every rig.
+camera, one monitor, no inputs — all three are dead but for R5–R8, the
+reversal, the flips and the page on every rig.
 
 | control | is |
 |---|---|
@@ -255,6 +255,7 @@ and the page on every rig.
 | S 1–8 | focus camera 1–8, as many as the graph has a choice of |
 | M 1–8 | focus monitor 1–8, likewise |
 | R 1–4 | focus input 1–4, likewise |
+| R 5 | **reverse**: the focused monitor's two strongest sources trade levels; nothing on a monitor showing one thing |
 | R 6, R 7 | **flip x**, **flip y**: mirror the focused camera left for right, top for bottom; lit while it is |
 | R 8 | **page**: the faders and rotaries on their other page of knobs; lit on page 2 |
 | marker next | blank the monitors |
@@ -277,7 +278,7 @@ cameras, Mute the monitors, Record the inputs.
 **A row is the choice its kind offers, and nothing else.** The surface is
 built for the graph about to be played. A rig of one camera and two monitors
 binds M1 and M2 and leaves nineteen select buttons dead — unlit, silent,
-and free for a `midi.toml` to claim; R6–R8 are the flips and the page on every rig. The Solo row is dead there
+and free for a `midi.toml` to claim; R5–R8 are the reversal, the flips and the page on every rig. The Solo row is dead there
 because one camera is no choice: a button that selects the only camera there
 is selects what is already selected, and the rule is that a button is
 owed to equipment, not spent on it. Dead is the point.
@@ -426,7 +427,7 @@ fader is on `page` 1 unless it says 2; the buttons are on both pages, so a
 control may carry one knob a page and a button on no page; a map with a knob
 on page 2 and no `page` button is refused. A
 button names a **command**, spelled the way the overlay captions it: `blank`,
-`reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `page`, `flip x`, `flip y`, `rate -`,
+`reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `reverse`, `page`, `flip x`, `flip y`, `rate -`,
 `rate +`, and `cam 1`…`cam 8`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
 as many of each as a graph may legally hold.
 

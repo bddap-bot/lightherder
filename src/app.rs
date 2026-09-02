@@ -573,6 +573,14 @@ impl App {
                     log::info!("{}", self.params.describe(self.focus));
                 }
             }
+            // The same two knobs as a cut, moved without their faders.
+            Action::Reverse => {
+                if self.params.reverse(self.focus.monitor) {
+                    self.midi.release_knob(Knob::Route);
+                    self.midi.release_knob(Knob::Send);
+                    log::info!("{}", self.params.describe(self.focus));
+                }
+            }
             Action::Page => {
                 self.midi.turn_page();
                 log::info!("knob page {}", self.midi.page());
@@ -1338,6 +1346,65 @@ mod tests {
         );
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, before);
+    }
+
+    #[test]
+    fn a_reversal_trades_the_two_strongest_sources_and_leaves_the_rest() {
+        // Monitor 2 shows camera 1 at 0.6, camera 2 at 0.1 and input 1 at
+        // 0.3: the reversal is between the camera and the input, and the
+        // weaker camera and the other monitor stay put.
+        let mut params = config::shaped(2, 2, 1);
+        params.routing = vec![vec![1.0, 0.0], vec![0.6, 0.1]];
+        params.routing_inputs = vec![vec![0.0, 0.3]];
+        let Some(mut app) = playing(params) else {
+            return;
+        };
+        app.act(Action::Focus(Node::Monitor, 1));
+        let before = app.params.clone();
+        app.act(Action::Reverse);
+        assert_eq!(app.params.routing, vec![vec![1.0, 0.0], vec![0.3, 0.1]]);
+        assert_eq!(app.params.routing_inputs, vec![vec![0.0, 0.6]]);
+        // Pressed again, it is the reverse of the reverse.
+        app.act(Action::Reverse);
+        assert_eq!(app.params, before);
+    }
+
+    #[test]
+    fn a_reversal_on_a_monitor_with_one_source_moves_nothing() {
+        // Crossed: each monitor shows one camera whole, which is nothing to
+        // reverse it with.
+        let Some(mut app) = playing(config::crossed()) else {
+            return;
+        };
+        for monitor in 0..2 {
+            app.act(Action::Focus(Node::Monitor, monitor));
+            let before = app.params.clone();
+            app.act(Action::Reverse);
+            assert_eq!(app.params, before);
+        }
+    }
+
+    #[test]
+    fn a_reversal_takes_the_crosspoint_out_of_the_hands_of_the_fader_holding_it() {
+        // As the cut does: route, fader 8, caught at the middle, then the
+        // reversal moves the crosspoint without it — so the next touch of
+        // that fader must not throw it back.
+        let mut params = config::shaped(2, 1, 0);
+        params.routing = vec![vec![0.5, 0.25]];
+        let Some(mut app) = playing(params) else {
+            return;
+        };
+        surface(&mut app, 7, 0);
+        surface(&mut app, 7, 64);
+        let held = app.params.routing[0][0];
+        assert!((held - 64.0 / 127.0).abs() < 1e-3, "the fader never caught");
+        app.act(Action::Reverse);
+        assert_eq!(app.params.routing, vec![vec![0.25, held]]);
+        surface(&mut app, 7, 65);
+        assert_eq!(
+            app.params.routing[0][0], 0.25,
+            "the fader kept its grip through the reversal"
+        );
     }
 
     #[test]

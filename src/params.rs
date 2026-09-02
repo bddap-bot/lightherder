@@ -876,14 +876,9 @@ impl Params {
     /// — or, on a graph with no inputs, the focused camera — and nothing
     /// else. Returns the column as it stood, for [`Params::restore`].
     pub fn cut(&mut self, focus: Focus) -> Crosspoints {
-        let monitor = focus.monitor;
-        let prior = Crosspoints {
-            monitor,
-            cameras: self.routing[monitor].clone(),
-            inputs: self.routing_inputs.iter().map(|row| row[monitor]).collect(),
-        };
+        let prior = self.column(focus.monitor);
         let mut whole = Crosspoints {
-            monitor,
+            monitor: focus.monitor,
             cameras: vec![0.0; prior.cameras.len()],
             inputs: vec![0.0; prior.inputs.len()],
         };
@@ -893,6 +888,37 @@ impl Params {
         }
         self.restore(&whole);
         prior
+    }
+
+    /// The switcher's source reversal: the monitor's two strongest sources,
+    /// camera or input, trade levels. `false` — and nothing moved — on a
+    /// column with fewer than two live sources: a monitor showing one thing
+    /// has nothing to reverse it with.
+    pub fn reverse(&mut self, monitor: usize) -> bool {
+        let mut column = self.column(monitor);
+        let mut levels: Vec<&mut f32> = column
+            .cameras
+            .iter_mut()
+            .chain(column.inputs.iter_mut())
+            .collect();
+        levels.sort_by(|a, b| b.total_cmp(a));
+        let [a, b, ..] = &mut levels[..] else {
+            return false;
+        };
+        if **b <= 0.0 {
+            return false;
+        }
+        std::mem::swap(*a, *b);
+        self.restore(&column);
+        true
+    }
+
+    fn column(&self, monitor: usize) -> Crosspoints {
+        Crosspoints {
+            monitor,
+            cameras: self.routing[monitor].clone(),
+            inputs: self.routing_inputs.iter().map(|row| row[monitor]).collect(),
+        }
     }
 
     /// Put a column back where [`Params::cut`] took it from.

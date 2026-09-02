@@ -46,6 +46,10 @@ pub enum Action {
     /// The switcher's foot pedal. Held rather than latched because the trap
     /// is the flick back.
     Cut(Edge),
+    /// The switcher's source reversal: the focused monitor's two strongest
+    /// sources trade levels. A press, since pressing it again is the reverse
+    /// of the reverse.
+    Reverse,
     Page,
     /// A latch on a button with a lamp, not a knob: a flip is on or off.
     Flip(Axis),
@@ -118,6 +122,11 @@ const COMMANDS: &[Command] = &[
         "cut",
         Action::Cut(Edge::Down),
         "the focused monitor shows only the focused input (or camera) while this is held down",
+    ),
+    cmd(
+        "reverse",
+        Action::Reverse,
+        "the focused monitor's two strongest sources trade levels",
     ),
     cmd(
         "page",
@@ -254,6 +263,7 @@ mod tests {
         assert_eq!(action_for_name("snap"), Some(Action::Screencap));
         assert_eq!(action_for_name("record"), Some(Action::Record(Edge::Down)));
         assert_eq!(action_for_name("cut"), Some(Action::Cut(Edge::Down)));
+        assert_eq!(action_for_name("reverse"), Some(Action::Reverse));
         assert_eq!(action_for_name("page"), Some(Action::Page));
         assert_eq!(describes("reset").as_deref(), Some("reset every knob"));
     }

@@ -795,6 +795,7 @@ mod tests {
                         selects(node, i)
                     } else {
                         match crate::midi::row_of(node) + i {
+                            crate::midi::REVERSE => captioned(node, i, "reverse"),
                             crate::midi::FLIP_X => captioned(node, i, "flip x"),
                             crate::midi::FLIP_Y => captioned(node, i, "flip y"),
                             crate::midi::PAGE => captioned(node, i, "page"),
