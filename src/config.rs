@@ -1196,7 +1196,7 @@ mod tests {
                 node.name()
             );
         }
-        // And exactly at each cap, well-with, a graph loads: every bound
+        // And exactly at each cap, well-shaped, a graph loads: every bound
         // is the node past the last legal one, not the last legal one. Off
         // `cap` rather than a second copy of the three numbers, so the bound
         // the vocabulary is cut to is the bound a graph is refused past.

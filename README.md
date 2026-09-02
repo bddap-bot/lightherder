@@ -41,26 +41,25 @@ two-structure rig — each camera watches its own monitor through
 beam-splitter glass that lets a quarter of the other bleed in, and the
 switcher routes every camera to the opposite monitor, so each image is made
 of its twin's past. `insanity` is four monitors all-to-all: every monitor a
-quarter of every camera. `rig` is Dave Blair's 4K Light Herder itself, as
-one graph: three cameras, five monitors and one seed input. Cameras A and B
-each see their structure's upper monitor directly and its lower one in the
-50/50 glass, at half each; camera 3 sees the rotating monitor, which shows
-camera B's feed. Four switchers chain the rest — A mixes camera A with
-camera B's feed for structure A's monitors, B mixes camera B with switcher
-C's program for structure B's, C mixes camera A with switcher D's, and D
-mixes camera 3 with the seed — and each structure monitor is on its camera
-direct (In1) or its switcher's program (In2). The preset ships every monitor
-on In2, the cross-links a quarter open and the seed at a trickle. Every
-switcher is a crossfade and every select a pick, so a monitor's picture is a
-weighted sum of the cameras and the seed: the preset multiplies that chain
-out into the routing matrix (`src/rig.rs`) and there is no second mixer. Its
-controls are therefore the two crosspoints: fader 8 against upper A and
-camera B is switcher A's crossfade as that monitor sees it, and fader 1
-against a B monitor is the seed's share at the end of the chain. One shape
-worth knowing before writing your own:
+quarter of every camera. One shape worth knowing before writing your own:
 rotations in a mixed loop should all turn the same way, since paths whose
 rotations cancel never wind away from the seed, and light that cannot leave
 the seed spot piles up on it until the display clips.
+
+`rig` is Dave Blair's 4K Light Herder itself, as one graph: three cameras,
+five monitors, one seed input. Cameras A and B each see their structure's
+upper monitor directly and its lower one in the 50/50 glass, at half each;
+camera 3 sees the rotating monitor, which shows camera B's feed. Four
+switchers, each a crossfade, do the rest: A mixes camera B's feed into
+structure A, B mixes into structure B a chain (C, then D) that carries
+camera A, camera 3 and the seed, and each structure monitor is on its camera
+direct or its switcher's program. The preset ships every monitor on program,
+both cross-links a quarter open, C half open and the seed a tenth of D. A
+crossfade is a weighted sum, so the whole chain multiplies out into the
+routing matrix (`src/rig.rs`) and there is no second mixer: switcher A and
+the four selects survive as crosspoints of their own, the rest as products.
+Its controls are the crosspoints — fader 8 for the cameras, fader 1 for the
+seed, against the focused monitor.
 
 Before that output is written, it passes the monitor's own front panel: the
 chroma decode, the video amplifier and the phosphor, in that order. The decode
@@ -432,6 +431,7 @@ nix-shell --run "cargo run --release crossed"            # two crossed structure
 nix-shell --run "cargo run --release insanity"           # four, all-to-all
 nix-shell --run "cargo run --release external"           # a test pattern driving the loop
 nix-shell --run "cargo run --release webcam"             # /dev/video0 through the luma key
+nix-shell --run "cargo run --release rig"                # Blair's 4K Light Herder, whole
 nix-shell --run "cargo run --release my-graph.toml"      # your own
 ```
 
