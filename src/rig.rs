@@ -344,6 +344,19 @@ mod tests {
     }
 
     #[test]
+    fn every_camera_pulls_back_and_turns_the_same_way_at_its_own_rate() {
+        let params = Rig::PERFORMANCE.params();
+        let [a, b, three] = [&params.cameras[0], &params.cameras[1], &params.cameras[2]];
+        for cam in [a, b, three] {
+            assert!(cam.framing.zoom < 1.0, "{:?}", cam.framing);
+        }
+        assert!(0.0 < a.framing.rotation && a.framing.rotation < b.framing.rotation);
+        assert!(b.framing.rotation < three.framing.rotation);
+        // A and B tinted opposite ways, so the structures stay distinct.
+        assert!(a.gain[0] < a.gain[2] && b.gain[0] > b.gain[2]);
+    }
+
+    #[test]
     fn the_performance_graph_is_these_rows() {
         // Written out rather than re-derived through `shows`, so a wrong
         // wire in the chain cannot agree with itself here.
