@@ -60,6 +60,7 @@ fn graph(s: &Single) -> Params {
             colour: s.colour,
             seed: s.seed,
             headroom: s.headroom,
+            sharpness: 0.0,
             period: 0,
         }],
         inputs: Vec::new(),
@@ -1173,6 +1174,7 @@ fn silent_monitor() -> Monitor {
         colour: Colour::NEUTRAL,
         seed: Seed::Dark,
         headroom: Monitor::KNEE_AT_WHITE,
+        sharpness: 0.0,
         period: 0,
     }
 }
@@ -2510,4 +2512,69 @@ fn blanking_the_monitors_empties_the_whole_ring() {
             "a flash survived the blank: pass {pass} lit {lit}"
         );
     }
+}
+
+/// One more pass with the loop passing light straight through and the
+/// monitor's sharpness set, so the mask is the only thing between frames.
+fn resharpen(h: &mut Harness, sharpness: f32) -> Image {
+    let mut params = graph(&Single {
+        seed: Seed::Dark,
+        loop_gain: [1.0; 3],
+        ..frozen(seeded())
+    });
+    params.monitors[0].sharpness = sharpness;
+    h.step_graph(&params);
+    h.read()
+}
+
+#[test]
+fn sharpness_is_exact_at_rest_and_steepens_the_seeds_rim_when_turned_up() {
+    let Some(mut h) = square() else { return };
+    let seed = h.feedback.blob_uv();
+    let before = still_spot(&mut h);
+    assert!(before.at(seed[0], seed[1]) > 200.0, "nothing to sharpen");
+    // Rest is the stage skipped, so a pass through it is a pass through
+    // nothing: not close to the frame before, the same bytes.
+    let at_rest = resharpen(&mut h, 0.0);
+    assert_eq!(at_rest.pixels, before.pixels, "sharpness 0 moved a texel");
+
+    // The rim: the steepest step between neighbouring texels on a line
+    // through the spot, either way across it. An unsharp mask puts back
+    // detail, and on a soft-edged spot detail is a steeper edge — on both
+    // axes, since the mask reads both arms of its cross.
+    let steepest = |image: &Image, horizontal: bool| {
+        let (span, along, fixed) = if horizontal {
+            (SIZE, seed[0], seed[1])
+        } else {
+            (SIZE, seed[1], seed[0])
+        };
+        let at = |i: u32| {
+            let moved = (i as f32 + 0.5) / span as f32;
+            if horizontal {
+                image.at(moved, fixed)
+            } else {
+                image.at(fixed, moved)
+            }
+        };
+        let _ = along;
+        (1..span)
+            .map(|i| (at(i) - at(i - 1)).abs())
+            .fold(0.0, f32::max)
+    };
+    let sharpened = resharpen(&mut h, 2.0);
+    for horizontal in [true, false] {
+        let (was, is) = (
+            steepest(&at_rest, horizontal),
+            steepest(&sharpened, horizontal),
+        );
+        assert!(
+            is > was + 4.0,
+            "{} rim went {was} -> {is} per texel",
+            if horizontal { "horizontal" } else { "vertical" }
+        );
+    }
+    // A mask a texel wide reaches a texel: the dark room round the spot
+    // stays dark, or the offsets are not the texel they claim to be.
+    let far = sharpened.brightest_in(0.0, 0.0, 1.0, 0.1);
+    assert_eq!(far, 0.0, "the mask lit the far field to {far}");
 }

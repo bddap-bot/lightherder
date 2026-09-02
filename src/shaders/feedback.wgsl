@@ -37,6 +37,7 @@ struct Uniforms {
     // first bank layer past `lower`. w: the first bank layer of `upper`.
     info: vec4<f32>,
     // x: grain amplitude. y: the amplifier's headroom. z: frame counter.
+    // w: the unsharp mask, the front panel's sharpness knob.
     analog: vec4<f32>,
     // xyz: FCC NTSC luma, handed over rather than written here so the crate
     // has one copy of it. The weights sum to one, so adding the same amount
@@ -175,6 +176,28 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
                 bloom,
             );
             signal = smeared + vec3<f32>(dot(u.luma.xyz, lens) - dot(u.luma.xyz, smeared));
+        }
+
+        // The front panel's sharpness: an unsharp mask one monitor texel
+        // wide, the detail the LCD's driver board adds back. The texel is
+        // the monitor's own, carried through the tap's affine into the
+        // source the way the halo is, so a camera turned on its side
+        // sharpens along the monitor's rows, not its own. Per tap for the
+        // same reason as the halo: the stages after it are affine in the
+        // samples and the mask is one number for the monitor, so masking
+        // the sum and summing the masks agree. Skipped, not multiplied by
+        // zero, at rest: the loop compounds any residual.
+        let sharpness = u.analog.w;
+        if sharpness > 0.0 {
+            let texel = 1.0 / vec2<f32>(textureDimensions(lower));
+            let across = vec2<f32>(tap.row0.x, tap.row1.x) * texel.x;
+            let down = vec2<f32>(tap.row0.y, tap.row1.y) * texel.y;
+            let blurred = 0.25
+                * (seen_at(src_uv + across, layer)
+                    + seen_at(src_uv - across, layer)
+                    + seen_at(src_uv + down, layer)
+                    + seen_at(src_uv - down, layer));
+            signal += sharpness * (raw - blurred);
         }
 
         // The keyer, judged on the centre sample: what it gates is the

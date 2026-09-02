@@ -266,7 +266,8 @@ struct Uniforms {
     /// The analog stage's per-monitor lanes, which are not [`Character`]'s
     /// fields — those are per camera and ride the taps. x: grain amplitude,
     /// summed over the cameras the switcher routes here. y: the amplifier's
-    /// headroom. z: a frame counter, so the grain moves.
+    /// headroom. z: a frame counter, so the grain moves. w: the unsharp
+    /// mask, [`Monitor::sharpness`].
     analog: [f32; 4],
     /// NTSC luma, from [`crate::params::luma_row`]. Passed rather than
     /// written into the shader so there is one copy of it in the crate.
@@ -751,7 +752,12 @@ impl Feedback {
                     monitor.seed.brightness(),
                 ],
                 info: [count as f32, (split + m) as f32, split as f32, above as f32],
-                analog: [grain, monitor.headroom, self.frame as f32, 0.0],
+                analog: [
+                    grain,
+                    monitor.headroom,
+                    self.frame as f32,
+                    monitor.sharpness,
+                ],
                 luma: {
                     let l = crate::params::luma_row();
                     [l[0], l[1], l[2], 0.0]

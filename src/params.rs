@@ -465,6 +465,11 @@ pub struct Monitor {
     /// A real amplifier always has rails, so there is no setting that turns
     /// this off, and [`Monitor::KNEE_AT_WHITE`] is not one pretending to be.
     pub headroom: f32,
+    /// The unsharp mask on the front panel: how much of the difference
+    /// between a texel and the mean of its four neighbours is added back.
+    /// Zero is the stage skipped outright, so a rested knob is exactly
+    /// inert inside a loop that would compound a residual.
+    pub sharpness: f32,
     /// Passes between reversals of this monitor's column. Zero is the mode
     /// off, and the only latch it has: the knob at its floor.
     pub period: u32,
@@ -476,6 +481,7 @@ impl Default for Monitor {
             colour: Colour::NEUTRAL,
             seed: Seed::Dark,
             headroom: Monitor::KNEE_AT_WHITE,
+            sharpness: 0.0,
             period: 0,
         }
     }
@@ -648,6 +654,7 @@ pub enum Knob {
     Contrast,
     Gamma,
     Temperature,
+    Sharpness,
     Headroom,
     Period,
     /// The switcher crosspoint the focus's camera and monitor name between
@@ -700,7 +707,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 27] = [
+    pub const ALL: [Knob; 28] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -724,6 +731,7 @@ impl Knob {
         Knob::Contrast,
         Knob::Gamma,
         Knob::Temperature,
+        Knob::Sharpness,
         Knob::Headroom,
         Knob::Period,
         Knob::Route,
@@ -758,6 +766,7 @@ impl Knob {
             Knob::Contrast => "contrast",
             Knob::Gamma => "gamma",
             Knob::Temperature => "temperature",
+            Knob::Sharpness => "sharpness",
             Knob::Headroom => "headroom",
             Knob::Period => "period",
             Knob::Route => "route",
@@ -828,6 +837,7 @@ impl Knob {
             | Knob::Contrast
             | Knob::Gamma
             | Knob::Temperature
+            | Knob::Sharpness
             | Knob::Headroom
             | Knob::Period => Side::Monitor,
             Knob::Route => Side::Edge,
@@ -917,6 +927,9 @@ impl Knob {
             // Candlelight to open shade, in mired from D65; both ends well
             // inside the 1667 K to 25 000 K the locus fit is good for.
             Knob::Temperature => Limit::Clamp(-100.0, 340.0),
+            // Unity doubles every edge, and the loop compounds it each pass;
+            // twice that is already a picture made of edges.
+            Knob::Sharpness => Limit::Clamp(0.0, 2.0),
             // Zero would divide by it. The bottom of the range squeezes the
             // whole picture into the darkest eighth, which is a sound worth
             // having; the top is well clear of anything a monitor displays.
@@ -1109,6 +1122,7 @@ impl Params {
             Knob::Contrast => mon.colour.contrast,
             Knob::Gamma => mon.colour.gamma,
             Knob::Temperature => mon.colour.temperature,
+            Knob::Sharpness => mon.sharpness,
             Knob::Headroom => mon.headroom,
             Knob::Period => mon.period as f32,
             Knob::Route => self.routing[focus.monitor][focus.camera],
@@ -1178,6 +1192,7 @@ impl Params {
             Knob::Contrast => &mut self.monitors[focus.monitor].colour.contrast,
             Knob::Gamma => &mut self.monitors[focus.monitor].colour.gamma,
             Knob::Temperature => &mut self.monitors[focus.monitor].colour.temperature,
+            Knob::Sharpness => &mut self.monitors[focus.monitor].sharpness,
             Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
             Knob::Route => &mut self.routing[focus.monitor][focus.camera],
             Knob::Send => &mut self.routing_inputs[focus.input][focus.monitor],
@@ -1200,7 +1215,7 @@ impl Params {
              bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  delay {}/{}  \
              key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             gamma {:.3}  temp {:+.1}  headroom {:.3}  period {}  seed {}\n\
+             gamma {:.3}  temp {:+.1}  sharp {:.3}  headroom {:.3}  period {}  seed {}\n\
              route {:.3}: how much of cam {} mon {} shows{}",
             focus.camera + 1,
             self.cameras.len(),
@@ -1229,6 +1244,7 @@ impl Params {
             mon.colour.contrast,
             mon.colour.gamma,
             mon.colour.temperature,
+            mon.sharpness,
             mon.headroom,
             mon.period,
             mon.seed,
@@ -1355,6 +1371,7 @@ mod tests {
         assert_eq!(mon.colour.contrast, 4.0);
         assert_eq!(mon.colour.gamma, 4.0);
         assert_eq!(mon.colour.temperature, 340.0);
+        assert_eq!(mon.sharpness, 2.0);
 
         for _ in 0..10_000 {
             for knob in Knob::ALL {
@@ -1379,6 +1396,7 @@ mod tests {
         assert_eq!(mon.colour.contrast, 0.0);
         assert_eq!(mon.colour.gamma, 0.25);
         assert_eq!(mon.colour.temperature, -100.0);
+        assert_eq!(mon.sharpness, 0.0);
     }
 
     #[test]
@@ -1591,7 +1609,7 @@ mod tests {
     /// the constant [`identity_graph`] is built from. Read off the same
     /// constant the code reads and a knob wired to the wrong field would
     /// agree with itself: this table is the independent word.
-    const IDENTITIES: [(Knob, f32); 27] = [
+    const IDENTITIES: [(Knob, f32); 28] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
         (Knob::TranslateX, 0.0),
@@ -1620,6 +1638,7 @@ mod tests {
         (Knob::Contrast, 1.0),
         (Knob::Gamma, 1.0),
         (Knob::Temperature, 0.0),
+        (Knob::Sharpness, 0.0),
         // The rail at twice display white: an amplifier always has one, and
         // this is the one that touches nothing a monitor can show.
         (Knob::Headroom, 2.0),

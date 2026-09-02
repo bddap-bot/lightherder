@@ -192,7 +192,8 @@ impl Map {
     /// offsets and the bloom radius, trims of knobs on page 1, and then the
     /// keyer's four. Its fader 2 is the focused monitor's colour
     /// temperature, under the hue fader as the original's toggle puts it
-    /// under the hue knobs. Its fader 8 is the focused camera's delay — where page
+    /// under the hue knobs, and its fader 3 the monitor's sharpness, the
+    /// other face of that toggle. Its fader 8 is the focused camera's delay — where page
     /// 1's fader 8 is how much of that camera the monitor shows, page 2's is
     /// how late — on a graph whose delay units have any reach, and dead
     /// otherwise, like the send. Page 2's fader 7 is the focused monitor's period,
@@ -232,6 +233,7 @@ impl Map {
                     fader(22, Knob::ChromaBleed),
                     fader(23, Knob::Noise),
                     page_two(1, Knob::Temperature),
+                    page_two(2, Knob::Sharpness),
                     page_two(16, Knob::GainR),
                     page_two(17, Knob::GainG),
                     page_two(18, Knob::GainB),
@@ -1880,6 +1882,7 @@ mod tests {
                 fader(22, Knob::ChromaBleed),
                 fader(23, Knob::Noise),
                 page_two(1, Knob::Temperature),
+                page_two(2, Knob::Sharpness),
                 page_two(16, Knob::GainR),
                 page_two(17, Knob::GainG),
                 page_two(18, Knob::GainB),
@@ -2235,9 +2238,7 @@ mod tests {
     #[test]
     fn the_page_button_turns_the_faders_over_and_lets_go_of_every_grip() {
         let params = crate::config::widest();
-        let mut map = Map::nano_kontrol2(&params);
-        map.fader.push(page_two(2, Knob::Noise));
-        let mut midi = Midi::new(map, &params).unwrap();
+        let mut midi = Midi::new(Map::nano_kontrol2(&params), &params).unwrap();
         assert_eq!(midi.page(), Page::One);
         // Sweep up from the bottom past saturation (a quarter of the way up)
         // and the fader is saturation's.
@@ -2252,12 +2253,12 @@ mod tests {
         assert_eq!(feed(&mut midi, &params, &cc(PAGE, 0)), []);
         midi.turn_page();
         assert_eq!(midi.page(), Page::Two);
-        // The same fader is now noise's, and it is standing at 40 while
-        // noise sits at zero — so it has to come down to it first.
+        // The same fader is now sharpness's, and it is standing at 40 while
+        // sharpness sits at zero — so it has to come down to it first.
         assert_eq!(feed(&mut midi, &params, &cc(2, 60)), []);
         assert!(matches!(
             feed(&mut midi, &params, &cc(2, 0))[..],
-            [Action::Set(Knob::Noise, v)] if v.abs() < 1e-6
+            [Action::Set(Knob::Sharpness, v)] if v.abs() < 1e-6
         ));
         // A page-1 knob on a control page 2 binds nothing to is dead there:
         // gamma's fader moves nothing rather than moving gamma.

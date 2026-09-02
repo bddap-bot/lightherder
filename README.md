@@ -71,7 +71,11 @@ hue does not turn it — a turned chroma is not a turned phosphor. Decode, turn,
 white and encode compose into one 3x3, which the CPU works out once a frame:
 chained per fragment instead they leave a ten-thousandth of the signal behind
 on every pass, and a loop that feeds itself turns that into a colour cast. Then contrast
-about mid-grey, brightness as a lift, and a power curve for the phosphor. All
+about mid-grey, brightness as a lift, a power curve for the phosphor, and
+sharpness — an unsharp mask a texel wide, the detail an LCD's driver board
+puts back: the difference between a texel and the mean of its four neighbours,
+added back by the knob, and skipped outright at rest rather than multiplied
+by zero. All
 of it is inside the loop, so every knob compounds once per pass: a few
 hundredths of a radian of hue walks the trail through the spectrum, a gamma
 above 1 crushes the dark end and thins it out — far enough and it takes the
@@ -255,6 +259,7 @@ reversal, the flips and the page on every rig.
 | faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows. Brightness and contrast come through a half-flattened `curve`: finer near the middle of the travel, coarser at the ends |
 | rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
 | fader 2, page 2 | the focused **monitor**'s colour temperature, under the hue fader as the original's toggle puts it under the hue knobs: down cools the white toward shade, up warms it toward candlelight, a quarter of the way up is daylight |
+| fader 3, page 2 | the focused **monitor**'s sharpness, beside the temperature as the other face of the original's toggle: at the bottom the stage is skipped; up, every rim on the monitor steepens |
 | fader 7, page 2 | the focused **monitor**'s period: every this many passes its two strongest sources trade levels, as the reversal does; at the bottom the mode is off; nothing on a graph with one source |
 | fader 8, page 2 | the focused **camera**'s delay, in whole frames up to the graph's reach; nothing on a graph with none |
 | rotaries 1–8, page 2 | the focused **camera** still: red, green and blue gain, bloom radius, key threshold, key softness, key hue, key tolerance |
@@ -297,8 +302,8 @@ the same way, rather than lighting a button that lies or spending a fader on
 silence. Nothing is bound to quit — the window manager ends the instrument,
 and a slipped finger on the surface must not be able to. Every knob the graph has is on
 the factory map, on one page or the other; page 2 keeps the rotaries the camera's,
-puts the monitor's colour temperature on fader 2, its period on fader 7 and the
-camera's delay on fader 8, and leaves the other faders free for a `midi.toml`
+puts the monitor's colour temperature on fader 2, its sharpness on fader 3, its
+period on fader 7 and the camera's delay on fader 8, and leaves the other faders free for a `midi.toml`
 to claim.
 
 **A fader does not take its knob over until it has passed through where the
@@ -523,7 +528,8 @@ beats in step; 0 to 60 passes, and 0 — the default — is the mode off. There 
 no latch beside the knob: the board is full, and a period at its floor is the
 off switch. `colour` is the front panel — `hue`, `saturation`, `brightness`,
 `contrast`, `gamma`, and `temperature`, the white point in mired from D65:
-+340 is candlelight, -100 open shade, 0 the default.
++340 is candlelight, -100 open shade, 0 the default. `sharpness` on a monitor is
+its unsharp mask, 0 to 2, and 0 — the default — is the stage skipped.
 `framing` may also set `flip_x` and
 `flip_y`, the original's router-output mirrors, applied to the framed
 picture as a whole. `seed` is
@@ -684,7 +690,9 @@ each colour knob does its own job — saturation greys without dimming, hue
 moves light between the channels at constant luma, contrast leaves mid-grey
 where it is while a gain would not, brightness lifts black itself, gamma
 bends the response instead of scaling it, and the temperature leaves a grey
-grey at rest and warms or cools it at the rails without moving its luma. The
+grey at rest and warms or cools it at the rails without moving its luma, and
+sharpness leaves the frame byte for byte at rest and steepens the seed's rim
+both ways when turned up. The
 graph gets the same treatment: a seed sent across the crossed wiring bounces
 between the monitors without
 leaving a copy behind, mix weights deliver exactly the fraction they name, a
