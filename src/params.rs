@@ -927,8 +927,9 @@ impl Knob {
             // Candlelight to open shade, in mired from D65; both ends well
             // inside the 1667 K to 25 000 K the locus fit is good for.
             Knob::Temperature => Limit::Clamp(-100.0, 340.0),
-            // Unity doubles every edge, and the loop compounds it each pass;
-            // twice that is already a picture made of edges.
+            // The cross's gain on the finest grain is 1 + 2s, so the top of
+            // the travel is fivefold on it every pass; past that the loop
+            // shows its grain and nothing else.
             Knob::Sharpness => Limit::Clamp(0.0, 2.0),
             // Zero would divide by it. The bottom of the range squeezes the
             // whole picture into the darkest eighth, which is a sound worth

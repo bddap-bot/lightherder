@@ -111,14 +111,24 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
 // textures have a single mip level, so the derivatives textureSample computes
 // go nowhere.
 fn seen_at(uv: vec2<f32>, layer: i32) -> vec3<f32> {
-    let inside = all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0));
     var rgb: vec3<f32>;
     if layer < i32(u.info.z) {
         rgb = textureSampleLevel(lower, src_samp, uv, layer, 0.0).rgb;
     } else {
         rgb = textureSampleLevel(upper, src_samp, uv, layer - i32(u.info.w), 0.0).rgb;
     }
-    return select(vec3<f32>(0.0), rgb, inside);
+    return select(vec3<f32>(0.0), rgb, inside(uv));
+}
+
+fn inside(uv: vec2<f32>) -> bool {
+    return all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0));
+}
+
+// One arm of the sharpness mask: the source at uv, or the centre again
+// past the source's edge. The room beyond is dark, and a mask that saw it
+// would add light along the border — which the loop multiplies.
+fn arm(uv: vec2<f32>, layer: i32, centre: vec3<f32>) -> vec3<f32> {
+    return select(centre, seen_at(uv, layer), inside(uv));
 }
 
 // A cheap integer hash. The grain has to differ at every texel and every
@@ -178,26 +188,24 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
             signal = smeared + vec3<f32>(dot(u.luma.xyz, lens) - dot(u.luma.xyz, smeared));
         }
 
-        // The front panel's sharpness: an unsharp mask one monitor texel
-        // wide, the detail the LCD's driver board adds back. The texel is
-        // the monitor's own, carried through the tap's affine into the
-        // source the way the halo is, so a camera turned on its side
-        // sharpens along the monitor's rows, not its own. Per tap for the
-        // same reason as the halo: the stages after it are affine in the
-        // samples and the mask is one number for the monitor, so masking
-        // the sum and summing the masks agree. Skipped, not multiplied by
-        // zero, at rest: the loop compounds any residual.
+        // The monitor's sharpness, an unsharp mask a texel wide on the signal
+        // the switcher hands it. That signal is summed per fragment and never
+        // re-read, so the mask is taken per tap from the bank texels, the
+        // neighbours' keyer verdicts taken as the centre's, and scaled by
+        // what the lens left of texel detail: the halo is smooth at that
+        // scale, so (1 - bloom) of it survives the mix. The arms are summed
+        // in pairs so four equal samples come back as exactly the centre.
+        // Skipped at rest: four reads a texel on every tap of every monitor,
+        // for nothing.
         let sharpness = u.analog.w;
         if sharpness > 0.0 {
             let texel = 1.0 / vec2<f32>(textureDimensions(lower));
             let across = vec2<f32>(tap.row0.x, tap.row1.x) * texel.x;
             let down = vec2<f32>(tap.row0.y, tap.row1.y) * texel.y;
             let blurred = 0.25
-                * (seen_at(src_uv + across, layer)
-                    + seen_at(src_uv - across, layer)
-                    + seen_at(src_uv + down, layer)
-                    + seen_at(src_uv - down, layer));
-            signal += sharpness * (raw - blurred);
+                * ((arm(src_uv + across, layer, raw) + arm(src_uv - across, layer, raw))
+                    + (arm(src_uv + down, layer, raw) + arm(src_uv - down, layer, raw)));
+            signal += sharpness * (1.0 - bloom) * (raw - blurred);
         }
 
         // The keyer, judged on the centre sample: what it gates is the

@@ -2514,17 +2514,35 @@ fn blanking_the_monitors_empties_the_whole_ring() {
     }
 }
 
-/// One more pass with the loop passing light straight through and the
-/// monitor's sharpness set, so the mask is the only thing between frames.
+/// One more pass with the loop passing light straight through, a clean
+/// camera and the monitor's sharpness set, so the mask is the only thing
+/// between frames.
 fn resharpen(h: &mut Harness, sharpness: f32) -> Image {
     let mut params = graph(&Single {
         seed: Seed::Dark,
         loop_gain: [1.0; 3],
+        character: Character::CLEAN,
         ..frozen(seeded())
     });
     params.monitors[0].sharpness = sharpness;
     h.step_graph(&params);
     h.read()
+}
+
+/// The steepest step between neighbouring texels on the line through
+/// `centre`, across it or down it.
+fn steepest(image: &Image, centre: [f32; 2], horizontal: bool) -> f32 {
+    let at = |i: u32| {
+        let moved = (i as f32 + 0.5) / SIZE as f32;
+        if horizontal {
+            image.at(moved, centre[1])
+        } else {
+            image.at(centre[0], moved)
+        }
+    };
+    (1..SIZE)
+        .map(|i| (at(i) - at(i - 1)).abs())
+        .fold(0.0, f32::max)
 }
 
 #[test]
@@ -2537,35 +2555,13 @@ fn sharpness_is_exact_at_rest_and_steepens_the_seeds_rim_when_turned_up() {
     // nothing: not close to the frame before, the same bytes.
     let at_rest = resharpen(&mut h, 0.0);
     assert_eq!(at_rest.pixels, before.pixels, "sharpness 0 moved a texel");
-
-    // The rim: the steepest step between neighbouring texels on a line
-    // through the spot, either way across it. An unsharp mask puts back
-    // detail, and on a soft-edged spot detail is a steeper edge — on both
-    // axes, since the mask reads both arms of its cross.
-    let steepest = |image: &Image, horizontal: bool| {
-        let (span, along, fixed) = if horizontal {
-            (SIZE, seed[0], seed[1])
-        } else {
-            (SIZE, seed[1], seed[0])
-        };
-        let at = |i: u32| {
-            let moved = (i as f32 + 0.5) / span as f32;
-            if horizontal {
-                image.at(moved, fixed)
-            } else {
-                image.at(fixed, moved)
-            }
-        };
-        let _ = along;
-        (1..span)
-            .map(|i| (at(i) - at(i - 1)).abs())
-            .fold(0.0, f32::max)
-    };
+    // An unsharp mask puts back detail, and on a soft-edged spot detail is
+    // a steeper rim.
     let sharpened = resharpen(&mut h, 2.0);
     for horizontal in [true, false] {
         let (was, is) = (
-            steepest(&at_rest, horizontal),
-            steepest(&sharpened, horizontal),
+            steepest(&at_rest, seed, horizontal),
+            steepest(&sharpened, seed, horizontal),
         );
         assert!(
             is > was + 4.0,
@@ -2573,8 +2569,71 @@ fn sharpness_is_exact_at_rest_and_steepens_the_seeds_rim_when_turned_up() {
             if horizontal { "horizontal" } else { "vertical" }
         );
     }
-    // A mask a texel wide reaches a texel: the dark room round the spot
-    // stays dark, or the offsets are not the texel they claim to be.
-    let far = sharpened.brightest_in(0.0, 0.0, 1.0, 0.1);
-    assert_eq!(far, 0.0, "the mask lit the far field to {far}");
+}
+
+/// One pass of a graph whose only light is an input, at a sharpness.
+fn sharpened_input(h: &mut Harness, p: &Params, sharpness: f32) -> Image {
+    let mut p = p.clone();
+    p.monitors[0].sharpness = sharpness;
+    h.step_graph(&p);
+    h.read()
+}
+
+#[test]
+fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
+    let p = one_input_on_one_monitor();
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    // Two greys in a checker of quarters: a step in x and a step in y,
+    // neither at a rail, so the mask has room to overshoot both sides of
+    // each — a step from black to white is already as steep as eight bits
+    // can say.
+    let (light, dark) = ([128; 3], [64; 3]);
+    h.feedback.write_input(
+        h.queue,
+        0,
+        &quartered_frame((SIZE, SIZE), [light, dark, light, dark]),
+    );
+    let rest = sharpened_input(&mut h, &p, 0.0);
+    let sharp = sharpened_input(&mut h, &p, 2.0);
+    let middle = [0.5, 0.5];
+    for horizontal in [true, false] {
+        let (was, is) = (
+            steepest(&rest, middle, horizontal),
+            steepest(&sharp, middle, horizontal),
+        );
+        assert!(
+            is > was + 16.0,
+            "{} step went {was} -> {is}",
+            if horizontal { "horizontal" } else { "vertical" }
+        );
+    }
+    // A mask a texel wide reaches a texel: away from the two steps every
+    // texel's four arms read what it reads, and the mask adds exactly
+    // nothing — the frame's own border included, where an arm past the edge
+    // reads the centre again rather than the dark room beyond.
+    let edge = SIZE / 2;
+    let near_a_step = |i: u32| i + 1 == edge || i == edge;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            if near_a_step(x) || near_a_step(y) {
+                continue;
+            }
+            let i = ((y * SIZE + x) * 4) as usize;
+            assert_eq!(
+                sharp.pixels[i..i + 3],
+                rest.pixels[i..i + 3],
+                "the mask reached ({x}, {y})"
+            );
+        }
+    }
+    h.feedback
+        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), light));
+    let rest = sharpened_input(&mut h, &p, 0.0);
+    let sharp = sharpened_input(&mut h, &p, 2.0);
+    assert_eq!(
+        sharp.pixels, rest.pixels,
+        "the mask found detail in a flat field"
+    );
 }
