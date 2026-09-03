@@ -21,7 +21,7 @@ check() {
     ok=1
   fi
   pages=$(timeout 60 gh run list --workflow pages --json headSha,conclusion \
-    --jq "map(select(.headSha == \"$head\")) | .[0].conclusion // \"no run\"")
+    --jq "map(select(.headSha == \"$head\")) | .[0] | if . == null then \"no run\" elif .conclusion == \"\" then .status else .conclusion end")
   if [ "$pages" != success ]; then
     echo "pages workflow on $head: $pages"
     ok=1
