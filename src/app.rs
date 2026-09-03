@@ -413,9 +413,9 @@ impl App {
         }
     }
 
-    /// What the display shows. The solo keeps no index: which monitor is
-    /// the focus's business, and a second one would be a focus that can
-    /// disagree with the focus.
+    /// What the display shows, read off the focus: a solo is of the focused
+    /// monitor and nothing else, so no second index is kept that could
+    /// disagree with it.
     fn view(&self) -> View {
         match self.solo {
             true => View::Solo(self.focus.monitor),
@@ -804,7 +804,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 self.surface_frame();
                 // Read before the window is taken, which is the whole of why
-                // it is up here: the solo is the focus's and the focus is not
+                // it is up here: the view is the focus's and the focus is not
                 // the window's.
                 let view = self.view();
                 let overlay = self.overlay_shown;

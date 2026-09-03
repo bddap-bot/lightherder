@@ -19,15 +19,6 @@ pub enum View {
     Solo(usize),
 }
 
-impl View {
-    fn soloed(self) -> Option<usize> {
-        match self {
-            View::Solo(m) => Some(m),
-            View::Bank { .. } => None,
-        }
-    }
-}
-
 pub struct Present {
     pipeline: wgpu::RenderPipeline,
     mark: wgpu::RenderPipeline,
@@ -97,11 +88,11 @@ impl Present {
         view: View,
         overlay: Option<&crate::overlay::Overlay>,
     ) {
-        let tiles = tiles(monitors.monitors(), view.soloed());
-        let marked = match view {
-            View::Bank { focus } => focus,
-            View::Solo(_) => None,
+        let (solo, marked) = match view {
+            View::Bank { focus } => (None, focus),
+            View::Solo(m) => (Some(m), None),
         };
+        let tiles = tiles(monitors.monitors(), solo);
         let (cols, rows) = grid(tiles.len());
         let target_size = (target.width(), target.height());
         let cell = (target_size.0 / cols, target_size.1 / rows);
