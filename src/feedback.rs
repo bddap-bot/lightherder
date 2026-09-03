@@ -39,6 +39,13 @@ pub const HEADROOM: f32 = 2.0;
 /// but it is the bound a look matrix cannot cross, so nothing has to check.
 pub const MAX_TAPS: usize = crate::rig::CAMERAS * crate::rig::MONITORS + 1;
 
+const _: () = assert!(
+    MAX_TAPS == 16,
+    "shaders/feedback.wgsl spells this number too, and wgpu catches only a \
+     shader that wants MORE than the binding holds — grown here alone, the \
+     taps past the array's end read whatever the implementation clamps to"
+);
+
 /// The most GPU memory a bank may ask for. A cap in bytes rather than in
 /// pixels because it is the layers that do the multiplying: the rig's five
 /// monitors two frames deep, plus the seed, are 1.3 GiB of half-float at
@@ -150,15 +157,13 @@ impl Shape {
 }
 
 /// The edges of monitor `m`'s pass while the newest frame sits in ring slab
-/// `newest`, on pass number `pass`: (the camera the light came through if
-/// it came through one, source layer, routing weight times splitter
-/// weight). This is where the switcher's two kinds of column meet the one
-/// index space the bank is laid out in — a camera's taps read the ring as
-/// far back as its delay and its hold, an input's the layer
-/// [`Feedback::write_input`] writes its frame to.
+/// `newest`: what the light came through, the source layer, and the share of
+/// it this monitor shows times the share of that the glass passes.
 ///
 /// A camera fans out over its beam splitter, since a camera watching two
 /// monitors is two taps. The seed is exactly one tap and carries no camera.
+/// A camera's taps read the ring as far back as its delay; the seed's reads
+/// the layer [`Feedback::write_seed`] wrote its frame to.
 pub(crate) fn taps_of(
     params: &Params,
     m: usize,
@@ -264,10 +269,6 @@ pub struct Feedback {
     /// The ring slab holding the newest frame — the one the present pass
     /// shows and an undelayed camera reads.
     newest: usize,
-    /// Passes taken. The grain reads it to move, and a divided camera to
-    /// know where in its hold it stands — so a wrap would be a hold cut
-    /// short, and it does not wrap.
-    pass: u64,
     uniforms: wgpu::Buffer,
     /// One frame in the bank's format, reused by every
     /// [`Feedback::write_input`]. An external input hands over a frame every
@@ -478,7 +479,6 @@ impl Feedback {
             // The ring is zero-initialised, so every slab is a black frame
             // and which one is newest does not matter yet.
             newest: 0,
-            pass: 0,
             uniforms,
             scratch: Vec::new(),
             layout,
@@ -701,7 +701,6 @@ impl Feedback {
         }
         queue.submit([encoder.finish()]);
         self.newest = next;
-        self.pass += 1;
     }
 }
 

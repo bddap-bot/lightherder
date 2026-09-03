@@ -672,8 +672,7 @@ impl TestSurface {
 impl Midi {
     /// The one door: a `Midi` cannot exist over a map the instrument would
     /// refuse, so nothing downstream has to handle one.
-    pub fn new(map: Map, params: &Params) -> Result<Midi, String> {
-        let _ = params;
+    pub fn new(map: Map) -> Result<Midi, String> {
         map.validate()?;
         let action: Vec<Action> = map
             .button
@@ -1285,11 +1284,7 @@ mod tests {
         // Off the map, so the factory rows and a `midi.toml` that moved them
         // both light the button a hand actually reaches for. One row per
         // kind, so a focus lights one lamp on each of the three.
-        let midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::instrument()),
-            &crate::config::instrument(),
-        )
-        .unwrap();
+        let midi = Midi::new(Map::nano_kontrol2(&crate::config::instrument())).unwrap();
         for index in 0..crate::config::cap(Node::Camera) {
             let focus = Focus {
                 camera: index,
@@ -1312,7 +1307,7 @@ mod tests {
             .retain(|b| !matches!(action_for_name(&b.command), Some(Action::Focus(..))));
         map.button.push(button(90, "cam 2"));
         map.button.push(button(91, "mon 3"));
-        let midi = Midi::new(map, &crate::config::instrument()).unwrap();
+        let midi = Midi::new(map).unwrap();
         assert_eq!(
             midi.wanted(at(1, 2), Shown::default()),
             crate::lamps::lamp(90) | crate::lamps::lamp(91)
@@ -1333,7 +1328,7 @@ mod tests {
         // The first button that names a node wins, rather than the last.
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(90, "cam 1"));
-        let midi = Midi::new(map, &crate::config::instrument()).unwrap();
+        let midi = Midi::new(map).unwrap();
         assert_eq!(
             midi.wanted(at(0, 0), Shown::default()),
             crate::lamps::lamp(S_ROW) | crate::lamps::lamp(M_ROW) | crate::lamps::lamp(R_ROW)
@@ -1389,11 +1384,7 @@ mod tests {
         // The one thing that says a mode is on to a performer looking at a
         // fullscreen display. Off the button's *action*, so a `midi.toml`
         // that moves a mode moves its lamp with it.
-        let midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::instrument()),
-            &crate::config::instrument(),
-        )
-        .unwrap();
+        let midi = Midi::new(Map::nano_kontrol2(&crate::config::instrument())).unwrap();
         let focus = at(0, 0);
         let base = midi.wanted(focus, Shown::default());
         assert_eq!(
@@ -1423,7 +1414,7 @@ mod tests {
         // rather than the button that number used to be.
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.retain(|b| b.cc != 46);
-        let midi = Midi::new(map, &crate::config::instrument()).unwrap();
+        let midi = Midi::new(map).unwrap();
         let base = midi.wanted(focus, Shown::default());
         assert_eq!(
             midi.wanted(
@@ -1442,11 +1433,7 @@ mod tests {
         // The panel is the only thing that says it: which of the two a
         // monitor is on is a question a hand asks before it presses, and a
         // latch that answers only by changing the picture answers too late.
-        let midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::instrument()),
-            &crate::config::instrument(),
-        )
-        .unwrap();
+        let midi = Midi::new(Map::nano_kontrol2(&crate::config::instrument())).unwrap();
         let focus = at(0, 0);
         let base = midi.wanted(focus, Shown::default());
         assert_eq!(
@@ -1463,7 +1450,7 @@ mod tests {
         // And a map that binds the select nowhere lights nothing extra.
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.retain(|b| b.cc != SELECT);
-        let midi = Midi::new(map, &crate::config::instrument()).unwrap();
+        let midi = Midi::new(map).unwrap();
         let base = midi.wanted(focus, Shown::default());
         assert_eq!(
             midi.wanted(
@@ -1723,7 +1710,7 @@ mod tests {
         {
             assert!(spot(cc).is_some(), "cc {cc} is nowhere on the panel");
         }
-        Midi::new(map, &params).unwrap();
+        Midi::new(map).unwrap();
     }
 
     #[test]
@@ -1773,7 +1760,7 @@ mod tests {
         // unconstructable rather than quietly inert.
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(90, "wiggle"));
-        assert!(Midi::new(map, &crate::config::instrument()).is_err());
+        assert!(Midi::new(map).is_err());
     }
 
     #[test]
@@ -1847,11 +1834,7 @@ mod tests {
 
     fn surface() -> (Midi, Params) {
         (
-            Midi::new(
-                Map::nano_kontrol2(&crate::config::instrument()),
-                &crate::config::instrument(),
-            )
-            .unwrap(),
+            Midi::new(Map::nano_kontrol2(&crate::config::instrument())).unwrap(),
             crate::config::instrument(),
         )
     }
@@ -1968,7 +1951,7 @@ mod tests {
         // a detent, and the fader is never more than half a frame in credit.
         let mut params = crate::config::instrument();
         params.delay = 4;
-        let mut midi = Midi::new(Map::nano_kontrol2(&params), &params).unwrap();
+        let mut midi = Midi::new(Map::nano_kontrol2(&params)).unwrap();
         let delay = |midi: &mut Midi, value: u8| match feed(midi, &params, &cc(18, value))[..] {
             [] => None,
             [Action::Turn(Knob::Delay, by)] => Some(by),
@@ -2000,14 +1983,11 @@ mod tests {
         // A `midi.toml` is written by hand, so a typo has to say what the
         // vocabulary is rather than only that this was not in it.
         let refuse = |name: &str| {
-            Midi::new(
-                Map {
-                    device: "x".into(),
-                    fader: Vec::new(),
-                    button: vec![button(90, name)],
-                },
-                &crate::config::instrument(),
-            )
+            Midi::new(Map {
+                device: "x".into(),
+                fader: Vec::new(),
+                button: vec![button(90, name)],
+            })
             .err()
             .expect("a map the instrument would refuse")
         };
@@ -2179,12 +2159,9 @@ mod tests {
         let dir = scratch("hotplug");
         let cards = dir.join("cards");
         std::fs::write(&cards, SAMPLE_CARDS).unwrap();
-        let mut midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::instrument()),
-            &crate::config::instrument(),
-        )
-        .unwrap()
-        .looking_in(dir.clone(), cards);
+        let mut midi = Midi::new(Map::nano_kontrol2(&crate::config::instrument()))
+            .unwrap()
+            .looking_in(dir.clone(), cards);
         let params = Params::default();
 
         // Nothing plugged in: no device node, and no waiting for one.
@@ -2257,11 +2234,7 @@ mod tests {
         // is the half of that claim which needs nothing but a descriptor, so
         // a machine with no display still fails a lamp that never leaves the
         // instrument.
-        let mut midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::instrument()),
-            &crate::config::instrument(),
-        )
-        .unwrap();
+        let mut midi = Midi::new(Map::nano_kontrol2(&crate::config::instrument())).unwrap();
         let mut surface = midi.plug_in_a_test_surface();
         surface.wire.handshake(0);
         // One row per kind: the first of each is S1, M1 and R1, which are

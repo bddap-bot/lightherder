@@ -32,9 +32,9 @@ struct Uniforms {
     // has one copy of it.
     luma: vec4<f32>,
     // As long as feedback::MAX_TAPS, which is every camera through every
-    // monitor plus the seed. A second spelling of that number, held to it by
-    // the `min_binding_size` the pipeline is built with: a mismatch is a
-    // validation error at startup rather than a wrong read.
+    // monitor plus the seed. A second spelling of that number: a static
+    // assertion beside it fails the build if the Rust side grows, since wgpu
+    // catches only the other direction.
     taps: array<Tap, 16>,
 };
 

@@ -1301,7 +1301,7 @@ fn a_structure_takes_half_of_the_other_through_the_cross_link() {
         return;
     };
     h.step_graph(&p);
-    p.rig.selects = [Select::Program; 4];
+    p.rig.selects = [Select::Program; lightherder::rig::SELECTS];
     p.rig.switchers = [0.25, 0.0, 0.0, 0.0];
     h.step_graph(&p);
 
@@ -1431,16 +1431,17 @@ fn an_overdriven_loop_settles_on_the_rail_instead_of_running_away() {
     let seeded = h.read().at(at[0], at[1]);
     assert!(seeded > 240.0, "the spot must start near white: {seeded}");
 
+    const GAIN: f32 = 1.8;
     let overdriven = Single {
         seed: 0.0,
-        loop_gain: [1.8; 3],
+        loop_gain: [GAIN; 3],
         ..lit
     };
     for _ in 0..20 {
         h.step(&overdriven);
     }
-    // A twentieth of what the bank holds, which is the rail if there is one
-    // and 1.8^20 of white if there is not.
+    // A twentieth of what the bank holds, which is the rail's fixed point if
+    // there is a rail and 1.8^20 of white if there is not.
     let readout = 0.05;
     h.step(&Single {
         seed: 0.0,
@@ -1448,11 +1449,18 @@ fn an_overdriven_loop_settles_on_the_rail_instead_of_running_away() {
         ..lit
     });
     let peak = h.read().at(at[0], at[1]);
-    let want = 255.0 * lightherder::feedback::HEADROOM * readout;
+    // Where the rail settles, not where it tops out: the arm above the knee
+    // is `h - h^2/4a`, an asymptote and not a clamp, so a loop of gain `g`
+    // comes to rest at the fixed point of `x = h - h^2/4gx`, which is
+    // `(h/2)(1 + sqrt(1 - 1/g))` — under `h` for any finite gain. Predicting
+    // `h` itself would pass a hard clamp too, and that is a different curve.
+    let rail = lightherder::feedback::HEADROOM;
+    let settled = 0.5 * rail * (1.0 + (1.0 - 1.0 / GAIN).sqrt());
+    let want = 255.0 * settled * readout;
     assert!(
-        (peak - want).abs() < 6.0,
+        (peak - want).abs() < 1.5,
         "the bank held {peak} of the rail's {want}: a loop that ran away reads 255, \
-         and one the rail cut short reads under"
+         one the rail clamped rather than bent reads over, and one it cut short reads under"
     );
     // And the dark room around it is still dark: a runaway that had become a
     // NaN would have carried the whole monitor with it.

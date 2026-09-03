@@ -183,7 +183,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     // where the log lands too.
     print!("{}", map.card());
     log::info!("surface: waiting for {}", map.device);
-    let midi = Midi::new(map, &params)?;
+    let midi = Midi::new(map)?;
     // Through the event loop's own display connection rather than a window's:
     // the adapter is chosen before there is a window, and wgpu forbids a
     // surface created against a different one later.
@@ -882,7 +882,7 @@ mod tests {
             initial: params.clone(),
             focus: Focus::default(),
             source,
-            midi: Midi::new(Map::nano_kontrol2(&params), &params).unwrap(),
+            midi: Midi::new(Map::nano_kontrol2(&params)).unwrap(),
             params,
             last_knob: None,
             resolution,
@@ -1315,7 +1315,8 @@ mod tests {
         assert!(!app.shown().program);
         assert_eq!(app.params.route(0, 0), 1.0, "direct is the monitor's own");
         assert_eq!(app.params.route(0, 1), 0.0);
-        // Only the focused one: the other structure-A monitor is its own.
+        // Only the focused one: structure A's other monitor is still on the
+        // program, so it is still showing camera B.
         assert_eq!(app.params.route(1, 1), 1.0, "monitor 2 went with it");
 
         app.act(Action::Select);
