@@ -247,10 +247,8 @@ fn identity_graph() -> Params {
     params
 }
 
-/// The frame rate of a router output, against the [`Rate::FULL`] a second
-/// the rig runs at. A slower output shows each frame it is handed until the
-/// next is due, so a camera on it sees a held picture. No frame is copied
-/// to hold one: the ring is read further back.
+/// The frame rate of a router output, as a fraction of the rig's own: the
+/// rig's clock is a pass, so the tempo scales these with everything else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rate {
     Full,
@@ -259,14 +257,10 @@ pub enum Rate {
 }
 
 impl Rate {
-    pub const FULL: u32 = 60;
+    pub const RIG_FPS: u32 = 60;
 
     /// Fastest to slowest: the order the knob turns through them.
     pub const ALL: [Rate; 3] = [Rate::Full, Rate::Half, Rate::Film];
-
-    /// The rate whose hold the ring is sized for, so a frame rate turns
-    /// without the bank growing under it.
-    pub const SLOWEST: Rate = Rate::Film;
 
     pub const fn fps(self) -> u32 {
         match self {
@@ -276,20 +270,12 @@ impl Rate {
         }
     }
 
-    /// How many frames old the frame this output shows is, `frame` frames
-    /// into a run: the distance back to the last frame it refreshed on. An
-    /// output refreshes where a count of `fps` a second crosses a whole
-    /// number, so 24 holds for three frames, then two, then three. The
-    /// pattern repeats every second, and a frame before the run began reads
-    /// as the pattern continued backwards.
-    pub fn hold(self, frame: i64) -> u32 {
-        let frame = frame.rem_euclid(Rate::FULL as i64) as u32;
-        let refreshes = frame * self.fps() / Rate::FULL;
-        frame - (refreshes * Rate::FULL).div_ceil(self.fps())
-    }
-
-    pub const fn longest_hold(self) -> u32 {
-        (Rate::FULL - 1) / self.fps()
+    /// Whether an output at this rate takes a fresh frame on pass `frame`
+    /// rather than holding the one it has: where a count of `fps` a second
+    /// crosses a whole number. The pattern repeats every second.
+    pub fn refreshes(self, frame: u64) -> bool {
+        let frame = (frame % Rate::RIG_FPS as u64) as u32;
+        frame == 0 || frame * self.fps() / Rate::RIG_FPS != (frame - 1) * self.fps() / Rate::RIG_FPS
     }
 }
 
@@ -625,11 +611,10 @@ impl<'de> Deserialize<'de> for Knob {
 
 impl Params {
     /// How many frames of every monitor the bank keeps as a ring: the one a
-    /// pass is drawing, the one every camera reads, one more per frame of
-    /// the graph's reach, and one more per frame the slowest router output
-    /// holds — bought at load, so turning a frame rate grows nothing.
+    /// pass is drawing, the one every camera reads, and one more per frame
+    /// of the graph's reach.
     pub fn history(&self) -> usize {
-        2 + self.delay as usize + Rate::SLOWEST.longest_hold() as usize
+        2 + self.delay as usize
     }
 
     /// How camera `c`'s view is magnified and turned, which is where the
@@ -676,7 +661,7 @@ impl Params {
             Knob::Contrast => mon.colour.contrast,
             Knob::Temperature => mon.colour.temperature,
             Knob::Sharpness => mon.sharpness,
-            Knob::FrameRate => Rate::ALL.iter().position(|r| *r == mon.rate).unwrap() as f32,
+            Knob::FrameRate => mon.rate as u32 as f32,
             Knob::Period => self.rig.periods[focus.switcher] as f32,
             Knob::Switcher => self.rig.switchers[focus.switcher],
         }
@@ -700,7 +685,17 @@ impl Params {
                     Knob::FrameRate => {
                         self.monitors[focus.monitor].rate = Rate::ALL[count as usize]
                     }
-                    _ => unreachable!("a knob with a whole limit reads a count"),
+                    Knob::Zoom
+                    | Knob::Rotation
+                    | Knob::Hue
+                    | Knob::Saturation
+                    | Knob::Brightness
+                    | Knob::Contrast
+                    | Knob::Temperature
+                    | Knob::Sharpness
+                    | Knob::Switcher => {
+                        unreachable!("a knob with a whole limit reads a count")
+                    }
                 }
             }
             Limit::Clamp(low, high) | Limit::Ratio(low, high) => {
@@ -809,29 +804,23 @@ mod tests {
     }
 
     #[test]
-    fn a_rate_holds_the_film_cadence_and_refreshes_its_fps_times_a_second() {
-        let holds = |rate: Rate| {
-            (0..Rate::FULL as i64)
-                .map(|f| rate.hold(f))
+    fn a_rate_refreshes_its_fps_times_a_second_in_the_film_cadence() {
+        let refreshes = |rate: Rate, second: u64| {
+            (0..Rate::RIG_FPS as u64)
+                .map(|f| rate.refreshes(second * Rate::RIG_FPS as u64 + f))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(holds(Rate::Film)[..10], [0, 1, 2, 0, 1, 0, 1, 2, 0, 1]);
-        assert_eq!(holds(Rate::Half)[..4], [0, 1, 0, 1]);
-        assert!(holds(Rate::Full).iter().all(|h| *h == 0));
+        let film = refreshes(Rate::Film, 0);
+        assert_eq!(
+            film[..10],
+            [true, false, false, true, false, true, false, false, true, false]
+        );
+        assert_eq!(refreshes(Rate::Half, 0)[..4], [true, false, true, false]);
+        assert!(refreshes(Rate::Full, 0).iter().all(|r| *r));
         for rate in Rate::ALL {
-            let holds = holds(rate);
-            let refreshes = holds.iter().filter(|h| **h == 0).count();
-            assert_eq!(refreshes as u32, rate.fps(), "{rate:?}");
-            for (f, pair) in holds.windows(2).enumerate() {
-                assert!(pair[1] == 0 || pair[1] == pair[0] + 1, "{rate:?} at {f}");
-            }
-            assert_eq!(
-                *holds.iter().max().unwrap(),
-                rate.longest_hold(),
-                "{rate:?}"
-            );
-            assert!(rate.longest_hold() <= Rate::SLOWEST.longest_hold());
-            assert_eq!(rate.hold(-1), rate.hold(Rate::FULL as i64 - 1), "{rate:?}");
+            let first = refreshes(rate, 0);
+            assert_eq!(first.iter().filter(|r| **r).count() as u32, rate.fps());
+            assert_eq!(first, refreshes(rate, 7), "{rate:?} in a later second");
         }
     }
 
@@ -1560,7 +1549,7 @@ mod tests {
             // A count has no field below zero to poison.
             let pasts = match knob {
                 Knob::Delay | Knob::Period => vec![high + 1.0],
-                Knob::FrameRate => vec![],
+                Knob::FrameRate => continue,
                 _ => vec![low - 1.0, high + 1.0],
             };
             for past in pasts {
@@ -1568,7 +1557,6 @@ mod tests {
                 match knob {
                     Knob::Delay => params.cameras[focus.camera].delay = past as u32,
                     Knob::Period => params.rig.periods[focus.switcher] = past as u32,
-                    Knob::FrameRate => unreachable!("a rate is one of three and cannot be past"),
                     _ => *params.knob_mut(knob, focus) = past,
                 }
                 let why = crate::config::validate(&params)

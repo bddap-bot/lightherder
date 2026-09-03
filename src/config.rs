@@ -213,8 +213,7 @@ mod tests {
             "camera 0's delay is 4; it runs 0 to 3"
         );
         // The ring the reach buys: the frame being drawn, the one every
-        // camera reads, one more per frame of reach, and the two the slowest
-        // output holds.
-        assert_eq!(with(4, 4).history(), 8);
+        // camera reads, and one more per frame of reach.
+        assert_eq!(with(4, 4).history(), 6);
     }
 }

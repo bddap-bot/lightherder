@@ -75,16 +75,15 @@ dead on it.
 
 The router output feeding each monitor has two settings of its own, and the
 monitor carries them: the **flip**, left for right and top for bottom, and the
-**frame rate** — 60, 30 or 24 a second against the 60 the rig runs at. A
-slower output shows each frame it is handed until the next is due, so a camera
-on that monitor sees a held picture: 30 holds every frame twice, and 24 holds
-for three frames, then two, then three, the cadence of film on a 60 Hz
-display. On the original, 24 "adds a stutter, and a slowing of the image to
-fractal effect". No frame is copied to hold one — the ring the delay units
-already read is read further back, and it is two frames deeper for it, bought
-at load so the knob turns without the bank growing. A camera's delay counts on
-from the hold rather than over it: the cable hands on what the camera saw that
-many frames ago, and what the monitor showed then is that frame's hold.
+**frame rate** — 60, 30 or 24 of the rig's 60. A slower output shows each
+frame it is handed until the next is due, so a camera on that monitor sees a
+held picture: 30 takes every other frame, and 24 holds for three frames, then
+two, then three, the cadence of film on a 60 Hz display. On the original, 24
+"adds a stutter, and a slowing of the image to fractal effect". A held
+monitor's pass is not drawn: its last frame is copied forward in the ring
+instead, so the ring holds what every monitor showed, the delay units read it
+as they always did, and the bank is no deeper for it. The rig's clock is a
+pass, so the tempo scales these rates along with everything else.
 
 **Those eight levers are the whole of the routing state.** A crossfade is a
 weighted sum, so the chain multiplies out into the matrix of camera and seed
@@ -210,7 +209,7 @@ dead.
 | fader 7 | the focused **switcher**'s period: passes between reversals, 0 to 60, and 0 is the mode off |
 | fader 8 | the focused **switcher**'s crossfade — the lever the piece is played on, nearest the hand that is already on the select rows |
 | rotaries 1–3 | the focused **camera**: where it stands on its shaft (zoom, rotation) and how late its cable is (delay) |
-| rotary 4 | the focused **monitor**'s router-output frame rate: 60 at rest, then 30, then 24 |
+| rotary 4 | the focused **monitor**'s router-output frame rate: 60 at rest, then 30, then 24 — the rig's own clock, not the tempo the transport buttons play |
 | rotaries 5–8 | dead — free for a `midi.toml`, and no hand throws one by accident |
 | S 1–3 | focus camera A, B, 3 |
 | S 4, S 5 | dead |
@@ -277,10 +276,11 @@ latching button plays on every second press.
 
 Stop puts the whole panel back to the instrument as it started. **Rewind puts
 back the one knob you were just turning**, to its *identity* — the value at
-which its stage does nothing to the light: zoom 1, no turn, no delay, the full
-frame rate, a neutral front panel and no sharpening. The crossfade is the one knob with no
-such value — it is not a stage the light passes through but where a sum
-stands — so its identity is the end of its travel it started at, In1 whole.
+which its stage does nothing to the light: zoom 1, no turn, no delay, the
+full frame rate, a neutral front panel and no sharpening. The crossfade is the
+one knob with no such value — it is not a stage the light passes through but
+where a sum stands — so its identity is the end of its travel it started at,
+In1 whole.
 The picture visibly loses the mix and the fader puts it straight back, which
 is the error that corrects itself.
 
@@ -442,8 +442,7 @@ the loop's own detail rather than an upscale of a smaller one.
 The delay units reach two frames — a camera's `delay` rotary is whole frames
 up to that, on top of the one pass every camera is behind by. The reach is
 bought in bank rather than in taps: a frame of it is another copy of all five
-monitors, the two frames a 24 a second output holds are two more, and the cap
-holds about four at 4K.
+monitors, and the cap holds about four at 4K.
 
 The `shell.nix` pins nixpkgs, puts the Vulkan loader and windowing libraries
 on `LD_LIBRARY_PATH`, which wgpu and winit open at run time, and carries the
@@ -531,9 +530,8 @@ and not the wire.
 
 The bank is what grows. At eight bytes a texel it holds every monitor twice —
 a pass reads every layer while writing one — plus once more per frame of the
-delay units' reach and per frame of the slowest output's hold, and the seed's
-own layer past the ring: 31 layers, which is 1.9 GiB at 4K against a 2 GiB
-cap. A ring
+delay units' reach and per pass of the longest hold, and the seed's own layer
+past the ring: 21 layers, which is 1.3 GiB at 4K against a 2 GiB cap. A ring
 deeper than the cap is refused at load with both halves of why in the message,
 since neither the resolution nor the depth alone is what went wrong.
 
@@ -611,9 +609,9 @@ past the whole ring, blanking the monitors leaves it alone, the switcher sums
 it with a camera on one monitor, it arrives whole however the cameras are set,
 and the luma key cuts the dark, passes the bright and blends the edge between.
 A camera with a frame delay hands on the frame it saw that many passes ago,
-byte for byte, a slow router output shows a frame for as long as its cadence
-holds it and a camera on it sees exactly that hold, delayed or not, and
-blanking empties the ring under a flash still in flight. On
+byte for byte, a slow router output holds a frame for as long as its cadence
+says and a camera on it sees exactly that hold, delayed or not, and blanking
+empties the ring under a flash still in flight. On
 a machine with no adapter each one prints the reason straight to the
 process's stderr and returns; libtest still counts them as passed.
 

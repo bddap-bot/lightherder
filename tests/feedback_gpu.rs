@@ -2291,34 +2291,33 @@ fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
 fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
     // A one-pass flash on monitor 3 on frame `flash`, with monitor 3's
     // router output at `rate`, and camera A on it drawing to monitor 1 with
-    // `delay` frames on its cable. Monitor 3 shows the flash for as long as
-    // its output holds that frame, and monitor 1 lights on exactly the
-    // passes on which the camera, that many frames late, sees it — the
-    // passes `Rate::hold` names, which the lib tests pin to the film
-    // cadence. Every lit frame on monitor 1 is byte for byte the full-rate
-    // undelayed one: a hold moves when a frame changes, never what it is.
-    // The flash lands on frames 0 and 3 so both lengths of the film cadence
-    // (three, then two) are crossed, and the delay reaches 3 so a held
-    // frame is read from past the ring's newest slabs.
-    let flashing = |delay: u32, rate: Rate| {
+    // `delay` frames on its cable. The frames an output refreshes on are
+    // written out here from the rig's cadence rather than read off `Rate`,
+    // so the two have to agree. Monitor 3 shows the flash from the frame it
+    // lands on until the output next refreshes — and never, if it lands on
+    // a frame the output is holding through. Monitor 1 lights on exactly
+    // the passes on which the camera, that many frames late, sees it, and
+    // every lit frame is byte for byte the full-rate undelayed one: a hold
+    // moves when a frame changes, never what it is. Flashes on 0, 3 and 4
+    // cross both lengths of the film cadence and one held-through frame.
+    let refreshes = |rate: Rate| -> Vec<u64> {
+        match rate {
+            Rate::Full => (0..24).collect(),
+            Rate::Half => (0..24).step_by(2).collect(),
+            Rate::Film => vec![0, 3, 5, 8, 10, 13, 15, 18, 20, 23],
+        }
+    };
+    let passes = 12u64;
+    let run = |flash: u64, delay: u32, rate: Rate| -> Option<Vec<(bool, f32, Vec<u8>)>> {
         let mut p = blank();
         p.cameras[0].delay = delay;
         p.cameras[0].look = one_hot(SEEDED);
         p.monitors[SEEDED].rate = rate;
         p.delay = 3;
-        p
-    };
-    let mut full: Vec<Vec<u8>> = Vec::new();
-    for flash in [0u64, 3] {
-        for delay in [0u32, 3] {
-            for rate in Rate::ALL {
-                let mut p = flashing(delay, rate);
-                let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
-                    return;
-                };
-                let held = |frame: u64| frame - rate.hold(frame as i64) as u64 == flash;
-                let last = flash + delay as u64 + Rate::SLOWEST.longest_hold() as u64 + 3;
-                for pass in 0..=last {
+        let mut h = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p)?;
+        Some(
+            (0..passes)
+                .map(|pass| {
                     if pass == flash {
                         seeding(&mut p);
                     } else {
@@ -2327,25 +2326,45 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
                     h.step_graph(&p);
                     h.present(Some(SEEDED));
                     let shows = h.read().brightest() > 200.0;
-                    assert_eq!(
-                        shows,
-                        held(pass),
-                        "{rate:?} flash {flash}: monitor 3 on pass {pass}"
-                    );
                     h.present(Some(0));
                     let img = h.read();
-                    let seen = pass as i64 - 1 - delay as i64;
-                    let lit = seen >= 0 && held(seen as u64);
+                    (shows, img.brightest(), img.pixels)
+                })
+                .collect(),
+        )
+    };
+    for flash in [0u64, 3, 4] {
+        let Some(reference) = run(flash, 0, Rate::Full) else {
+            return;
+        };
+        let reference = &reference[flash as usize + 1].2;
+        for delay in [0u32, 3] {
+            for rate in Rate::ALL {
+                let shown = |frame: u64| {
+                    refreshes(rate)
+                        .into_iter()
+                        .filter(|r| *r <= frame)
+                        .max()
+                        .unwrap()
+                };
+                let frames = run(flash, delay, rate).unwrap();
+                for (pass, (shows, brightest, pixels)) in frames.iter().enumerate() {
+                    let pass = pass as u64;
                     assert_eq!(
-                        img.brightest() > 200.0,
+                        *shows,
+                        shown(pass) == flash,
+                        "{rate:?} flash {flash}: monitor 3 on pass {pass}"
+                    );
+                    let seen = pass as i64 - 1 - delay as i64;
+                    let lit = seen >= 0 && shown(seen as u64) == flash;
+                    assert_eq!(
+                        *brightest > 200.0,
                         lit,
                         "{rate:?} flash {flash} delay {delay}: monitor 1 on pass {pass}"
                     );
-                    if rate == Rate::Full && delay == 0 && flash == 0 {
-                        full.push(img.pixels);
-                    } else if lit {
+                    if lit {
                         assert_eq!(
-                            img.pixels, full[1],
+                            pixels, reference,
                             "{rate:?} flash {flash} delay {delay}: pass {pass} is not the full-rate frame"
                         );
                     }

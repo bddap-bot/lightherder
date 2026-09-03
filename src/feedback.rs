@@ -18,7 +18,7 @@
 use bytemuck::Zeroable;
 
 use crate::affine::{flip_uv, sample_transform, Framing};
-use crate::params::{Camera, Key, Params, Rate};
+use crate::params::{Camera, Key, Params};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
@@ -148,22 +148,11 @@ impl Shape {
         (newest + self.history - back) % self.history
     }
 
-    /// The slab `camera` reads of a monitor whose output runs at `rate`,
-    /// on the pass that draws frame `frame`: the ring moves on one slab a
-    /// pass and so does the look-back, so a delayed cable hands on a frame
-    /// that many passes old and a held output the frame it last refreshed
-    /// on, and no copy is kept of either. What the cable hands on now is
-    /// what the camera saw `delay` frames ago, and what the monitor showed
-    /// then is that frame's hold.
-    fn read(self, newest: usize, frame: u64, camera: &Camera, rate: Rate) -> usize {
-        let seen = frame as i64 - 1 - camera.delay as i64;
-        self.back(newest, camera.delay + rate.hold(seen))
-    }
-
-    /// The slab monitor `m` shows once frame `frame` is drawn into slab
-    /// `newest`: the newest, or an older one its output is still holding.
-    fn shown(self, newest: usize, frame: u64, rate: Rate) -> usize {
-        self.back(newest, rate.hold(frame as i64))
+    /// The slab `camera` reads: the ring moves on one slab a pass and so
+    /// does the look-back, so a delayed cable hands on a frame that many
+    /// passes old without a copy being kept to hold it.
+    fn read(self, newest: usize, camera: &Camera) -> usize {
+        self.back(newest, camera.delay)
     }
 }
 
@@ -173,14 +162,12 @@ impl Shape {
 ///
 /// A camera fans out over its beam splitter, since a camera watching two
 /// monitors is two taps. The seed is exactly one tap and carries no camera.
-/// A camera's taps read the ring as far back as its delay and the source's
-/// hold; the seed's reads the layer [`Feedback::write_seed`] wrote its
-/// frame to.
+/// A camera's taps read the ring as far back as its delay; the seed's reads
+/// the layer [`Feedback::write_seed`] wrote its frame to.
 pub(crate) fn taps_of(
     params: &Params,
     m: usize,
     newest: usize,
-    frame: u64,
 ) -> impl Iterator<Item = (Through, usize, f32)> + '_ {
     let shape = Shape::of(params);
     let feed = params.rig.feed(m);
@@ -196,8 +183,7 @@ pub(crate) fn taps_of(
                 .enumerate()
                 .filter(|(_, look)| **look > 0.0)
                 .map(move |(src, look)| {
-                    let slab = shape.read(newest, frame, camera, params.monitors[src].rate);
-                    let layer = shape.monitor(slab, src);
+                    let layer = shape.monitor(shape.read(newest, camera), src);
                     (Through::Camera(c), layer, feed.cameras[c] * look)
                 })
         });
@@ -244,7 +230,7 @@ struct Uniforms {
     chroma: [[f32; 4]; 3],
     /// x: brightness. y: contrast. zw: padding.
     levels: [f32; 4],
-    /// x: tap count. y: the layer this monitor shows, for the present pass.
+    /// x: tap count. y: this monitor's own layer, for the present pass.
     /// zw: where the bank splits round the slab this pass writes — the
     /// first layer past the lower view, and the first layer of the upper
     /// one.
@@ -280,10 +266,11 @@ pub struct Feedback {
     writing: Vec<wgpu::BindGroup>,
     /// The whole bank, for the passes that write none of it.
     whole: wgpu::BindGroup,
-    /// The ring slab holding the newest frame — the one an undelayed camera
-    /// on a full-rate output reads.
+    /// The ring slab holding the newest frame — the one the present pass
+    /// shows and an undelayed camera reads.
     newest: usize,
-    /// Frames drawn so far: the clock the router outputs hold against.
+    /// Passes drawn so far: the clock a router output's
+    /// [`crate::params::Rate`] runs on.
     frame: u64,
     uniforms: wgpu::Buffer,
     /// One frame in the bank's format, reused by every
@@ -322,8 +309,10 @@ impl Feedback {
             format: MONITOR_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                // What an input's frames are written through.
-                | wgpu::TextureUsages::COPY_DST,
+                // What an input's frames are written through, and what a
+                // held frame is carried forward in the ring by.
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         // A run of layers of the bank, bound as an array even when it is one
@@ -646,7 +635,7 @@ impl Feedback {
             let mirror = flip_uv(monitor.flip);
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
-            for (through, src, w) in taps_of(params, m, self.newest, self.frame) {
+            for (through, src, w) in taps_of(params, m, self.newest) {
                 // There is no camera between the switcher and the seed, so
                 // every stage a camera would have takes its identity and the
                 // layer arrives as itself. Its key is the switcher's own,
@@ -676,14 +665,7 @@ impl Feedback {
                     HEADROOM,
                     0.0,
                 ],
-                info: [
-                    count as f32,
-                    self.shape
-                        .monitor(self.shape.shown(next, self.frame, monitor.rate), m)
-                        as f32,
-                    split as f32,
-                    above as f32,
-                ],
+                info: [count as f32, (split + m) as f32, split as f32, above as f32],
                 analog: [monitor.sharpness, 0.0, 0.0, 0.0],
                 luma: {
                     let l = crate::params::luma_row();
@@ -702,6 +684,31 @@ impl Feedback {
             label: Some("step"),
         });
         for (m, view) in self.layer_views[next].iter().enumerate() {
+            // A router output holding its frame: the monitor's face does not
+            // change, so its last frame is carried forward in the ring as it
+            // is — a redraw would put it through the front panel again.
+            if !params.monitors[m].rate.refreshes(self.frame) {
+                let layer = |slab: usize| wgpu::TexelCopyTextureInfo {
+                    texture: &self.ring,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: self.shape.monitor(slab, m) as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                };
+                encoder.copy_texture_to_texture(
+                    layer(self.newest),
+                    layer(next),
+                    wgpu::Extent3d {
+                        width: self.width,
+                        height: self.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                continue;
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("camera"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -779,20 +786,19 @@ mod tests {
         // Worked out from the format rather than from `bank_bytes`: one
         // 1920x1080 layer of Rgba16Float is 8 bytes a texel, and the rig is
         // five monitors two frames deep — a pass reads every layer while
-        // writing one — plus two frames the slowest output holds, plus one
-        // layer for the seed.
+        // writing one — plus one layer for the seed.
         let layers = |p: &Params| Shape::of(p).layers();
         let mut rig = crate::config::instrument();
         rig.delay = 0;
-        assert_eq!(rig.history(), 4);
-        assert_eq!(layers(&rig), 4 * 5 + 1);
-        assert_eq!(bank_bytes(&rig, (1920, 1080)), 21 * 1920 * 1080 * 8);
+        assert_eq!(rig.history(), 2);
+        assert_eq!(layers(&rig), 2 * 5 + 1);
+        assert_eq!(bank_bytes(&rig, (1920, 1080)), 11 * 1920 * 1080 * 8);
         // A frame of delay is another slab of every monitor in the ring, and
         // an input is one layer past the ring, delayed or not.
         rig.delay = 3;
-        assert_eq!(rig.history(), 7);
-        assert_eq!(layers(&rig), 7 * 5 + 1);
-        assert_eq!(bank_bytes(&rig, (1920, 1080)), 36 * 1920 * 1080 * 8);
+        assert_eq!(rig.history(), 5);
+        assert_eq!(layers(&rig), 5 * 5 + 1);
+        assert_eq!(bank_bytes(&rig, (1920, 1080)), 26 * 1920 * 1080 * 8);
     }
 
     #[test]
@@ -806,21 +812,21 @@ mod tests {
         // the graph nor the resolution alone is what went wrong.
         let mut most = rig.clone();
         most.delay = crate::params::Params::MAX_DELAY;
-        assert_eq!(Shape::of(&most).layers(), 171);
+        assert_eq!(Shape::of(&most).layers(), 161);
         let why = bank_fits(&most, (1920, 1080)).unwrap_err();
         assert!(
-            why.contains("171 bank layers") && why.contains("1920x1080"),
+            why.contains("161 bank layers") && why.contains("1920x1080"),
             "{why}"
         );
         // Eight frames of reach fit at 1080.
         most.delay = 8;
-        assert_eq!(Shape::of(&most).layers(), 61);
+        assert_eq!(Shape::of(&most).layers(), 51);
         assert!(bank_fits(&most, (1920, 1080)).is_ok());
         // At 4K the same ring is past the cap by bytes, and the refusal says
         // how deep the ring is, which is what the delay can change.
         let why = bank_fits(&most, (3840, 2160)).unwrap_err();
         assert!(
-            why.contains("61 bank layers (12 frames of 5 monitors, and the seed)")
+            why.contains("51 bank layers (10 frames of 5 monitors, and the seed)")
                 && why.contains("2.0 GiB"),
             "{why}"
         );
