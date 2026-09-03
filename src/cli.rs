@@ -176,8 +176,8 @@ fn resolution(value: &str) -> Result<(u32, u32), String> {
 /// Passes a second. Refused rather than clamped when it is outside the range
 /// the instrument plays at: a performer who typed 6000 meant something, and
 /// silently playing 240 instead would answer neither the number typed nor the
-/// mistake behind it.
-fn rate(value: &str) -> Result<f32, String> {
+/// mistake behind it. The page's `?rate=` is judged by this same rule.
+pub(crate) fn rate(value: &str) -> Result<f32, String> {
     use crate::tempo::{MAX_RATE, MIN_RATE};
     let hz: f32 = value
         .parse()

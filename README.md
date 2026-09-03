@@ -783,9 +783,11 @@ the first of two buttons bound to one node is the one that lights.
 
 The same instrument, on WebGPU, at
 <https://bddap-bot.github.io/lightherder/> — the graph is chosen the way a
-page takes an argument, `?preset=insanity`. What is not there is what a
-browser has no way to give it: the ALSA control surface — so a tab plays the
-graph it was handed and nothing turns a knob. An input it does have: where a
+page takes an argument, `?preset=insanity`, and so is the tempo, `?rate=30`
+— the same range `--rate` takes, refused rather than clamped outside it. What
+is not there is what a browser has no way to give it: the ALSA control
+surface — so a tab plays the graph it was handed and nothing turns a knob. An
+input it does have: where a
 terminal runs ffmpeg, a page plays a `<video>` of its own camera — asked for
 with `getUserMedia`, whatever device the graph names — and reads it back
 through a canvas into the same bytes, so `?preset=webcam` puts the visitor on

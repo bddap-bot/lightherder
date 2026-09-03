@@ -4,8 +4,8 @@
 //! and the knobs are the same code the deployed instrument runs — so this is
 //! only the three things a page supplies that a terminal does not: an entry
 //! point, somewhere for the log to go, and the canvas winit draws on.
-//! Which graph to play arrives the way a web page takes an argument, in the
-//! query string: `?preset=insanity`.
+//! Which graph to play, and how fast, arrive the way a web page takes an
+//! argument, in the query string: `?preset=insanity&rate=30`.
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -46,11 +46,25 @@ pub(crate) fn document() -> Result<web_sys::Document, String> {
 /// resolves against the same preset names the command line takes. A graph
 /// file is not reachable from here: there is no disk to read one off.
 fn requested_preset() -> String {
+    query()
+        .and_then(|params| params.get("preset"))
+        .unwrap_or_else(|| crate::config::PRESETS[0].0.to_string())
+}
+
+/// `?rate=…` if the page was asked for one, judged by the same rule as
+/// `--rate`: outside the range the instrument plays at is a refusal, not a
+/// clamp.
+fn requested_rate() -> Result<Option<f32>, String> {
+    match query().and_then(|params| params.get("rate")) {
+        Some(value) => crate::cli::rate(&value).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn query() -> Option<web_sys::UrlSearchParams> {
     web_sys::window()
         .and_then(|w| w.location().search().ok())
         .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
-        .and_then(|params| params.get("preset"))
-        .unwrap_or_else(|| crate::config::PRESETS[0].0.to_string())
 }
 
 /// Write into an element of the page, if it is there.
@@ -72,15 +86,22 @@ pub(crate) fn complain(why: &str) {
     fill("why", why);
 }
 
-/// The corner legend: the presets as the query string spells them, which is
-/// the whole of what a browser can be told here. No control surface — there
-/// is no ALSA in a page — and no keys, so the instrument plays itself.
+/// The corner legend: the presets and the tempo as the query string spells
+/// them, which is the whole of what a browser can be told here. No control
+/// surface — there is no ALSA in a page — and no keys, so the instrument
+/// plays itself.
 fn legend() -> String {
     let names: Vec<&str> = crate::config::PRESETS
         .iter()
         .map(|(name, _)| *name)
         .collect();
-    format!("?preset={}\n", names.join(" | "))
+    format!(
+        "?preset={}\n?rate={}  ({} to {})\n",
+        names.join(" | "),
+        crate::tempo::DEFAULT_RATE,
+        crate::tempo::MIN_RATE,
+        crate::tempo::MAX_RATE
+    )
 }
 
 /// Called by the page as soon as the module is instantiated.
@@ -95,13 +116,20 @@ pub fn start() {
             Ok(params) => params,
             Err(why) => return complain(&why),
         };
+        let rate = match requested_rate() {
+            Ok(rate) => rate,
+            Err(why) => return complain(&why),
+        };
         // Windowed: the canvas already covers the viewport, and asking the
         // browser for real fullscreen without a click is refused anyway.
-        let cli = crate::cli::Cli {
+        let mut cli = crate::cli::Cli {
             graph: preset,
             fullscreen: false,
             ..crate::cli::Cli::default()
         };
+        if let Some(rate) = rate {
+            cli.rate = rate;
+        }
         if let Err(why) = crate::app::run(params, &cli).await {
             complain(&format!("{why}"));
         }
