@@ -1898,14 +1898,14 @@ mod tests {
 
     #[test]
     fn resetting_a_knob_lands_it_on_its_identity_and_leaves_the_rest() {
-        // Through `Params::set`, which is what the reset actually calls: a
-        // phase wraps, the rigid gain splits into its three channels, and
-        // every one of them has to arrive.
+        // Channels apart, so a reset of one of them moves the mean and the
+        // rigid pair's exemption below is exercised rather than vacuous.
         let focus = Focus::default();
         for knob in Knob::ALL {
             let mut params = p();
+            params.cameras[0].gain = [1.2, 0.6, 0.6];
             let before = params.clone();
-            params.set(knob, knob.identity(), focus);
+            params.reset(knob, focus);
             assert!(
                 (params.knob(knob, focus) - knob.identity()).abs() < 1e-6,
                 "{} landed on {}",
@@ -1931,18 +1931,6 @@ mod tests {
                     other.name()
                 );
             }
-        }
-        // The colour offsets the rigid gain slides survive it: the mean is
-        // 1.0 and the channels are still as far apart as they were.
-        let mut params = p();
-        let before = params.cameras[0].gain;
-        params.set(Knob::Gain, Knob::Gain.identity(), focus);
-        let after = params.cameras[0].gain;
-        for channel in 0..3 {
-            assert!(
-                ((after[channel] - after[0]) - (before[channel] - before[0])).abs() < 1e-6,
-                "the offsets moved: {before:?} -> {after:?}"
-            );
         }
     }
 

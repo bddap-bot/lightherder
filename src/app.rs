@@ -1140,6 +1140,35 @@ mod tests {
             surface.wire.panel_becomes(lamp(33) | lamp(48)),
             "the cut button stayed lit after the finger left"
         );
+        // Help and solo are the two lamps whose state lives in the instrument
+        // rather than in the surface; this frame is where it crosses over.
+        surface.press(46);
+        surface.release(46);
+        app.surface_frame();
+        assert!(app.overlay_shown, "the press was never played");
+        assert!(
+            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(46)),
+            "the help lamp never lit for the overlay"
+        );
+        surface.press(44);
+        surface.release(44);
+        app.surface_frame();
+        assert!(app.solo, "the press was never played");
+        assert!(
+            surface
+                .wire
+                .panel_becomes(lamp(33) | lamp(48) | lamp(46) | lamp(44)),
+            "the solo lamp never lit"
+        );
+        surface.press(46);
+        surface.release(46);
+        surface.press(44);
+        surface.release(44);
+        app.surface_frame();
+        assert!(
+            surface.wire.panel_becomes(lamp(33) | lamp(48)),
+            "a latch let go kept its lamp"
+        );
     }
 
     fn turn(app: &mut App, knob: Knob, delta: f32) {
