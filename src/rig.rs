@@ -15,7 +15,7 @@
 //! held here.
 
 use crate::affine::Framing;
-use crate::input::{Input, Pattern};
+use crate::input::Input;
 use crate::params::{Camera, Character, Key, Monitor, Params, Plug};
 
 /// In [`Params::cameras`] order. A and B are on the rotating, sliding shafts,
@@ -48,6 +48,17 @@ impl Screen {
         Screen::Rotating,
     ];
 }
+
+/// The luma key the seed meets on its way into the switcher: passing from
+/// mid-grey up and cutting to nothing a little below it, which is a lit
+/// subject against an unlit room — what a camera pointed at a couch faces.
+/// A fixed character of the rig, not a control: the board has no key.
+const SEED_KEY: Key = Key {
+    threshold: 0.35,
+    softness: 0.08,
+    hue: 0.0,
+    tolerance: Key::TOLERANT,
+};
 
 /// The four M/Es, each a crossfade from its In1 to its In2. C and D are the
 /// chain that brings the rotating monitor and the seed into structure B.
@@ -164,13 +175,12 @@ impl Rig {
         }
     }
 
-    /// The rig at this setting, as the graph the instrument runs. The
-    /// framings and gains are `crossed`'s idiom — every camera pulls back
-    /// a little and turns the same way at its own rate, so the structures
-    /// stay distinct and no round trip cancels its own rotation — with the
-    /// third camera turning fastest, since its monitor turns on a shaft. The
-    /// seed is the bars, standing in for the media player; the monitors are
-    /// dark, because on this rig the seed input is what sparks the loops.
+    /// The rig at this setting, as the graph the instrument runs. Every
+    /// camera pulls back a little and turns the same way at its own rate, so
+    /// the structures stay distinct and no round trip cancels its own
+    /// rotation, with the third turning fastest since its monitor turns on a
+    /// shaft. The seed is the one physical camera, and the monitors are dark:
+    /// on this rig the seed input is what sparks the loops.
     pub fn params(&self) -> Params {
         let camera = |cam: Cam, rotation: f32, gain: [f32; 3]| Camera {
             framing: Framing {
@@ -194,7 +204,11 @@ impl Rig {
             ],
             monitors: vec![Monitor::default(); Screen::ALL.len()],
             inputs: vec![Plug {
-                source: Input::Pattern(Pattern::Bars),
+                source: Input::Capture {
+                    format: "v4l2".into(),
+                    device: "/dev/video0".into(),
+                },
+                key: SEED_KEY,
                 into: feeds.iter().map(|feed| feed.seed).collect(),
             }],
             routing: feeds.iter().map(|feed| feed.cameras.to_vec()).collect(),
@@ -344,6 +358,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_seed_is_the_one_physical_camera_keyed_on_its_way_in() {
+        let params = Rig::PERFORMANCE.params();
+        let [plug] = &params.inputs[..] else {
+            panic!("the rig has one seed, not {}", params.inputs.len())
+        };
+        assert_eq!(
+            plug.source,
+            Input::Capture {
+                format: "v4l2".into(),
+                device: "/dev/video0".into(),
+            }
+        );
+        assert_eq!(plug.key, SEED_KEY);
+        assert!(plug.key.threshold > 0.0 && plug.key.softness > 0.0);
+        assert!(params.cameras.iter().all(|c| c.key == Key::OFF));
     }
 
     #[test]

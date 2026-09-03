@@ -2,11 +2,9 @@
 //! disk. A preset is nothing but a [`Params`] value; a config file is the
 //! same struct in TOML, so anything a preset can express a file can too.
 
-use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
-use crate::input::{Input, Pattern};
 use crate::midi::ROW_BUTTONS;
-use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Node, Params, Plug, Seed, Side};
+use crate::params::{Camera, Focus, Knob, Node, Params, Seed, Side};
 use crate::rig::Rig;
 
 /// More monitors than this and the uniform buffer, the present grid and the
@@ -41,6 +39,13 @@ const _: () = assert!(
 /// The widest graph the board reaches, which is the map a test about the
 /// *surface* rather than about any rig means by "the factory layout".
 #[cfg(test)]
+use crate::affine::Framing;
+#[cfg(test)]
+use crate::input::{Input, Pattern};
+#[cfg(test)]
+use crate::params::{Character, Key, Monitor, Plug};
+
+#[cfg(test)]
 pub(crate) fn widest() -> Params {
     shaped(MAX_CAMERAS, MAX_MONITORS, MAX_INPUTS)
 }
@@ -66,6 +71,7 @@ pub(crate) fn shaped(cameras: usize, monitors: usize, inputs: usize) -> Params {
         inputs: vec![
             Plug {
                 source: Input::Pattern(Pattern::Bars),
+                key: Key::OFF,
                 into: vec![0.0; monitors],
             };
             inputs
@@ -80,7 +86,8 @@ pub(crate) fn shaped(cameras: usize, monitors: usize, inputs: usize) -> Params {
 /// little and turns a little each pass, at a gain just under unity spread
 /// across the channels, so the seed leaves a spiral that cools from white to
 /// blue as it winds in.
-pub fn single() -> Params {
+#[cfg(test)]
+pub(crate) fn single() -> Params {
     Params {
         cameras: vec![Camera {
             framing: Framing {
@@ -112,7 +119,8 @@ pub fn single() -> Params {
 /// Everything else is [`single`]'s, so the difference between the two presets
 /// is the analog character and nothing else — the chroma the bleed smears is
 /// the same age-to-hue gradient the per-channel loop gain already makes.
-pub fn analog() -> Params {
+#[cfg(test)]
+pub(crate) fn analog() -> Params {
     let mut params = single();
     params.cameras[0].character = Character {
         bloom: 0.35,
@@ -131,7 +139,8 @@ pub fn analog() -> Params {
 /// the same way on purpose: opposite spins would cancel over a round trip,
 /// and a trail that never winds away from the seed piles up on it until the
 /// display clips. The unequal rates keep the two structures distinct.
-pub fn crossed() -> Params {
+#[cfg(test)]
+pub(crate) fn crossed() -> Params {
     let camera = |looks_at: usize, rotation: f32, gain: [f32; 3]| {
         let mut look = vec![0.25; 2];
         look[looks_at] = 0.75;
@@ -176,7 +185,8 @@ pub fn crossed() -> Params {
 /// contributions to any one monitor never line up. All the spins go the same
 /// way for the same reason as [`crossed`]: mixed-sign rotations hand the mix
 /// closed paths that never wind away from the seed, and those clip.
-pub fn insanity() -> Params {
+#[cfg(test)]
+pub(crate) fn insanity() -> Params {
     const N: usize = 4;
     let cameras = (0..N)
         .map(|c| {
@@ -223,7 +233,8 @@ pub fn insanity() -> Params {
 /// dark, so every photon here came in from outside, and the gain is flat
 /// across the channels because an input supplies its own colour — there is
 /// nothing for a per-channel decay to add.
-pub fn external() -> Params {
+#[cfg(test)]
+pub(crate) fn external() -> Params {
     Params {
         cameras: vec![Camera {
             framing: Framing {
@@ -244,6 +255,7 @@ pub fn external() -> Params {
         // that happens to it afterwards is the loop's doing.
         inputs: vec![Plug {
             source: Input::Pattern(Pattern::Bars),
+            key: Key::OFF,
             into: vec![0.014],
         }],
         // The loop camera at a full send.
@@ -272,7 +284,8 @@ pub fn external() -> Params {
 /// the frame a monitor held rather than the one it is being handed. A
 /// sixtieth of a second behind a live subject is under the hand's own
 /// latency, and the loop's own delay is a whole pass anyway.
-pub fn webcam() -> Params {
+#[cfg(test)]
+pub(crate) fn webcam() -> Params {
     let window = 0;
     let loop_monitor = 1;
     let looking_at_the_room = Camera {
@@ -304,6 +317,8 @@ pub fn webcam() -> Params {
                 format: "v4l2".into(),
                 device: "/dev/video0".into(),
             },
+
+            key: Key::OFF,
             into: vec![1.0, 0.0],
         }],
         // The keyed camera and the loop camera both onto the loop's monitor,
@@ -314,55 +329,19 @@ pub fn webcam() -> Params {
     }
 }
 
-/// Blair's 4K rig itself, at its performance setting — see [`Rig`].
-pub fn rig() -> Params {
+/// The instrument: Blair's rig at its performance setting — see [`Rig`].
+/// There is one, and nothing chooses it.
+pub fn instrument() -> Params {
     Rig::PERFORMANCE.params()
 }
 
 /// A weight per monitor with one of them full — a camera aimed straight at
 /// the one it watches.
+#[cfg(test)]
 fn one_hot(monitors: usize, at: usize) -> Vec<f32> {
     let mut look = vec![0.0; monitors];
     look[at] = 1.0;
     look
-}
-
-/// A preset: the name the command line knows it by, and the graph it builds.
-pub type Preset = (&'static str, fn() -> Params);
-
-/// The presets, by the names the command line and the error messages use.
-pub const PRESETS: [Preset; 7] = [
-    ("single", single as fn() -> Params),
-    ("analog", analog),
-    ("crossed", crossed),
-    ("insanity", insanity),
-    ("external", external),
-    ("webcam", webcam),
-    ("rig", rig),
-];
-
-/// `arg` is a preset name or a path to a TOML file of [`Params`]. Either way
-/// the result is validated, so the GPU side can trust its shape.
-pub fn load(arg: &str) -> Result<Params, String> {
-    match PRESETS.iter().find(|(name, _)| *name == arg) {
-        Some((_, build)) => {
-            let params = build();
-            validate(&params)?;
-            Ok(params)
-        }
-        None => read(std::path::Path::new(arg)).map_err(|e| {
-            let names: Vec<&str> = PRESETS.iter().map(|(name, _)| *name).collect();
-            format!("{e} (presets: {})", names.join(", "))
-        }),
-    }
-}
-
-fn read(path: &std::path::Path) -> Result<Params, String> {
-    let shown = path.display();
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
-    let params: Params = toml::from_str(&text).map_err(|e| format!("{shown}: {e}"))?;
-    validate(&params).map_err(|e| format!("{shown}: {e}"))?;
-    Ok(params)
 }
 
 /// Every focus at which a knob on `side` names a value of its own.
@@ -597,27 +576,29 @@ pub fn validate(params: &Params) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::Colour;
 
-    /// Off [`PRESETS`] rather than listed again, so a preset added without a
-    /// line here cannot slip past every test in this file.
-    fn presets() -> Vec<(&'static str, Params)> {
-        PRESETS
-            .iter()
-            .map(|(name, build)| (*name, build()))
-            .collect()
+    /// The instrument, and the fixtures the surface tests are built on.
+    fn graphs() -> Vec<(&'static str, Params)> {
+        vec![
+            ("instrument", instrument()),
+            ("single", single()),
+            ("analog", analog()),
+            ("crossed", crossed()),
+            ("insanity", insanity()),
+            ("external", external()),
+            ("webcam", webcam()),
+        ]
     }
 
     #[test]
-    fn every_preset_validates_and_loads_by_name() {
-        for (name, params) in presets() {
+    fn every_graph_validates() {
+        for (name, params) in graphs() {
             validate(&params).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(load(name).unwrap(), params);
         }
     }
 
     #[test]
-    fn every_preset_is_contracting() {
+    fn every_graph_is_contracting() {
         // The light monitor `i` shows next frame is at most `sum` times the
         // brightest thing on any monitor this frame, so `sum < 1` means every
         // preset settles instead of blooming to white. Near 1, or the trail
@@ -629,7 +610,7 @@ mod tests {
         // same reason. Reading the loop's own gain is naming one of the two
         // halves of the switcher, which is the whole of the argument for
         // their being two.
-        for (name, params) in presets() {
+        for (name, params) in graphs() {
             // A monitor no camera is routed to is a window and not a loop:
             // its light arrives from outside every frame at the size it
             // arrived last frame. So a camera watching one is carrying light
@@ -695,44 +676,10 @@ mod tests {
     }
 
     #[test]
-    fn a_seed_is_written_in_a_file_the_way_the_readme_spells_it() {
-        // The union's two shapes as a hand writes them, which is the one
-        // thing a serde round trip of the crate's own output cannot check.
-        let params: Params = toml::from_str(
-            "cameras = [{ look = [1.0] }]\n\
-             monitors = [{ seed = { white_blob = 0.1 } }, { seed = \"dark\" }]\n\
-             routing = [[1.0], [1.0]]\n",
-        )
-        .unwrap();
-        assert_eq!(params.monitors[0].seed, Seed::WhiteBlob(0.1));
-        assert_eq!(params.monitors[1].seed, Seed::Dark);
-    }
-
-    #[test]
-    fn a_terse_config_file_gets_the_documented_defaults() {
-        // The smallest useful file: one static camera, one silent monitor.
-        // Framing, gain and colour all fall to their identity defaults.
-        let params: Params = toml::from_str(
-            "cameras = [{ look = [1.0] }]\n\
-             monitors = [{}]\n\
-             routing = [[1.0]]\n",
-        )
-        .unwrap();
-        validate(&params).unwrap();
-        assert_eq!(params.cameras[0].framing, Framing::identity());
-        assert_eq!(params.cameras[0].gain, [1.0; 3]);
-        assert_eq!(params.cameras[0].character, Character::CLEAN);
-        assert_eq!(params.monitors[0].colour, Colour::NEUTRAL);
-        assert_eq!(params.monitors[0].seed, Seed::Dark);
-        assert_eq!(params.monitors[0].headroom, Monitor::KNEE_AT_WHITE);
-        assert_eq!(params.monitors[0].period, 0);
-    }
-
-    #[test]
-    fn only_the_analog_preset_has_any_character() {
+    fn only_the_analog_fixture_has_any_character() {
         // The stage is additive: it must not have quietly changed the look of
         // the presets that were here before it.
-        for (name, params) in presets() {
+        for (name, params) in graphs() {
             let clean = params
                 .cameras
                 .iter()
@@ -766,8 +713,6 @@ mod tests {
         let mut empty = crossed();
         empty.monitors.clear();
         assert!(validate(&empty).is_err());
-
-        assert!(load("no-such-preset").is_err());
     }
 
     #[test]
@@ -799,47 +744,6 @@ mod tests {
             poison(&mut params);
             assert!(validate(&params).is_err(), "poison {i} passed");
         }
-    }
-
-    /// `external` with its input list replaced by one of every kind, each
-    /// sent nowhere: the kinds are what its callers read, not the levels.
-    fn one_of_every_input() -> Params {
-        let mut params = external();
-        params.inputs = [
-            Input::Pattern(Pattern::Bars),
-            Input::File("clip.mp4".into()),
-            Input::Capture {
-                format: "v4l2".into(),
-                device: "/dev/video0".into(),
-            },
-        ]
-        .map(|source| Plug {
-            source,
-            into: vec![0.0],
-        })
-        .to_vec();
-        params
-    }
-
-    #[test]
-    fn every_kind_of_input_spells_itself_the_way_it_is_documented() {
-        // The literal keys, not a round trip: a round trip agrees with itself
-        // whatever serde is told to call these, and every config file and
-        // every line of the README that mentions an input depends on the
-        // names rather than on the agreement.
-        let params: Params = toml::from_str(
-            "cameras = [{ look = [1.0] }]\n\
-             monitors = [{}]\n\
-             routing = [[1.0]]\n\
-             inputs = [\n\
-             \x20 { source = { pattern = \"bars\" }, into = [0.0] },\n\
-             \x20 { source = { file = \"clip.mp4\" }, into = [0.0] },\n\
-             \x20 { source = { capture = { format = \"v4l2\", device = \"/dev/video0\" } }, into = [0.0] },\n\
-             ]\n",
-        )
-        .unwrap();
-        validate(&params).unwrap();
-        assert_eq!(params.inputs, one_of_every_input().inputs);
     }
 
     #[test]
@@ -950,6 +854,8 @@ mod tests {
                     format: "v4l2".into(),
                     device: "/dev/video0".into(),
                 },
+
+                key: Key::OFF,
                 into: vec![1.0, 0.0],
             }]
         );
@@ -978,7 +884,7 @@ mod tests {
         assert!(p.monitors.iter().all(|m| m.seed == Seed::Dark));
         // And it is the only preset that keys anything, so the stage is
         // additive — every other graph hands its light on whole.
-        for (name, params) in presets() {
+        for (name, params) in graphs() {
             let keyed = params.cameras.iter().any(|c| c.key != Key::OFF);
             assert_eq!(keyed, name == "webcam", "{name}");
         }
@@ -1017,114 +923,6 @@ mod tests {
         validate(&params).unwrap();
     }
 
-    /// A file of this test's own: the suite runs in one process, so the pid
-    /// alone would have every test here sharing a path.
-    fn scratch(what: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("lightherder-cfg-{}-{what}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("graph.toml")
-    }
-
-    #[test]
-    fn every_field_of_the_format_arrives_off_a_file_that_names_it() {
-        // Every value off its default, because a field left at one proves
-        // nothing about whether its name was read. Literal, since the
-        // instrument writes no file to round-trip against.
-        let path = scratch("every-field");
-        std::fs::write(
-            &path,
-            "cameras = [{ look = [0.5], gain = [0.9, 0.85, 0.8], delay = 4, divider = 3,\n\
-             \x20 framing = { zoom = 0.994, rotation = 0.05, translate = [0.01, -0.02], flip_x = true, flip_y = true },\n\
-             \x20 character = { bloom = 0.1, bloom_radius = 0.04, chroma_bleed = 0.02, noise = 0.01 },\n\
-             \x20 key = { threshold = 0.2, softness = 0.06, hue = 1.2, tolerance = 0.3 } }]\n\
-             monitors = [{ seed = { white_blob = 0.2 }, headroom = 1.5, period = 12,\n\
-             \x20 colour = { hue = 0.1, saturation = 1.1, brightness = 0.02, contrast = 1.05, gamma = 1.2, temperature = 20 },\n\
-             \x20 sharpness = 0.5 }]\n\
-             routing = [[0.7]]\n\
-             inputs = [{ source = { pattern = \"bars\" }, into = [0.3] }]\n\
-             delay = 6\n",
-        )
-        .unwrap();
-        let params = load(path.to_str().unwrap()).unwrap();
-        assert_eq!(params.delay, 6);
-
-        let camera = &params.cameras[0];
-        assert_eq!(camera.look, [0.5]);
-        assert_eq!(camera.delay, 4);
-        assert_eq!(camera.divider, 3);
-        assert_eq!(camera.gain, [0.9, 0.85, 0.8]);
-        assert_eq!(camera.framing.zoom, 0.994);
-        assert_eq!(camera.framing.rotation, 0.05);
-        assert_eq!(camera.framing.translate, [0.01, -0.02]);
-        assert!(camera.framing.flip_x && camera.framing.flip_y);
-        assert_eq!(camera.character.bloom, 0.1);
-        assert_eq!(camera.character.bloom_radius, 0.04);
-        assert_eq!(camera.character.chroma_bleed, 0.02);
-        assert_eq!(camera.character.noise, 0.01);
-        assert_eq!(camera.key.threshold, 0.2);
-        assert_eq!(camera.key.softness, 0.06);
-        assert_eq!(camera.key.hue, 1.2);
-        assert_eq!(camera.key.tolerance, 0.3);
-
-        let monitor = &params.monitors[0];
-        assert_eq!(monitor.seed, Seed::WhiteBlob(0.2));
-        assert_eq!(monitor.headroom, 1.5);
-        assert_eq!(monitor.period, 12);
-        assert_eq!(monitor.colour.hue, 0.1);
-        assert_eq!(monitor.colour.saturation, 1.1);
-        assert_eq!(monitor.colour.brightness, 0.02);
-        assert_eq!(monitor.colour.contrast, 1.05);
-        assert_eq!(monitor.colour.gamma, 1.2);
-        assert_eq!(monitor.colour.temperature, 20.0);
-        assert_eq!(monitor.sharpness, 0.5);
-
-        assert_eq!(params.routing, [[0.7]]);
-        assert_eq!(
-            params.inputs,
-            [Plug {
-                source: Input::Pattern(Pattern::Bars),
-                into: vec![0.3],
-            }]
-        );
-
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn a_graph_file_the_instrument_would_refuse_is_refused_at_the_door() {
-        // A file is as editable as the hand that wrote it, so the loader
-        // validates rather than trusting it — the GPU side is built on that
-        // promise.
-        let path = scratch("poisoned");
-        std::fs::write(
-            &path,
-            "cameras = [{ look = [1.0], gain = [nan, 1.0, 1.0] }]\n\
-             monitors = [{}]\n\
-             routing = [[1.0]]\n",
-        )
-        .unwrap();
-        let why = load(path.to_str().unwrap()).unwrap_err();
-        assert!(why.contains("graph.toml") && why.contains("NaN"), "{why}");
-
-        std::fs::write(&path, "not toml [").unwrap();
-        assert!(load(path.to_str().unwrap()).is_err());
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn a_config_with_a_misspelled_key_is_refused() {
-        // deny_unknown_fields, so a typo cannot silently leave a knob at its
-        // default.
-        let err = toml::from_str::<Params>(
-            "cameras = [{ look = [1.0], gian = [0.9, 0.9, 0.9] }]\n\
-             monitors = [{}]\n\
-             routing = [[1.0]]\n",
-        );
-        assert!(err.is_err());
-    }
-
     #[test]
     fn a_delay_past_the_units_reach_is_refused() {
         let with = |reach: u32, delay: u32| {
@@ -1140,16 +938,10 @@ mod tests {
             validate(&with(3, 4)).unwrap_err(),
             "camera 0's delay is 4; it runs 0 to 3"
         );
-        // Read from a file, and absent from one: no delay unit on the cable.
-        let p: Params = toml::from_str(
-            "cameras = [{ look = [1.0], delay = 4 }, { look = [1.0] }]\n\
-             monitors = [{}]\n\
-             routing = [[1.0, 0.0]]\n\
-             delay = 4\n",
-        )
-        .unwrap();
-        assert_eq!(p.cameras[0].delay, 4);
-        assert_eq!(p.cameras[1].delay, 0);
+        let mut p = with(4, 4);
+        p.cameras.push(p.cameras[0].clone());
+        p.cameras[1].delay = 0;
+        p.routing[0].push(0.0);
         assert_eq!(p.history(), 6);
     }
 
@@ -1169,22 +961,17 @@ mod tests {
             validate(&with(Camera::MAX_DIVIDER + 1)).unwrap_err(),
             "camera 0's divider is 4; it runs 1 to 3"
         );
-        let p: Params = toml::from_str(
-            "cameras = [{ look = [1.0], divider = 3, delay = 4 }, { look = [1.0], divider = 2 }]\n\
-             monitors = [{}]\n\
-             routing = [[1.0, 0.0]]\n\
-             delay = 4\n",
-        )
-        .unwrap();
+        // The hold a divided path puts on the ring, on top of the reach.
+        let mut p = with(3);
+        p.delay = 4;
+        p.cameras[0].delay = 4;
+        p.cameras.push(p.cameras[0].clone());
+        p.cameras[1].divider = 2;
+        p.cameras[1].delay = 0;
+        p.routing[0].push(0.0);
         assert!(validate(&p).is_ok());
-        assert_eq!(p.cameras[0].divider, 3);
-        assert_eq!(p.cameras[1].divider, 2);
         assert_eq!(p.history(), 8);
-        let p: Params =
-            toml::from_str("cameras = [{ look = [1.0] }]\nmonitors = [{}]\nrouting = [[1.0]]\n")
-                .unwrap();
-        assert_eq!(p.cameras[0].divider, 1);
-        assert_eq!(p.history(), 2);
+        assert_eq!(single().history(), 2);
     }
     #[test]
     fn the_tap_bound_holds_for_every_setting_of_the_switcher_and_not_just_the_one_on_disk() {
@@ -1192,7 +979,7 @@ mod tests {
         // one, so the count validate holds against has to be the reachable
         // one. Every preset: what the file loads with is at or under it, and
         // turning every crosspoint up reaches exactly it.
-        for (name, params) in presets() {
+        for (name, params) in graphs() {
             let reachable = crate::feedback::reachable_taps(&params);
             for m in 0..params.monitors.len() {
                 let now = crate::feedback::taps_of(&params, m, 0, 0).count();

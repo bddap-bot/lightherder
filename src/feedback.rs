@@ -177,7 +177,7 @@ pub(crate) fn taps_of(
     m: usize,
     newest: usize,
     pass: u64,
-) -> impl Iterator<Item = (Option<usize>, usize, f32)> + '_ {
+) -> impl Iterator<Item = (Through, usize, f32)> + '_ {
     let shape = Shape::of(params);
     let through_cameras = params.routing[m]
         .iter()
@@ -192,7 +192,7 @@ pub(crate) fn taps_of(
                 .filter(|(_, look)| **look > 0.0)
                 .map(move |(src, look)| {
                     let layer = shape.monitor(shape.read(newest, camera, pass), src);
-                    (Some(c), layer, route * look)
+                    (Through::Camera(c), layer, route * look)
                 })
         });
     let straight_in = params
@@ -201,7 +201,7 @@ pub(crate) fn taps_of(
         .enumerate()
         .map(move |(i, plug)| (i, plug.into[m]))
         .filter(|(_, route)| *route > 0.0)
-        .map(move |(i, route)| (None, shape.input(i), route));
+        .map(move |(i, route)| (Through::Input(i), shape.input(i), route));
     through_cameras.chain(straight_in)
 }
 
@@ -224,6 +224,15 @@ pub(crate) fn reachable_taps(params: &Params) -> usize {
         .map(|camera| camera.look.iter().filter(|look| **look > 0.0).count())
         .sum();
     through_cameras + params.inputs.len()
+}
+
+/// What a tap came through: one of the graph's cameras, or an input on its
+/// way in past the switcher. Which, not merely whether — an input carries a
+/// key of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Through {
+    Camera(usize),
+    Input(usize),
 }
 
 /// One flattened edge of the graph, flipped in `shaders/feedback.wgsl`.
@@ -682,17 +691,19 @@ impl Feedback {
         for (m, monitor) in params.monitors.iter().enumerate() {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
-            for (c, src, w) in taps_of(params, m, self.newest, self.pass) {
+            for (through, src, w) in taps_of(params, m, self.newest, self.pass) {
                 // There is no camera between the switcher and an input, so
                 // every stage a camera would have takes its identity and the
-                // layer arrives as itself — the monitor's own front panel is
-                // the first thing it meets.
-                let (rows, gain, character, key) = match c {
-                    Some(c) => {
+                // layer arrives as itself. Its key is the switcher's own,
+                // which is where the rig keys at all.
+                let (rows, gain, character, key) = match through {
+                    Through::Camera(c) => {
                         let camera = &params.cameras[c];
                         (&framings[c], camera.gain, camera.character, camera.key)
                     }
-                    None => (&square_on, [1.0; 3], Character::CLEAN, Key::OFF),
+                    Through::Input(i) => {
+                        (&square_on, [1.0; 3], Character::CLEAN, params.inputs[i].key)
+                    }
                 };
                 // A step of `r` screen units across and up the camera's
                 // image, carried through the tap's affine into the source
@@ -887,6 +898,7 @@ mod tests {
         assert_eq!(bank_bytes(&single, (1920, 1080)), 5 * 1920 * 1080 * 8);
         single.inputs = vec![crate::params::Plug {
             source: crate::input::Input::Pattern(crate::input::Pattern::Bars),
+            key: Key::OFF,
             into: vec![0.0],
         }];
         assert_eq!(layers(&single), 6);
@@ -906,6 +918,7 @@ mod tests {
         most.inputs = vec![
             crate::params::Plug {
                 source: crate::input::Input::Pattern(crate::input::Pattern::Bars),
+                key: Key::OFF,
                 into: vec![0.0; crate::config::MAX_MONITORS],
             };
             crate::config::MAX_INPUTS

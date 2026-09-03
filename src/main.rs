@@ -22,10 +22,9 @@ fn play() -> Result<(), Box<dyn std::error::Error>> {
         print!("{}", lightherder::cli::usage());
         return Ok(());
     }
-    let params = lightherder::config::load(&cli.graph)?;
+    let params = lightherder::config::instrument();
     // The controls are the one thing worth printing without a GPU or a
-    // display: it is the card a performer reads while setting up. The graph
-    // is loaded first because the select rows are as wide as it is.
+    // display: it is the card a performer reads while setting up.
     if cli.mode == Mode::Cheatsheet {
         print!("{}", lightherder::cheatsheet(&params)?);
         return Ok(());

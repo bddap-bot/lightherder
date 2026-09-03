@@ -14,8 +14,7 @@ use crate::input::Input;
 /// None of these is the loop gain wearing a hat. The gain is a per-channel
 /// multiply of the light coming *back*, and is what puts any chroma into a
 /// white seed's trail at all; these turn the chroma that is already there.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Colour {
     /// Phase of the chroma subcarrier, in radians. Turning it a little each
     /// pass walks a feedback trail through the spectrum.
@@ -175,8 +174,7 @@ impl Colour {
 ///
 /// The monitor's end of the same story is its [`Monitor::headroom`]: these
 /// are the signal's imperfections, that one is the amplifier's.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Character {
     /// Fraction of the light the lens scatters into a halo instead of
     /// focusing. Redistributed, not added: a term that adds light is a term
@@ -226,8 +224,7 @@ impl Default for Character {
 /// Every camera watches monitors, so every key here is a gate on the
 /// feedback itself — the dark of a trail refused a trip round, or one hue of
 /// it — which is its own instrument to play.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Key {
     /// The luma the key passes in full. Cutting is complete one `softness`
     /// below it, so at 0 the key passes everything exactly — which is what
@@ -285,25 +282,20 @@ pub fn key_weights(hue: f32) -> [f32; 3] {
 
 /// One camera in the graph: what it sees, how it frames it, and how much of
 /// the light it hands on.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Camera {
     /// How this camera's view is magnified, turned and shifted relative to
     /// what it looks at.
-    #[serde(default = "Framing::identity")]
     pub framing: Framing,
     /// Per-channel gain applied to everything this camera sees. On a monitor
     /// seeded by its cameras, an effective per-monitor gain below 1.0 dies
     /// out and above 1.0 blooms; with a blob on the glass the loop settles
     /// instead, brighter the closer to 1.0. The channels differ to colour
     /// the trails.
-    #[serde(default = "unity_gain")]
     pub gain: [f32; 3],
     /// What this path does to the light besides scale it.
-    #[serde(default)]
     pub character: Character,
     /// What this path refuses to hand on.
-    #[serde(default)]
     pub key: Key,
     /// The beam splitter in front of the lens: how much of each monitor this
     /// camera sees. `[1.0]`-style one-hots are a camera aimed straight at one
@@ -321,14 +313,12 @@ pub struct Camera {
     /// at most the graph's reach. Zero is the cable alone. What it does to the picture is the
     /// original's: a sudden movement comes back as an echoing pulse, a
     /// smooth one as a frozen smear.
-    #[serde(default)]
     pub delay: u32,
     /// This path's frame rate as a fraction of the graph's: the camera hands
     /// on a fresh frame every `divider` passes and the same one in between,
     /// at most [`Camera::MAX_DIVIDER`]. One is every pass. What it does is
     /// the original's 30 fps router output on a 60 fps rig: a stutter, and
     /// the image slower to fractal, with the tempo untouched.
-    #[serde(default = "undivided")]
     pub divider: u32,
 }
 
@@ -343,10 +333,6 @@ impl Params {
     /// original's dial up to. A bound because the reach is bought in bank:
     /// every frame of it is another copy of every monitor.
     pub const MAX_DELAY: u32 = 30;
-}
-
-fn undivided() -> u32 {
-    1
 }
 
 fn unity_gain() -> [f32; 3] {
@@ -377,6 +363,7 @@ fn identity_graph() -> Params {
         // coincidence. Its kind does not matter — nothing opens this graph.
         inputs: vec![Plug {
             source: Input::Pattern(crate::input::Pattern::Bars),
+            key: Key::OFF,
             into: vec![0.0],
         }],
         // Zero, where every other identity here is the value that leaves
@@ -405,8 +392,7 @@ fn identity_graph() -> Params {
 /// the dark rig's level is already played elsewhere, on the switcher's
 /// crosspoints and the gains behind them, which is why this costs the
 /// surface a button and not a fader.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Seed {
     /// A soft white spot on the glass at this brightness, which is above
     /// zero: the classic way to start a loop, since one with gain below 1.0
@@ -470,8 +456,7 @@ impl fmt::Display for Seed {
 }
 
 /// One monitor in the graph: its front panel and what lights it.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Monitor {
     pub colour: Colour,
     /// What lights this monitor's loop from outside it.
@@ -526,8 +511,7 @@ impl Monitor {
 /// switcher routing the first onto the second. This is both the live state
 /// the knobs mutate and the on-disk config format — one struct, so the two
 /// cannot drift.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Params {
     pub cameras: Vec<Camera>,
     pub monitors: Vec<Monitor>,
@@ -536,7 +520,6 @@ pub struct Params {
     /// nothing else — nothing draws to one and no camera may watch one — so
     /// it is light entering the graph, like the seed spot, rather than light
     /// going round it. Each carries its own weight onto every monitor.
-    #[serde(default)]
     pub inputs: Vec<Plug>,
     /// The routing matrix: `routing[m][c]` is how much of camera `c`'s output
     /// monitor `m` displays. A permutation matrix is a plain switcher; rows
@@ -547,7 +530,6 @@ pub struct Params {
     /// keeps. Bought at load, since a frame of it is another copy of every
     /// monitor, so the knob runs to here and no further. Zero is a rig with
     /// no delay unit, and no delay knob.
-    #[serde(default)]
     pub delay: u32,
 }
 
@@ -557,16 +539,18 @@ pub struct Params {
 /// input rather than as columns of [`Params::routing`], for the reason a
 /// camera's `look` is: one shared index space would let a camera added to
 /// a graph quietly take over an input's weight.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Plug {
     pub source: Input,
     pub into: Vec<f32>,
+    /// What the switcher refuses of this input on its way in. The rig keys
+    /// on the switcher, so this is where a key lives at all.
+    pub key: Key,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        crate::config::single()
+        crate::config::instrument()
     }
 }
 
@@ -1367,17 +1351,12 @@ mod tests {
     use super::*;
     use core::f32::consts::PI;
 
-    /// The single-loop preset with an input sent onto its monitor and a
-    /// delay unit with reach, which is where one of every knob lives: the
-    /// send and the delay are the two knobs a graph can be without, so a
-    /// walk over `Knob::ALL` on a rig without them is a walk with holes in
-    /// it.
+    /// The instrument with a delay unit that has reach, which is where one
+    /// of every knob lives: the delay is the one knob a graph can be
+    /// without, so a walk over `Knob::ALL` on a rig without it is a walk
+    /// with holes in it.
     fn p() -> Params {
         let params = Params {
-            inputs: vec![Plug {
-                source: Input::Pattern(crate::input::Pattern::Bars),
-                into: vec![0.5],
-            }],
             delay: 4,
             ..Params::default()
         };
@@ -1666,6 +1645,7 @@ mod tests {
         // leaves a performer working out from "0.000" which of the two rigs
         // the monitor is on.
         let mut params = p();
+        params.monitors[0].seed = Seed::BLOB;
         assert!(
             params
                 .describe(Focus::default())
@@ -2213,6 +2193,7 @@ mod tests {
             let mut params = crate::config::crossed();
             params.inputs = vec![Plug {
                 source: Input::Pattern(crate::input::Pattern::Bars),
+                key: Key::OFF,
                 into: vec![0.0, 0.5],
             }];
             params.delay = 4;
@@ -2383,6 +2364,7 @@ mod tests {
                 let mut params = crate::config::insanity();
                 params.inputs = vec![Plug {
                     source: Input::Pattern(crate::input::Pattern::Bars),
+                    key: Key::OFF,
                     into: vec![0.0; params.monitors.len()],
                 }];
                 match knob {

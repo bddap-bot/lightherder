@@ -31,17 +31,21 @@ struct Single {
 }
 
 impl Default for Single {
-    /// The single preset's values, taken from it rather than copied, so the
-    /// shorthand cannot drift from the instrument.
+    /// One camera pulling back and turning a little on the one monitor it
+    /// draws to, at a gain just under unity: the classic loop, and the least
+    /// graph any of the stages below can be seen in.
     fn default() -> Single {
-        let p = lightherder::config::single();
         Single {
-            framing: p.cameras[0].framing,
-            loop_gain: p.cameras[0].gain,
-            character: p.cameras[0].character,
-            seed: p.monitors[0].seed,
-            colour: p.monitors[0].colour,
-            headroom: p.monitors[0].headroom,
+            framing: Framing {
+                zoom: 0.994,
+                rotation: 0.05,
+                ..Framing::identity()
+            },
+            loop_gain: [0.980, 0.986, 0.992],
+            character: Character::CLEAN,
+            seed: Seed::BLOB,
+            colour: Colour::NEUTRAL,
+            headroom: Monitor::KNEE_AT_WHITE,
         }
     }
 }
@@ -1184,6 +1188,7 @@ fn bars(into: Vec<f32>) -> Plug {
     Plug {
         source: Input::Pattern(Pattern::Bars),
         into,
+        key: Key::OFF,
     }
 }
 
@@ -1428,13 +1433,11 @@ fn a_solo_puts_one_monitor_on_the_whole_target() {
 }
 
 #[test]
-fn the_shipped_presets_settle_without_clipping() {
+fn the_instrument_settles_without_clipping() {
     // Same bar the single default is held to, per monitor: left running,
-    // every monitor of every preset keeps an image — not flat white, not
-    // black. Off `PRESETS` rather than listed here, so a preset shipped
-    // without a line in this test cannot slip past it.
-    for (name, build) in lightherder::config::PRESETS {
-        let p = build();
+    // every monitor of the instrument keeps an image — not flat white, not
+    // black.
+    for (name, p) in [("instrument", lightherder::config::instrument())] {
         let n = p.monitors.len();
         let (cols, rows) = lightherder::present::grid(n);
         let Some(mut h) = graph_harness((SIZE, SIZE), (cols * SIZE, rows * SIZE), &p) else {
@@ -1465,14 +1468,6 @@ fn the_shipped_presets_settle_without_clipping() {
             }
         }
     }
-}
-
-#[test]
-fn the_single_shim_is_the_single_preset() {
-    // The shim copies the preset's values but hardcodes its wiring; this is
-    // what notices if `single()` ever rewires and leaves the suite testing a
-    // graph the instrument no longer ships.
-    assert_eq!(graph(&Single::default()), lightherder::config::single());
 }
 
 // ---- Analog character: the signal path, and the amplifier's rails --------

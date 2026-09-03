@@ -1,7 +1,6 @@
-//! The command line: which graph to play, how much detail it carries, and
-//! whether the window covers the display it opens on.
-
-use crate::config::PRESETS;
+//! The command line: how much detail the instrument carries, and whether the
+//! window covers the display it opens on. Which instrument is not on it —
+//! there is one.
 
 /// How big every monitor in the bank is, and with it the resolution the whole
 /// loop runs at: a camera pass is one fragment per texel of the monitor it
@@ -40,8 +39,6 @@ pub enum Mode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cli {
-    /// A preset name or the path to a graph file.
-    pub graph: String,
     pub resolution: (u32, u32),
     /// Passes a second — the speed the piece plays at, which the track pair
     /// moves from here while it runs. See [`crate::tempo`].
@@ -56,7 +53,6 @@ pub struct Cli {
 impl Default for Cli {
     fn default() -> Cli {
         Cli {
-            graph: PRESETS[0].0.into(),
             resolution: DEFAULT_RESOLUTION,
             rate: crate::tempo::DEFAULT_RATE,
             fullscreen: true,
@@ -66,9 +62,8 @@ impl Default for Cli {
 }
 
 pub fn usage() -> String {
-    let names: Vec<&str> = PRESETS.iter().map(|(name, _)| *name).collect();
     format!(
-        "usage: lightherder [options] [{} | graph.toml]\n\
+        "usage: lightherder [options]\n\
          \x20 --windowed          open a window instead of covering the display\n\
          \x20 --resolution WxH    how big every monitor is (default {}x{})\n\
          \x20 --rate HZ           passes a second, the speed the piece plays at\n\
@@ -77,7 +72,6 @@ pub fn usage() -> String {
          \x20 --cheatsheet        print the controls and exit\n\
          \x20 --bench             time {} frames off screen and exit\n\
          \x20 --help              this\n",
-        names.join(" | "),
         DEFAULT_RESOLUTION.0,
         DEFAULT_RESOLUTION.1,
         crate::tempo::DEFAULT_RATE,
@@ -89,12 +83,10 @@ pub fn usage() -> String {
 
 /// `args` is the command line with the program name already dropped.
 ///
-/// Anything that is not a flag is the graph, of which there may be one: a
-/// second is a typo, and playing the first of two graphs silently is the
-/// wrong answer to it.
+/// Nothing here names an instrument: there is one, and a bare word is a typo
+/// rather than a piece to play.
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
     let mut cli = Cli::default();
-    let mut graph: Option<String> = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -127,19 +119,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
                     cli.rate = rate(value)?;
                 } else if arg.starts_with('-') {
                     return Err(format!("no such option: {arg}\n{}", usage()));
-                } else if let Some(first) = &graph {
+                } else {
                     return Err(format!(
-                        "two graphs, {first:?} and {arg:?}; there is one instrument\n{}",
+                        "{arg:?} names nothing; there is one instrument\n{}",
                         usage()
                     ));
-                } else {
-                    graph = Some(arg);
                 }
             }
         }
-    }
-    if let Some(graph) = graph {
-        cli.graph = graph;
     }
     Ok(cli)
 }
@@ -199,28 +186,12 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_command_line_plays_the_first_preset_over_the_whole_display() {
+    fn an_empty_command_line_plays_the_instrument_over_the_whole_display() {
         let cli = parse_argv(&[]).unwrap();
-        assert_eq!(cli.graph, PRESETS[0].0);
         assert!(cli.fullscreen);
         assert_eq!(cli.mode, Mode::Play);
         assert_eq!(cli.resolution, DEFAULT_RESOLUTION);
         assert_eq!(cli.rate, crate::tempo::DEFAULT_RATE);
-    }
-
-    #[test]
-    fn a_bare_word_is_the_graph_wherever_it_stands() {
-        // Before the flags and after them: a performer types the piece where
-        // it comes to mind.
-        assert_eq!(parse_argv(&["crossed"]).unwrap().graph, "crossed");
-        assert_eq!(
-            parse_argv(&["--windowed", "my.toml"]).unwrap().graph,
-            "my.toml"
-        );
-        assert_eq!(
-            parse_argv(&["my.toml", "--windowed"]).unwrap().graph,
-            "my.toml"
-        );
     }
 
     #[test]
@@ -277,18 +248,9 @@ mod tests {
     }
 
     #[test]
-    fn a_second_graph_is_refused_rather_than_ignored() {
-        let why = parse_argv(&["single", "crossed"]).unwrap_err();
-        assert!(why.contains("single") && why.contains("crossed"), "{why}");
-        // The shape this is really for: a size that missed its flag would
-        // otherwise be read as a filename and the graph played at the wrong
-        // resolution with nothing said.
-        let why = parse_argv(&["single", "3840x2160"]).unwrap_err();
-        assert!(why.contains("3840x2160"), "{why}");
-    }
-
-    #[test]
     fn a_misspelled_flag_stops_rather_than_becoming_a_filename() {
+        let why = parse_argv(&["crossed"]).unwrap_err();
+        assert!(why.contains("names nothing"), "{why}");
         let why = parse_argv(&["--fullscreen"]).unwrap_err();
         assert!(why.contains("no such option"), "{why}");
         assert!(why.contains("--windowed"), "the usage is missing: {why}");
@@ -318,11 +280,6 @@ mod tests {
             "--bench",
         ] {
             assert!(usage.contains(flag), "{flag} is not in the usage");
-        }
-        // And every preset, so the list a performer is shown is the loader's
-        // rather than one typed beside it.
-        for (name, _) in PRESETS {
-            assert!(usage.contains(name), "{name} is not in the usage");
         }
     }
 }

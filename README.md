@@ -36,24 +36,14 @@ of real cameras performs, and the window shows the whole bank tiled in a
 grid — or one monitor of it on the whole display, which is the same tiling
 with one tile in it.
 
-The graph comes from a preset or a TOML file. `crossed` is the classic
-two-structure rig — each camera watches its own monitor through
-beam-splitter glass that lets a quarter of the other bleed in, and the
-switcher routes every camera to the opposite monitor, so each image is made
-of its twin's past. `insanity` is four monitors all-to-all: every monitor a
-quarter of every camera. One shape worth knowing before writing your own:
-rotations in a mixed loop should all turn the same way, since paths whose
-rotations cancel never wind away from the seed, and light that cannot leave
-the seed spot piles up on it until the display clips.
-
-`rig` is Dave Blair's 4K Light Herder itself, as one graph: three cameras,
+The graph is Dave Blair's 4K Light Herder itself, and there is no other: three cameras,
 five monitors, one seed input. Cameras A and B each see their structure's
 upper monitor directly and its lower one in the 50/50 glass, at half each;
 camera 3 sees the rotating monitor, which shows camera B's feed. Four
 switchers, each a crossfade, do the rest: A mixes camera B's feed into
 structure A, B mixes into structure B a chain (C, then D) that carries
 camera A, camera 3 and the seed, and each structure monitor is on its camera
-direct or its switcher's program. The preset ships every monitor on program,
+direct or its switcher's program. It runs every monitor on program,
 both cross-links a quarter open, C half open and the seed a tenth of D. A
 crossfade is a weighted sum, so the whole chain multiplies out into the
 routing matrix (`src/rig.rs`) and there is no second mixer: switcher A and
@@ -120,10 +110,8 @@ same amount to all three channels moves luma by exactly that and leaves the
 subcarrier alone, and "this point's luma, the neighbourhood's colour" is one
 dot product. A path with no character takes no extra samples at all.
 
-None of it is on in the presets that shipped before it: a clean path and a
-wide-open rail are an exact identity, guarded over a hundred passes for the
-same reason the colour stage is. The `analog` preset is the single loop with
-all four turned up.
+None of it is on: a clean path and a wide-open rail are an exact identity,
+guarded over a hundred passes for the same reason the colour stage is.
 
 ## External inputs
 
@@ -182,13 +170,12 @@ straight to ffmpeg, and `{ format = "lavfi", device = "movie=/private.mp4" }`
 puts a local file on screen. Read a graph before you play it.
 
 Injection level is the crosspoint the input is sent on — a knob like the
-other crosspoint, on fader 1 against the focused monitor. Near unity a
-little goes a long way: the
-`external` preset sends a seventieth of the bars — 0.014 — onto a monitor
-whose loop runs at 0.985 and whose glass is dark, so the trickle goes round
-seventy times before it fades and every photon on that monitor came in from
-outside. Turn it up mid-performance and the outside floods in; turn it to
-zero and the loop keeps running on what it has.
+other crosspoint, on fader 1 against the focused monitor. Near unity a little
+goes a long way: a hundredth of the seed onto a monitor whose loop runs at
+0.985 and whose glass is dark goes round seventy times before it fades, and
+every photon on that monitor came in from outside. Turn it up mid-performance
+and the outside floods in; turn it to zero and the loop keeps running on what
+it has.
 
 ### The keyer
 
@@ -208,14 +195,10 @@ monitors, so a key is a gate between one monitor and the next: on a loop's own
 camera it gates the feedback, refusing the dark of a trail or one hue of it a
 trip round.
 
-Lifting a subject off its room is the same gate, one monitor earlier. The
-`webcam` preset is two: the switcher puts `/dev/video0` whole on the first
-monitor — a **window** on the room, with no camera routed to it and so no
-loop of its own — and a camera watches *that* through its luma key, handing
-the lit subject on and refusing the unlit room behind it. What survives
-drives the second monitor's loop, which is `external`'s. Plug a camera in and
-play. The key has to sit one monitor upstream because a key on the loop's own
-camera would gate the trail it is building, so there would never
+Lifting a subject off its room is what the rig keys for: `/dev/video0` meets
+a luma key on its way into the switcher, so the lit subject is handed on and
+the unlit room behind it is not. That is where a key can sit at all — on the
+loop's own camera it would gate the trail it is building, so there would never
 be a trail.
 
 A monitor's **seed** is what lights its loop from outside: either a soft
@@ -466,15 +449,12 @@ nobody owns, or the send on a rig with no input to send.
 ## Run it
 
 ```
-nix-shell --run "cargo run --release"                    # the single loop
-nix-shell --run "cargo run --release analog"             # the same, with the signal path on
-nix-shell --run "cargo run --release crossed"            # two crossed structures
-nix-shell --run "cargo run --release insanity"           # four, all-to-all
-nix-shell --run "cargo run --release external"           # a test pattern driving the loop
-nix-shell --run "cargo run --release webcam"             # /dev/video0 through the luma key
-nix-shell --run "cargo run --release rig"                # Blair's 4K Light Herder, whole
-nix-shell --run "cargo run --release my-graph.toml"      # your own
+nix-shell --run "cargo run --release"
 ```
+
+There is one instrument and nothing on the command line names it: Blair's 4K
+Light Herder, three cameras and five monitors, seeded by `/dev/video0` through
+the switcher's luma key.
 
 It comes up covering the display, because an instrument on a stage is the only
 thing on its screen; `--windowed` is how you get at the rest of the machine.
@@ -483,7 +463,7 @@ the surface stops the instrument: a slipped finger mid-performance must not be
 able to.
 
 ```
-nix-shell --run "cargo run --release -- --windowed crossed"
+nix-shell --run "cargo run --release -- --windowed"
 ```
 
 | | |
@@ -507,15 +487,6 @@ ratio, so it changes how much detail the loop carries and — the grain aside,
 which is hashed per texel and so is finer on a bigger monitor — nothing about
 what it does. On a 4K display ask for `3840x2160` and what is on the glass is
 the loop's own detail rather than an upscale of a smaller one.
-
-A graph file is the same shape as the presets — `cargo run` on a bad file
-prints exactly what is wrong. The smallest useful one:
-
-```toml
-cameras = [{ look = [1.0], framing = { zoom = 0.994, rotation = 0.05 } }]
-monitors = [{ seed = { white_blob = 0.1 } }]
-routing = [[0.98]]
-```
 
 `look` is the camera's beam splitter, a weight per monitor. `delay` on the
 graph is its frame delay units' reach, 0 to 30 frames, and defaults to none;
@@ -549,7 +520,7 @@ colour, the inputs list itself — is neutral.
 
 The `shell.nix` pins nixpkgs, puts the Vulkan loader and windowing libraries
 on `LD_LIBRARY_PATH`, which wgpu and winit open at run time, and carries the
-`ffmpeg` the file and capture inputs run. Without Nix, a Rust toolchain recent
+`ffmpeg` the seed runs. Without Nix, a Rust toolchain recent
 enough for wgpu 30 and winit 0.30 and a working Vulkan/Metal/DX12 driver will
 do, plus ffmpeg if you want those inputs.
 
@@ -709,7 +680,7 @@ between the monitors without
 leaving a copy behind, mix weights deliver exactly the fraction they name, a
 beam splitter delivers light from a monitor its routing row never touches,
 insanity mode puts a quarter of one seed on all four monitors at once, and
-the shipped presets settle without clipping. So does the character stage: the
+the instrument settles without clipping. So does the character stage: the
 lens widens the spot without changing how much light is in the frame, the
 bleed carries colour sideways while leaving luma where it was, the grain
 differs frame to frame and arrives on an unlit monitor, the rail bends a peak
@@ -782,16 +753,14 @@ the first of two buttons bound to one node is the one that lights.
 ## In a browser
 
 The same instrument, on WebGPU, at
-<https://bddap-bot.github.io/lightherder/> — the graph is chosen the way a
-page takes an argument, `?preset=insanity`, and so is the tempo, `?rate=30`
-— the same range `--rate` takes, refused rather than clamped outside it. What
+<https://bddap-bot.github.io/lightherder/>. The tempo is chosen the way a page
+takes an argument, `?rate=30` — the same range `--rate` takes, refused rather
+than clamped outside it — and nothing else is: there is one instrument. What
 is not there is what a browser has no way to give it: the ALSA control
-surface — so a tab plays the graph it was handed and nothing turns a knob. An
-input it does have: where a
-terminal runs ffmpeg, a page plays a `<video>` of its own camera — asked for
-with `getUserMedia`, whatever device the graph names — and reads it back
-through a canvas into the same bytes, so `?preset=webcam` puts the visitor on
-the first monitor.
+surface, so a tab plays and nothing turns a knob. The seed it does have:
+where a terminal runs ffmpeg on `/dev/video0`, a page plays a `<video>` of its
+own camera — asked for with `getUserMedia` — and reads it back through a
+canvas into the same bytes, so the visitor is what sparks the loops.
 
 `web/build.sh` builds `web/dist` — the module, its glue and the page — and
 every push to `main` runs it and publishes the result. Locally:

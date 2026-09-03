@@ -11,11 +11,11 @@
 //! watches one: a camera watches monitors, which is what makes every loop in
 //! the graph a loop.
 //!
-//! Where the pixels come from is three cases and two implementations.
-//! [`Input::File`] and [`Input::Capture`] are both an `ffmpeg` reading
-//! something and writing raw RGBA down a pipe, so anything ffmpeg can open is
-//! an input — including its own generators, `capture = { format = "lavfi",
-//! device = "testsrc2" }`, and a screen, `x11grab` + `:0.0`. In a browser
+//! Where the pixels come from is two cases and two implementations.
+//! [`Input::Capture`] is an `ffmpeg` reading a device and writing raw RGBA
+//! down a pipe, so anything ffmpeg can open as one is an input — including
+//! its own generators, `lavfi` + `testsrc2`, and a screen, `x11grab` +
+//! `:0.0`. In a browser
 //! a capture is a `<video>` playing the page's own camera, read back through
 //! a canvas; the frame that reaches the bank is the same bytes either way,
 //! so nothing past here knows the difference.
@@ -25,7 +25,6 @@
 //! them too.
 
 use std::fmt;
-use std::path::PathBuf;
 
 use serde::Deserialize;
 
@@ -46,8 +45,6 @@ pub enum Input {
     /// camera's job, and a still layer is uploaded once instead of twice a
     /// frame forever.
     Pattern(Pattern),
-    /// A video file, played on a loop at its own frame rate.
-    File(PathBuf),
     /// A live device: `format` is ffmpeg's `-f` and `device` its `-i`, so
     /// `v4l2` + `/dev/video0` is a webcam, `x11grab` + `:0.0` a screen, and
     /// `lavfi` + `testsrc2` ffmpeg's own pattern generators.
@@ -71,7 +68,6 @@ impl fmt::Display for Input {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Input::Pattern(p) => write!(f, "pattern {p:?}"),
-            Input::File(path) => write!(f, "file {}", path.display()),
             Input::Capture { format, device } => write!(f, "capture {format}:{device}"),
         }
     }
@@ -126,7 +122,7 @@ impl Source {
                     feed: None,
                 })
             }
-            Input::File(_) | Input::Capture { .. } => Feed::open(input, size).await?,
+            Input::Capture { .. } => Feed::open(input, size).await?,
         };
         Ok(Source {
             showing: first,
@@ -166,7 +162,6 @@ impl Source {
 #[cfg(not(target_arch = "wasm32"))]
 mod ffmpeg {
     use std::io::Read;
-    use std::path::Path;
     use std::process::{Child, Command, Stdio};
     use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError};
     use std::time::Duration;
@@ -235,7 +230,6 @@ mod ffmpeg {
             // What ffmpeg is told to open is the whole of what the kinds differ
             // by.
             let source = match input {
-                Input::File(path) => file_args(path),
                 Input::Capture { format, device } => capture_args(format, device),
                 Input::Pattern(_) => unreachable!("a pattern is drawn, never played"),
             };
@@ -328,30 +322,6 @@ mod ffmpeg {
             let _ = channels.spent.try_send(spent);
             Next::Frame
         }
-    }
-
-    /// The input-side options for a file: at its own frame rate and forever,
-    /// through the file protocol and no other.
-    ///
-    /// A file that raced through as fast as the pipe drained would play at the
-    /// render rate, and one that stopped would freeze the layer a few seconds in.
-    /// The whitelist is there because a graph is someone else's file to write and
-    /// ffmpeg opens a URL as readily as a path: without it, `file =
-    /// "http://..."` fetches from the network for as long as the instrument runs.
-    /// All three are the input's options, so all three come before `-i`.
-    pub(super) fn file_args(path: &Path) -> Vec<String> {
-        let mut args: Vec<String> = [
-            "-protocol_whitelist",
-            "file",
-            "-re",
-            "-stream_loop",
-            "-1",
-            "-i",
-        ]
-        .map(String::from)
-        .into();
-        args.push(path.display().to_string());
-        args
     }
 
     /// The input-side options for a live device. No `-re`: a device paces itself,
@@ -658,7 +628,7 @@ fn bar(x: u32, width: u32) -> [u8; 3] {
 mod tests {
     use std::process::{Command, Stdio};
 
-    use super::ffmpeg::{argv, capture_args, file_args, FIRST_FRAME_TIMEOUT};
+    use super::ffmpeg::{argv, capture_args, FIRST_FRAME_TIMEOUT};
     use super::*;
 
     const SIZE: (u32, u32) = (64, 64);
@@ -672,13 +642,6 @@ mod tests {
     fn rgb(pixels: &[u8], size: (u32, u32), x: u32, y: u32) -> [u8; 3] {
         let i = ((y * size.0 + x) * 4) as usize;
         [pixels[i], pixels[i + 1], pixels[i + 2]]
-    }
-
-    /// Where `arg` sits in a command line, for the assertions about order.
-    fn at(argv: &[String], arg: &str) -> usize {
-        argv.iter()
-            .position(|a| a == arg)
-            .unwrap_or_else(|| panic!("{arg} is not in {argv:?}"))
     }
 
     #[test]
@@ -724,32 +687,6 @@ mod tests {
         let mut source = open(&Input::Pattern(Pattern::Bars), SIZE).unwrap();
         assert_eq!(source.frame().map(|f| f.len()), Some(frame_bytes(SIZE)));
         assert!(source.frame().is_none(), "a still frame uploaded twice");
-    }
-
-    #[test]
-    fn the_file_command_loops_at_the_file_s_own_rate() {
-        let argv = argv(file_args("clip.mp4".as_ref()), (320, 240));
-        assert!(argv.windows(2).any(|w| w == ["-i", "clip.mp4"]));
-        assert!(argv.windows(2).any(|w| w == ["-pix_fmt", "rgba"]));
-        // All three are input options: after -i, ffmpeg reads them as the
-        // output's and none of them does anything.
-        assert!(at(&argv, "-re") < at(&argv, "-i"));
-        assert!(at(&argv, "-stream_loop") < at(&argv, "-i"));
-        assert!(at(&argv, "-protocol_whitelist") < at(&argv, "-i"));
-        assert_eq!(argv[at(&argv, "-stream_loop") + 1], "-1");
-        // Only the file protocol, or a graph that named an http URL would
-        // have the instrument fetching from the network for as long as it
-        // runs.
-        assert_eq!(argv[at(&argv, "-protocol_whitelist") + 1], "file");
-        let filter = &argv[at(&argv, "-vf") + 1];
-        assert!(filter.contains("scale=320:240"), "{filter}");
-        // Without both of these the clip is stretched to the monitor's shape
-        // instead of letterboxed into it.
-        assert!(
-            filter.contains("force_original_aspect_ratio=decrease"),
-            "{filter}"
-        );
-        assert!(filter.contains("pad=320:240"), "{filter}");
     }
 
     #[test]
@@ -875,48 +812,20 @@ mod tests {
         // cannot open this and exits, which closes the channel, so the wait
         // ends there instead of running out the ten-second timeout.
         let began = std::time::Instant::now();
-        let Err(why) = open(&Input::File("no-such-clip.mp4".into()), SIZE) else {
-            panic!("a file that is not there opened")
+        let Err(why) = open(
+            &Input::Capture {
+                format: "v4l2".into(),
+                device: "/dev/no-such-camera".into(),
+            },
+            SIZE,
+        ) else {
+            panic!("a device that is not there opened")
         };
-        assert!(why.contains("no-such-clip.mp4"), "{why}");
+        assert!(why.contains("no-such-camera"), "{why}");
         assert!(
             began.elapsed() < FIRST_FRAME_TIMEOUT / 2,
             "{:?}",
             began.elapsed()
         );
-    }
-
-    #[test]
-    fn a_video_file_is_decoded_scaled_and_letterboxed() {
-        if !have_ffmpeg() {
-            return;
-        }
-        let dir = std::env::temp_dir().join(format!("lightherder-input-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("clip.mp4");
-        // A green square: not the frame's shape, so the letterboxing has
-        // something to do, and not grey, so a decode that lost colour fails.
-        let made = Command::new("ffmpeg")
-            .args(["-nostdin", "-loglevel", "error", "-y"])
-            .args(["-f", "lavfi", "-i", "color=c=green:s=64x64:r=25", "-t", "1"])
-            .arg(&path)
-            .status()
-            .expect("run ffmpeg");
-        assert!(made.success(), "could not write the fixture");
-
-        // Wider than it is tall, so a square clip must gain side bars.
-        let size = (128, 64);
-        let mut source = open(&Input::File(path), size).unwrap();
-        let frame = source.frame().expect("open() waits for the first frame");
-        assert_eq!(frame.len(), frame_bytes(size));
-        let at = |x: u32, y: u32| rgb(frame, size, x, y);
-        assert!(
-            at(64, 32)[1] > 100,
-            "the middle is not green: {:?}",
-            at(64, 32)
-        );
-        assert_eq!(at(2, 32), [0; 3], "no bar on the left: {:?}", at(2, 32));
-        assert_eq!(at(125, 32), [0; 3], "no bar on the right");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
