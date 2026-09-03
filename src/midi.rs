@@ -31,7 +31,7 @@ use web_time::Instant;
 use crate::affine::Axis;
 use crate::command::{action_for_name, names, Action, Edge};
 use crate::lamps::{lamp, Lamplight, Lamps};
-use crate::params::{Focus, Knob, Limit, Node, Params, Seed};
+use crate::params::{Focus, Knob, Limit, Node, Params};
 
 /// Where ALSA puts its character devices.
 const DEV_SND: &str = "/dev/snd";
@@ -86,43 +86,6 @@ pub struct Map {
 pub struct Fader {
     pub(crate) cc: u8,
     pub(crate) knob: Knob,
-    #[serde(default)]
-    pub(crate) page: Page,
-}
-
-/// Two and not N: the button that turns the page has one lamp, and
-/// lit-or-dark is exactly two pages.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "u8")]
-pub enum Page {
-    #[default]
-    One,
-    Two,
-}
-
-impl Page {
-    pub const ALL: [Page; 2] = [Page::One, Page::Two];
-}
-
-impl TryFrom<u8> for Page {
-    type Error = String;
-
-    fn try_from(page: u8) -> Result<Page, String> {
-        match page {
-            1 => Ok(Page::One),
-            2 => Ok(Page::Two),
-            _ => Err(format!("page {page} is not a page; there are 1 and 2")),
-        }
-    }
-}
-
-impl std::fmt::Display for Page {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Page::One => "1",
-            Page::Two => "2",
-        })
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -135,19 +98,7 @@ pub struct Button {
 }
 
 const fn fader(cc: u8, knob: Knob) -> Fader {
-    Fader {
-        cc,
-        knob,
-        page: Page::One,
-    }
-}
-
-const fn page_two(cc: u8, knob: Knob) -> Fader {
-    Fader {
-        cc,
-        knob,
-        page: Page::Two,
-    }
+    Fader { cc, knob }
 }
 
 /// A relative `XDG_CONFIG_HOME` is ignored the way the spec says to.
@@ -165,69 +116,35 @@ impl Map {
     /// The factory CC layout of a Korg nanoKONTROL2, which is what this
     /// instrument is played from.
     ///
-    /// Faders 2 to 8 are the focused **monitor**: its front panel, and then
-    /// how much of the focused camera it is showing. The eight rotaries above
-    /// them are the focused **camera**: where it is pointed, how much light it
-    /// hands back, and what its signal path does on the way. So the left hand
-    /// works one monitor, the right hand one camera, and the last fader is the
-    /// switcher crosspoint that joins the two the hands are on.
+    /// The eight faders are the left hand's: the focused monitor's front
+    /// panel, then the focused switcher's period and its crossfade — the
+    /// lever the piece is played on, on the fader nearest the hand that is
+    /// already on the select rows. The rotaries above them are the right
+    /// hand's, on the focused camera: where it stands on its shaft and how
+    /// late its cable is. Eleven handles on sixteen controls, so there is no
+    /// second page and the five rotaries past the third are dead — free for
+    /// a `midi.toml`, and no hand throws one by accident.
     ///
-    /// Fader 1 is the send, and only on a rig that has an input to send: it
-    /// is the level outside light enters the graph at, so on a rig with no
-    /// inputs there is nothing for it to move and it is left dead — free for
-    /// a `midi.toml` to claim for another knob, and one nobody's hand throws
-    /// by accident. Not for the send: [`Map::validate`] refuses that binding
-    /// on a rig with none, the same as a select on a node the graph has not
-    /// got.
-    ///
-    /// Page 2 keeps the rotaries the camera's: the three per-channel gain
-    /// offsets and the bloom radius, trims of knobs on page 1, and then the
-    /// keyer's four. Its fader 2 is the focused monitor's colour
-    /// temperature, under the hue fader as the original's toggle puts it
-    /// under the hue knobs, and its fader 3 the monitor's sharpness, the
-    /// other face of that toggle. Its fader 8 is the focused camera's delay — where page
-    /// 1's fader 8 is how much of that camera the monitor shows, page 2's is
-    /// how late — on a graph whose delay units have any reach, and dead
-    /// otherwise, like the send. Page 2's fader 7 is the focused monitor's period,
-    /// on a graph with two sources to trade. The other page-2 faders are
-    /// free for a `midi.toml` to claim.
-    ///
-    /// `params` decides the rest of the layout: the send is bound only where
-    /// there is one, and the select rows are as wide as the graph and no
-    /// wider — see [`nano_buttons`].
+    /// `params` decides the rest: the delay is bound only where the graph has
+    /// reach, and the select rows are as wide as the rig — see
+    /// [`nano_buttons`].
     pub(crate) fn nano_kontrol2(params: &Params) -> Map {
         Map {
             device: "nanoKONTROL".into(),
             fader: [
-                fader(1, Knob::Hue),
-                fader(2, Knob::Saturation),
-                fader(3, Knob::Brightness),
-                fader(4, Knob::Contrast),
-                fader(5, Knob::Gamma),
-                fader(6, Knob::Headroom),
+                fader(0, Knob::Hue),
+                fader(1, Knob::Saturation),
+                fader(2, Knob::Brightness),
+                fader(3, Knob::Contrast),
+                fader(4, Knob::Temperature),
+                fader(5, Knob::Sharpness),
+                fader(6, Knob::Period),
                 fader(7, Knob::Switcher),
                 fader(16, Knob::Zoom),
                 fader(17, Knob::Rotation),
-                fader(18, Knob::TranslateX),
-                fader(19, Knob::TranslateY),
-                fader(20, Knob::Gain),
-                fader(21, Knob::Bloom),
-                fader(22, Knob::ChromaBleed),
-                fader(23, Knob::Noise),
-                page_two(1, Knob::Temperature),
-                page_two(2, Knob::Sharpness),
-                page_two(16, Knob::GainR),
-                page_two(17, Knob::GainG),
-                page_two(18, Knob::GainB),
-                page_two(19, Knob::BloomRadius),
-                page_two(20, Knob::KeyThreshold),
-                page_two(21, Knob::KeySoftness),
-                page_two(22, Knob::KeyHue),
-                page_two(23, Knob::KeyTolerance),
-                page_two(6, Knob::Period),
             ]
             .into_iter()
-            .chain(Knob::Delay.is_on(params).then(|| page_two(7, Knob::Delay)))
+            .chain(Knob::Delay.is_on(params).then(|| fader(18, Knob::Delay)))
             .collect(),
             button: nano_buttons(params),
         }
@@ -244,11 +161,7 @@ impl Map {
         );
         for f in &self.fader {
             let control = silkscreen(&self.device, f.cc);
-            let page = match f.page {
-                Page::One => String::new(),
-                Page::Two => format!(" (page {})", f.page),
-            };
-            out.push_str(&format!("  {control:<12} {}{page}\n", f.knob.name()));
+            out.push_str(&format!("  {control:<12} {}\n", f.knob.name()));
         }
         for b in &self.button {
             let control = silkscreen(&self.device, b.cc);
@@ -293,32 +206,18 @@ impl Map {
         if self.device.is_empty() {
             return Err("device is empty, which every card's line contains".into());
         }
-        let mut seen: Vec<(u8, Page)> = Vec::new();
-        let faders = self.fader.iter().map(|f| (f.cc, vec![f.page]));
-        let buttons = self.button.iter().map(|b| (b.cc, Page::ALL.to_vec()));
-        for (cc, pages) in faders.chain(buttons) {
+        let mut seen: Vec<u8> = Vec::new();
+        let faders = self.fader.iter().map(|f| f.cc);
+        for cc in faders.chain(self.button.iter().map(|b| b.cc)) {
             if cc > 127 {
                 return Err(format!("cc {cc} is not a control number; they stop at 127"));
             }
-            for page in pages {
-                if seen.contains(&(cc, page)) {
-                    return Err(format!("cc {cc} is bound twice"));
-                }
-                seen.push((cc, page));
+            if seen.contains(&cc) {
+                return Err(format!("cc {cc} is bound twice"));
             }
+            seen.push(cc);
         }
-        let turns = self
-            .button
-            .iter()
-            .any(|b| action_for_name(&b.command) == Some(Action::Page));
         for f in &self.fader {
-            if f.page == Page::Two && !turns {
-                return Err(format!(
-                    "cc {}: {:?} is on page 2, and no button turns the page",
-                    f.cc,
-                    f.knob.name()
-                ));
-            }
             // At load and not at play: the only other place to say it is
             // inside the frame loop, where one sweep says it 127 times.
             if !f.knob.is_on(params) {
@@ -422,13 +321,12 @@ const R_ROW: u8 = 64;
 /// is what [`crate::config::validate`] refuses a graph for.
 pub const ROW_BUTTONS: usize = 8;
 
-/// The tails of the Record and Solo rows, which every legal graph leaves
-/// dead — the inputs and the cameras stop short of them — so they are the
-/// select buttons no rig can claim, and these seven cost the transport
-/// nothing.
-pub(crate) const PAGE: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
-pub(crate) const FLIP_X: u8 = PAGE - 2;
-pub(crate) const FLIP_Y: u8 = PAGE - 1;
+/// The tails of the Record and Solo rows, which the rig leaves dead — the
+/// switchers and the cameras stop short of them — so they are the select
+/// buttons no rig can claim, and these seven cost the transport nothing.
+pub(crate) const SELECT: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
+pub(crate) const FLIP_X: u8 = SELECT - 2;
+pub(crate) const FLIP_Y: u8 = SELECT - 1;
 pub(crate) const REVERSE: u8 = FLIP_X - 1;
 const _: () = assert!(crate::config::cap(Node::Switcher) as u8 + R_ROW <= REVERSE);
 pub(crate) const CLUTCH: u8 = S_ROW + ROW_BUTTONS as u8 - 1;
@@ -536,12 +434,6 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
         // the one button whose job survives not knowing what any button does.
         button(46, "help"),
         button(44, "solo"),
-        // The seed, on play: what a monitor's loop starts from, on the
-        // button whose silkscreen says start. It lights while the focused
-        // monitor has a blob on the glass, so the panel says which of the
-        // two rigs that monitor is — a toggle with no indicator on a
-        // fullscreen display being a footgun.
-        button(41, "seed"),
         // The tempo, on the one pair the silkscreen groups. A step and not a
         // fader, so `--rate` stays where the piece starts rather than being
         // thrown to wherever a cap was left standing.
@@ -556,7 +448,7 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
         button(REVERSE, "reverse"),
         button(FLIP_X, "flip x"),
         button(FLIP_Y, "flip y"),
-        button(PAGE, "page"),
+        button(SELECT, "select"),
         button(FINER, "precision -"),
         button(COARSER, "precision +"),
         // The corner, findable by feel while the other hand is on the fader
@@ -568,23 +460,15 @@ fn nano_buttons(params: &Params) -> Vec<Button> {
 
 /// What the lamps say that the focus alone cannot. The caller owns every
 /// one of them.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Shown {
-    pub seed: Seed,
     pub flipped: [bool; 2],
+    /// Whether the focused monitor is on its switcher's program rather than
+    /// on its own camera direct — the one bit the select button turns, and a
+    /// latch with no lamp on a fullscreen display is a footgun.
+    pub program: bool,
     pub overlay: bool,
     pub solo: bool,
-}
-
-impl Default for Shown {
-    fn default() -> Shown {
-        Shown {
-            seed: Seed::Dark,
-            flipped: [false; 2],
-            overlay: false,
-            solo: false,
-        }
-    }
 }
 
 /// One thing off the wire. A knob or a button is a control change; a system
@@ -753,7 +637,6 @@ pub struct Midi {
     /// half a step either way.
     owed: [f32; Knob::ALL.len()],
     precision: Precision,
-    page: Page,
     /// One per entry of `map.button`: whether it is being held. A button is
     /// acted on when it goes down, so a surface whose buttons latch — the
     /// nanoKONTROL2 can be set either way — plays every other press. Cleared
@@ -816,7 +699,6 @@ impl Midi {
             standing: [None; 128],
             owed: [0.0; Knob::ALL.len()],
             precision: Precision::DEFAULT,
-            page: Page::One,
             held: vec![false; map.button.len()],
             map,
             snd: PathBuf::from(DEV_SND),
@@ -832,17 +714,6 @@ impl Midi {
     /// factory shipped it.
     pub fn map(&self) -> &Map {
         &self.map
-    }
-
-    pub fn page(&self) -> Page {
-        self.page
-    }
-
-    pub fn turn_page(&mut self) {
-        self.page = match self.page {
-            Page::One => Page::Two,
-            Page::Two => Page::One,
-        };
     }
 
     pub fn precision(&self) -> Precision {
@@ -982,10 +853,9 @@ impl Midi {
         let when = |on: bool, action| if on { self.lamp_of(action) } else { 0 };
         let mut want = Node::ALL.into_iter().fold(0, |want, node| {
             want | self.lamp_of(Action::Focus(node, focus.at(node)))
-        }) | when(shown.seed.lit(), Action::Seed)
-            | when(shown.overlay, Action::Overlay)
+        }) | when(shown.overlay, Action::Overlay)
             | when(shown.solo, Action::Solo)
-            | when(self.page == Page::Two, Action::Page);
+            | when(shown.program, Action::Select);
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
@@ -1059,12 +929,7 @@ impl Midi {
         // its page is hidden has still moved, and the knob it turns on the
         // other page must not be charged for that when the page comes back.
         let from = self.standing[usize::from(message.control)].replace(message.value);
-        if let Some(fader) = self
-            .map
-            .fader
-            .iter()
-            .find(|f| f.cc == message.control && f.page == self.page)
-        {
+        if let Some(fader) = self.map.fader.iter().find(|f| f.cc == message.control) {
             let steps = f32::from(message.value) - f32::from(from?);
             if self.clutched() {
                 return None;
@@ -1585,11 +1450,10 @@ mod tests {
     }
 
     #[test]
-    fn the_seed_lamp_says_which_rig_the_focused_monitor_is() {
-        // The panel is the only thing that says it: the two seeds look
-        // nothing alike on the glass, but which one a monitor is *on* is a
-        // question a hand asks before it presses, and a toggle that answers
-        // it only by changing the picture answers it too late.
+    fn the_select_lamp_says_which_input_the_focused_monitor_is_on() {
+        // The panel is the only thing that says it: which of the two a
+        // monitor is on is a question a hand asks before it presses, and a
+        // latch that answers only by changing the picture answers too late.
         let midi = Midi::new(
             Map::nano_kontrol2(&crate::config::instrument()),
             &crate::config::instrument(),
@@ -1601,55 +1465,23 @@ mod tests {
             midi.wanted(
                 focus,
                 Shown {
-                    seed: Seed::BLOB,
+                    program: true,
                     ..Shown::default()
                 }
             ) & !base,
-            crate::lamps::lamp(41),
-            "the seed is play on the factory map"
+            crate::lamps::lamp(SELECT),
+            "the select is the record row's last button on the factory map"
         );
-        // A blob of no light is not a blob. No config can load one — the
-        // load refuses it precisely so the two rigs have one spelling each —
-        // but the type can hold one, and a lamp reading the *variant* rather
-        // than the light would light PLAY over a monitor drawing nothing.
-        assert_eq!(
-            midi.wanted(
-                focus,
-                Shown {
-                    seed: Seed::WhiteBlob(0.0),
-                    ..Shown::default()
-                }
-            ),
-            base
-        );
-        // Any blob, not just the one the toggle brings back: a config may
-        // name its own level and the button is still what it is on.
-        assert_eq!(
-            midi.wanted(
-                focus,
-                Shown {
-                    seed: Seed::WhiteBlob(0.42),
-                    ..Shown::default()
-                }
-            ),
-            midi.wanted(
-                focus,
-                Shown {
-                    seed: Seed::BLOB,
-                    ..Shown::default()
-                }
-            )
-        );
-        // And a map that binds the seed nowhere lights nothing extra.
+        // And a map that binds the select nowhere lights nothing extra.
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
-        map.button.retain(|b| b.cc != 41);
+        map.button.retain(|b| b.cc != SELECT);
         let midi = Midi::new(map, &crate::config::instrument()).unwrap();
         let base = midi.wanted(focus, Shown::default());
         assert_eq!(
             midi.wanted(
                 focus,
                 Shown {
-                    seed: Seed::BLOB,
+                    program: true,
                     ..Shown::default()
                 }
             ),
@@ -1772,35 +1604,20 @@ mod tests {
         assert_eq!(
             map.fader,
             [
-                fader(1, Knob::Hue),
-                fader(2, Knob::Saturation),
-                fader(3, Knob::Brightness),
-                fader(4, Knob::Contrast),
-                fader(5, Knob::Gamma),
-                fader(6, Knob::Headroom),
+                fader(0, Knob::Hue),
+                fader(1, Knob::Saturation),
+                fader(2, Knob::Brightness),
+                fader(3, Knob::Contrast),
+                fader(4, Knob::Temperature),
+                fader(5, Knob::Sharpness),
+                fader(6, Knob::Period),
                 fader(7, Knob::Switcher),
                 fader(16, Knob::Zoom),
                 fader(17, Knob::Rotation),
-                fader(18, Knob::TranslateX),
-                fader(19, Knob::TranslateY),
-                fader(20, Knob::Gain),
-                fader(21, Knob::Bloom),
-                fader(22, Knob::ChromaBleed),
-                fader(23, Knob::Noise),
-                page_two(1, Knob::Temperature),
-                page_two(2, Knob::Sharpness),
-                page_two(16, Knob::GainR),
-                page_two(17, Knob::GainG),
-                page_two(18, Knob::GainB),
-                page_two(19, Knob::BloomRadius),
-                page_two(20, Knob::KeyThreshold),
-                page_two(21, Knob::KeySoftness),
-                page_two(22, Knob::KeyHue),
-                page_two(23, Knob::KeyTolerance),
-                page_two(6, Knob::Period),
-                page_two(7, Knob::Delay),
+                fader(18, Knob::Delay),
             ]
         );
+
         // The three select rows, one kind of node each and each as wide as
         // the graph. Written out rather than generated, so a row that slides
         // by one — or two kinds landing on one row — fails here rather than
@@ -1831,7 +1648,6 @@ mod tests {
                 button(42, "reset"),
                 button(46, "help"),
                 button(44, "solo"),
-                button(41, "seed"),
                 button(58, "rate -"),
                 button(59, "rate +"),
                 button(60, "snap"),
@@ -1840,18 +1656,21 @@ mod tests {
                 button(68, "reverse"),
                 button(69, "flip x"),
                 button(70, "flip y"),
-                button(71, "page"),
+                button(71, "select"),
                 button(37, "precision -"),
                 button(38, "precision +"),
                 button(39, "clutch"),
             ]
         );
-        // Fader 1 is dead: the rig has no handle for it.
-        assert!(!map.fader.iter().any(|f| f.cc == 0));
+        // The five rotaries past the third are dead: eleven handles on
+        // sixteen controls, so nothing is owed a second page.
+        for cc in 19..24 {
+            assert!(!map.fader.iter().any(|f| f.cc == cc), "rotary cc {cc}");
+        }
     }
 
     #[test]
-    fn the_delay_is_page_two_s_last_fader_where_the_graph_has_reach() {
+    fn the_delay_is_the_third_rotary_where_the_graph_has_reach() {
         let mut none = crate::config::instrument();
         none.delay = 0;
         assert!(!Map::nano_kontrol2(&none)
@@ -1861,7 +1680,7 @@ mod tests {
         let mut reach = crate::config::instrument();
         reach.delay = 4;
         let map = Map::nano_kontrol2(&reach);
-        assert_eq!(map.fader.last(), Some(&page_two(7, Knob::Delay)));
+        assert_eq!(map.fader.last(), Some(&fader(18, Knob::Delay)));
         assert!(Midi::new(map.clone(), &reach).is_ok());
         let why = Midi::new(map, &none)
             .err()
@@ -2018,82 +1837,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fader_s_page_is_read_from_the_file_and_is_one_unless_it_says() {
-        let map: Map = toml::from_str(
-            "device = \"nanoKONTROL\"\n\
-             [[fader]]\ncc = 0\nknob = \"hue\"\n\
-             [[fader]]\ncc = 0\nknob = \"noise\"\npage = 2\n\
-             [[button]]\ncc = 71\ncommand = \"page\"\n",
-        )
-        .unwrap();
-        assert_eq!(map.fader, [fader(0, Knob::Hue), page_two(0, Knob::Noise)]);
-        map.validate(&crate::config::instrument()).unwrap();
-        // The button has one lamp, so there are two pages and no third.
-        let why = toml::from_str::<Map>(
-            "device = \"nanoKONTROL\"\n[[fader]]\ncc = 0\nknob = \"hue\"\npage = 3\n",
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(why.contains("page 3"), "{why}");
-        assert!(toml::from_str::<Map>(
-            "device = \"nanoKONTROL\"\n[[fader]]\ncc = 0\nknob = \"hue\"\npage = 0\n"
-        )
-        .is_err());
-        // And the card says which page a knob is on, since the silkscreen
-        // cannot.
-        assert!(
-            map.card().contains("  fader 1      hue\n"),
-            "{}",
-            map.card()
-        );
-        assert!(
-            map.card().contains("  fader 1      noise (page 2)\n"),
-            "{}",
-            map.card()
-        );
-    }
-
-    #[test]
-    fn a_control_may_carry_one_knob_a_page_and_a_button_is_on_every_page() {
-        let widest = crate::config::instrument();
-        let mut map = Map::nano_kontrol2(&widest);
-        map.fader.push(page_two(4, Knob::Noise));
-        map.validate(&widest).unwrap();
-        map.fader.push(page_two(4, Knob::Bloom));
-        assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
-        // A button is not paged, so a fader on page 2 cannot share its
-        // number, whichever of the two the file names first.
-        let mut map = Map::nano_kontrol2(&widest);
-        map.fader.push(page_two(62, Knob::Noise));
-        assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
-        let mut map = Map::nano_kontrol2(&widest);
-        map.fader.insert(0, page_two(62, Knob::Noise));
-        assert!(map.validate(&widest).unwrap_err().contains("bound twice"));
-        // A knob on page 2 of a map with no button to turn the page is a
-        // knob nothing can reach, refused the way a select on equipment
-        // the graph has not got is.
-        let mut map = Map::nano_kontrol2(&widest);
-        map.fader.push(page_two(4, Knob::Noise));
-        map.button.retain(|b| b.command != "page");
-        let why = map.validate(&widest).unwrap_err();
-        assert!(why.contains("page 2") && why.contains("no button"), "{why}");
-        map.button.push(button(90, "page"));
-        map.validate(&widest).unwrap();
-    }
-
-    #[test]
-    fn the_page_button_is_lit_on_page_two() {
-        let (mut midi, _) = surface();
-        let focus = at(2, 1);
-        let lamp = crate::lamps::lamp(PAGE);
-        assert_eq!(midi.wanted(focus, Shown::default()) & lamp, 0);
-        midi.turn_page();
-        assert_eq!(midi.wanted(focus, Shown::default()) & lamp, lamp);
-        midi.turn_page();
-        assert_eq!(midi.wanted(focus, Shown::default()) & lamp, 0);
-    }
-
-    #[test]
     fn a_flip_button_is_lit_while_the_focused_camera_is_mirrored_that_way() {
         let (midi, _) = surface();
         let focus = at(2, 1);
@@ -2162,7 +1905,7 @@ mod tests {
 
     /// What one message on fader 3 — saturation, a travel of 4 — turns.
     fn turned(midi: &mut Midi, params: &Params, value: u8) -> Option<f32> {
-        match feed(midi, params, &cc(2, value))[..] {
+        match feed(midi, params, &cc(1, value))[..] {
             [] => None,
             [Action::Turn(Knob::Saturation, by)] => Some(by),
             ref other => panic!("{other:?}"),
@@ -2266,8 +2009,7 @@ mod tests {
         let mut params = crate::config::instrument();
         params.delay = 4;
         let mut midi = Midi::new(Map::nano_kontrol2(&params), &params).unwrap();
-        midi.turn_page();
-        let delay = |midi: &mut Midi, value: u8| match feed(midi, &params, &cc(7, value))[..] {
+        let delay = |midi: &mut Midi, value: u8| match feed(midi, &params, &cc(18, value))[..] {
             [] => None,
             [Action::Turn(Knob::Delay, by)] => Some(by),
             ref other => panic!("{other:?}"),
@@ -2283,28 +2025,9 @@ mod tests {
     }
 
     #[test]
-    fn a_page_turn_and_an_unplug_throw_nothing() {
+    fn an_unplug_throws_nothing() {
         let (mut midi, params) = surface();
         assert_eq!(turned(&mut midi, &params, 40), None);
-        assert_eq!(feed(&mut midi, &params, &cc(PAGE, 127)), [Action::Page]);
-        midi.turn_page();
-        // The same fader is sharpness's now, and it has not moved: the next
-        // message turns sharpness by the twenty steps, over its travel of 2.
-        assert!(matches!(
-            feed(&mut midi, &params, &cc(2, 60))[..],
-            [Action::Turn(Knob::Sharpness, by)] if (by - 20.0 / 127.0 * 0.5).abs() < 1e-6
-        ));
-        // A page-1 knob on a control page 2 binds nothing to is dead there —
-        // but the fader has still moved, and gamma is not charged for the
-        // whole of that when its page comes back: only for the step since.
-        assert_eq!(feed(&mut midi, &params, &cc(5, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(5, 127)), []);
-        midi.turn_page();
-        assert!((turned(&mut midi, &params, 61).unwrap() - 1.0 / 127.0).abs() < 1e-6);
-        assert!(matches!(
-            feed(&mut midi, &params, &cc(5, 126))[..],
-            [Action::Turn(Knob::Gamma, by)] if (by + 16f32.ln() / 4.0 / 127.0).abs() < 1e-6
-        ));
         // Unplugged, nothing can vouch for where the next surface's faders
         // stand, so its first word is where and not how far.
         midi.drop_port();
@@ -2381,13 +2104,13 @@ mod tests {
     #[test]
     fn a_button_acts_when_it_goes_down_and_not_when_it_comes_up() {
         let (mut midi, params) = surface();
-        // CC 41 is "play", bound to ";" — a toggle, so a surface that
-        // repeats while a finger rests on it would flip the seed back and
-        // forth under a hand that pressed once.
-        assert_eq!(feed(&mut midi, &params, &cc(41, 127)), [Action::Seed]);
-        assert_eq!(feed(&mut midi, &params, &cc(41, 127)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(41, 0)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(41, 127)), [Action::Seed]);
+        // The select is a latch, so a surface that repeats while a finger
+        // rests on it would flip a monitor back and forth under a hand that
+        // pressed once.
+        assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), [Action::Select]);
+        assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(SELECT, 0)), []);
+        assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), [Action::Select]);
     }
 
     #[test]
@@ -2444,7 +2167,7 @@ mod tests {
             feed(&mut midi, &params, &cc(FLIP_Y, 127)),
             [Action::Flip(Axis::Y)]
         );
-        assert_eq!(feed(&mut midi, &params, &cc(PAGE, 127)), [Action::Page]);
+        assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), [Action::Select]);
         assert_eq!(feed(&mut midi, &params, &cc(FINER, 127)), [Action::Finer]);
         assert_eq!(
             feed(&mut midi, &params, &cc(COARSER, 127)),
@@ -2514,10 +2237,10 @@ mod tests {
         // routinely arrives as two. The first message only places the
         // fader; the two after it turn saturation down by a quarter of its
         // travel and back up by half of that.
-        pipe.write_all(&[0xB0, 0x02, 0x7F, 0x02]).unwrap();
+        pipe.write_all(&[0xB0, 0x01, 0x7F, 0x01]).unwrap();
         pipe.flush().unwrap();
         std::thread::sleep(Duration::from_millis(50));
-        pipe.write_all(&[0x00, 0x02, 0x40]).unwrap();
+        pipe.write_all(&[0x00, 0x01, 0x40]).unwrap();
         pipe.flush().unwrap();
 
         let acted = wait_for(&mut midi, &params);

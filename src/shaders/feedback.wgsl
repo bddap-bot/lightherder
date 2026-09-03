@@ -6,44 +6,30 @@
 // scaled by everything between them. See feedback::Tap.
 struct Tap {
     // Rows of the uv -> uv map from a texel being written to the texel the
-    // camera saw there. See affine::sample_transform.
+    // camera saw there, the router output's mirror composed in. See
+    // affine::sample_transform.
     row0: vec4<f32>,
     row1: vec4<f32>,
     // rgb: routing x splitter x gain, per channel. a: source layer.
     weight: vec4<f32>,
-    // Source-uv steps for one bloom radius across (xy) and down (zw) the
-    // camera's image. See feedback::Tap.
-    halo: vec4<f32>,
-    // xy: source-uv step for one chroma-bleed offset along the scanline.
-    // z: the fraction of the light the lens scatters. w: padding.
-    bleed: vec4<f32>,
-    // The camera's keyer: x luma threshold, y softness, z chroma tolerance,
-    // w padding.
+    // The switcher's keyer: x luma threshold, y softness, zw padding.
     key: vec4<f32>,
-    // xyz: the RGB row measuring the key colour in a sample; all zero when
-    // the chroma key is off. See feedback::Tap.
-    keyvec: vec4<f32>,
 };
 
 struct Uniforms {
-    // xy: blob centre in uv. zw: blob radii in uv, already aspect-corrected.
-    blob: vec4<f32>,
     // Decodes RGB to luma and chroma, turns the chroma by hue and scales it
     // by saturation, and encodes back. See params::Colour::chroma_matrix.
     chroma: mat3x3<f32>,
-    // x: brightness. y: contrast. z: phosphor gamma. w: the blob's brightness.
+    // x: brightness. y: contrast. z: the amplifier's headroom, handed over
+    // rather than written here so the crate has one copy. w: padding.
     levels: vec4<f32>,
     // x: tap count. y: this monitor's own layer, for fs_present. z: the
     // first bank layer past `lower`. w: the first bank layer of `upper`.
     info: vec4<f32>,
-    // x: grain amplitude. y: the amplifier's headroom. z: frame counter.
-    // w: the unsharp mask, the front panel's sharpness knob.
+    // x: the unsharp mask, the front panel's sharpness knob. yzw: padding.
     analog: vec4<f32>,
     // xyz: FCC NTSC luma, handed over rather than written here so the crate
-    // has one copy of it. The weights sum to one, so adding the same amount
-    // to all three channels moves luma by exactly that and leaves the chroma
-    // subcarrier untouched — which is how the bleed puts one signal's colour
-    // on another's detail without a matrix.
+    // has one copy of it.
     luma: vec4<f32>,
     taps: array<Tap, 32>,
 };
@@ -72,7 +58,7 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VsOut {
 }
 
 // The monitor's front panel, in the order an analog signal meets it: chroma
-// decode, video amplifier, its rails, phosphor.
+// decode, video amplifier, its rails.
 fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
     let decoded = u.chroma * rgb;
 
@@ -89,16 +75,15 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
     // monitor to flat white — the half-float target has headroom the eye
     // never gets to see. Both arms are evaluated: the divide by a channel at
     // zero gives an infinity the select discards.
-    let h = u.analog.y;
+    let h = u.levels.z;
     let limited = select(
         h - h * h / (4.0 * amplified),
         amplified,
         amplified < vec3<f32>(0.5 * h),
     );
 
-    // A phosphor emits no negative light, and pow() of a negative is not a
-    // number, so the floor here is physics and hygiene at once.
-    return pow(max(limited, vec3<f32>(0.0)), vec3<f32>(u.levels.z));
+    // A phosphor emits no negative light, so the floor here is physics.
+    return max(limited, vec3<f32>(0.0));
 }
 
 // What one camera sees of one source monitor at one point — the sampling,
@@ -131,15 +116,6 @@ fn arm(uv: vec2<f32>, layer: i32, centre: vec3<f32>) -> vec3<f32> {
     return select(centre, seen_at(uv, layer), inside(uv));
 }
 
-// A cheap integer hash. The grain has to differ at every texel and every
-// frame and be the same on every run; nothing else about it matters.
-fn grain_at(pixel: vec2<u32>, frame: u32) -> f32 {
-    var h = pixel.x * 374761393u + pixel.y * 668265263u + frame * 2246822519u;
-    h = (h ^ (h >> 13u)) * 1274126177u;
-    h = h ^ (h >> 16u);
-    return f32(h) * (2.0 / 4294967296.0) - 1.0;
-}
-
 @fragment
 fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
     let p = vec3<f32>(in.uv, 1.0);
@@ -151,55 +127,19 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
         let src_uv = vec2<f32>(dot(tap.row0.xyz, p), dot(tap.row1.xyz, p));
         let layer = i32(tap.weight.a);
         let raw = seen_at(src_uv, layer);
-
-        // The lens scatters some of the light into a ring instead of
-        // focusing it. `mix`, not an add: a term that adds light is a term
-        // the loop multiplies. A four-point ring is a crude halo, but the
-        // loop turns and rescales it every pass, which is what fills it in.
-        //
-        // Applied per tap, and that costs nothing: every stage below is
-        // affine in the samples, and a camera's taps share one affine and one
-        // set of offsets, so blooming a splitter's two sources separately and
-        // blooming their blend give the same answer exactly.
-        let bloom = tap.bleed.z;
-        var halo = raw;
-        if bloom > 0.0 {
-            halo = 0.25
-                * (seen_at(src_uv + tap.halo.xy, layer)
-                    + seen_at(src_uv - tap.halo.xy, layer)
-                    + seen_at(src_uv + tap.halo.zw, layer)
-                    + seen_at(src_uv - tap.halo.zw, layer));
-        }
-        let lens = mix(raw, halo, bloom);
-
-        // Composite chroma has a fraction of luma's bandwidth, so the colour
-        // arrives smeared along the scanline while the detail does not: keep
-        // this point's luma, take the neighbourhood's colour. The same halo
-        // serves all three samples — it varies slowly by construction, which
-        // is what makes it a halo — so the lens is not re-run per sample.
-        var signal = lens;
-        if any(tap.bleed.xy != vec2<f32>(0.0)) {
-            let smeared = mix(
-                (raw + seen_at(src_uv + tap.bleed.xy, layer) + seen_at(src_uv - tap.bleed.xy, layer))
-                    / 3.0,
-                halo,
-                bloom,
-            );
-            signal = smeared + vec3<f32>(dot(u.luma.xyz, lens) - dot(u.luma.xyz, smeared));
-        }
+        var signal = raw;
 
         // The monitor's sharpness, an unsharp mask a texel wide on the signal
         // the switcher hands it. That signal is summed per fragment and never
         // re-read, so the mask is taken per tap from the bank texels, the
-        // neighbours' keyer verdicts taken as the centre's, and scaled by
-        // what the lens left of texel detail: the halo is smooth at that
-        // scale, so (1 - bloom) of it survives the mix. The arms are summed
-        // in pairs so four equal samples come back as exactly the centre.
+        // neighbours' keyer verdicts taken as the centre's. The arms are
+        // summed in pairs so four equal samples come back as exactly the
+        // centre.
         // Skipped at rest — four reads a texel on every tap of every monitor,
         // for nothing — and past the source's edge, where the centre is the
         // dark room and an arm that lands back inside would cut a dark rim
         // into whatever else lights the fragment.
-        let sharpness = u.analog.w;
+        let sharpness = u.analog.x;
         if sharpness > 0.0 && inside(src_uv) {
             let texel = 1.0 / vec2<f32>(textureDimensions(lower));
             let across = vec2<f32>(tap.row0.x, tap.row1.x) * texel.x;
@@ -207,35 +147,22 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
             let blurred = 0.25
                 * ((arm(src_uv + across, layer, raw) + arm(src_uv - across, layer, raw))
                     + (arm(src_uv + down, layer, raw) + arm(src_uv - down, layer, raw)));
-            signal += sharpness * (1.0 - bloom) * (raw - blurred);
+            signal += sharpness * (raw - blurred);
         }
 
         // The keyer, judged on the centre sample: what it gates is the
-        // path's whole hand-over, lens and bleed included, the way the gain
-        // scales it. The luma key passes everything at or above its
-        // threshold and finishes cutting one softness below it, so a
-        // threshold of zero is exactly inert — inside a loop, "almost
-        // passes" is a ratchet. The chroma key is its mirror: a sample
-        // carrying more of the key colour than the tolerance is cut. The
-        // epsilon keeps smoothstep's edges apart at zero softness, where it
-        // would otherwise divide by nothing.
+        // switcher's whole hand-over, the way the gain scales it. It passes
+        // everything at or above its threshold and finishes cutting one
+        // softness below it, so a threshold of zero is exactly inert —
+        // inside a loop, "almost passes" is a ratchet. The epsilon keeps
+        // smoothstep's edges apart at zero softness, where it would
+        // otherwise divide by nothing.
         let soft = max(tap.key.y, 1e-4);
-        let alpha = smoothstep(tap.key.x - soft, tap.key.x, dot(u.luma.xyz, raw))
-            * (1.0 - smoothstep(tap.key.z, tap.key.z + soft, dot(tap.keyvec.xyz, raw)));
+        let alpha = smoothstep(tap.key.x - soft, tap.key.x, dot(u.luma.xyz, raw));
         fed_back += signal * tap.weight.rgb * alpha;
     }
 
-    // Grain from the sensors and cables feeding this monitor, in before the
-    // front panel because that is where it joins the signal. Monochrome: it
-    // is luma noise, and the chroma knobs do nothing to grey.
-    let grain = u.analog.x * grain_at(vec2<u32>(in.pos.xy), u32(u.analog.z));
-
-    let d = length((in.uv - u.blob.xy) / u.blob.zw);
-    let blob = u.levels.a * exp(-d * d);
-
-    // The knobs are on the monitor, not on the cameras, so they colour
-    // everything the monitor displays — the white blob included.
-    return vec4<f32>(front_panel(fed_back + vec3<f32>(blob + grain)), 1.0);
+    return vec4<f32>(front_panel(fed_back), 1.0);
 }
 
 @fragment

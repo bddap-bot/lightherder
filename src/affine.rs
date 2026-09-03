@@ -69,33 +69,23 @@ impl Affine2 {
 }
 
 /// Framing of a camera pointed at a monitor: how the monitor's image is
-/// magnified, turned and shifted on its way back onto that monitor.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
+/// magnified and turned on its way back onto that monitor. The rig's two
+/// freedoms and no others — a camera on a shaft slides and turns, and
+/// nothing on it pans.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Framing {
     /// >1 magnifies the image once per pass.
     pub zoom: f32,
     /// Counter-clockwise on screen, radians per pass.
     pub rotation: f32,
-    /// Shift per pass, in screen units where the monitor is 1.0 tall.
-    pub translate: [f32; 2],
-    /// Mirror the framed picture left for right.
-    pub flip_x: bool,
-    /// Mirror the framed picture top for bottom.
-    pub flip_y: bool,
 }
 
 impl Framing {
-    /// A camera that reproduces its subject exactly: no zoom, no turn, no
-    /// shift, no mirror. The serde default, so a config can frame only the
-    /// cameras that move.
+    /// A camera that reproduces its subject exactly: no zoom, no turn.
     pub fn identity() -> Framing {
         Framing {
             zoom: 1.0,
             rotation: 0.0,
-            translate: [0.0, 0.0],
-            flip_x: false,
-            flip_y: false,
         }
     }
 }
@@ -112,17 +102,14 @@ impl Axis {
     pub const ALL: [Axis; 2] = [Axis::X, Axis::Y];
 }
 
-impl Framing {
-    pub fn flip(&mut self, axis: Axis) {
-        let flip = match axis {
-            Axis::X => &mut self.flip_x,
-            Axis::Y => &mut self.flip_y,
-        };
-        *flip = !*flip;
-    }
-
-    pub fn flipped(&self) -> [bool; 2] {
-        [self.flip_x, self.flip_y]
+/// The mirror a router output puts on what it hands a monitor, as a map from
+/// the texel being written to the texel the unmirrored output had there. Its
+/// own inverse, which is what lets one composition serve both directions.
+pub fn flip_uv(flipped: [bool; 2]) -> Affine2 {
+    let mirror = |on: bool| if on { -1.0 } else { 1.0 };
+    Affine2 {
+        m: [[mirror(flipped[0]), 0.0], [0.0, mirror(flipped[1])]],
+        t: [f32::from(flipped[0]), f32::from(flipped[1])],
     }
 }
 
@@ -157,22 +144,9 @@ pub fn screen_to_uv(aspect: f32) -> Affine2 {
 /// height, so rotation stays circular on a non-square monitor and the framing
 /// numbers mean the same thing at any resolution.
 ///
-/// The flips are the last stage of the framing, so they mirror the picture the
-/// camera has already panned, turned and zoomed: a pan right on a flipped
-/// path lands left. A mirror is its own inverse, so the forward flip is the
-/// one composed here.
 pub fn sample_transform(framing: &Framing, aspect: f32) -> Affine2 {
     let inv_zoom = 1.0 / framing.zoom;
-    let mirror = |on: bool| if on { -1.0 } else { 1.0 };
     uv_to_screen(aspect)
-        .then(&Affine2::scale(
-            mirror(framing.flip_x),
-            mirror(framing.flip_y),
-        ))
-        .then(&Affine2::translation(
-            -framing.translate[0],
-            -framing.translate[1],
-        ))
         .then(&Affine2::rotation(-framing.rotation))
         .then(&Affine2::scale(inv_zoom, inv_zoom))
         .then(&screen_to_uv(aspect))
@@ -180,18 +154,6 @@ pub fn sample_transform(framing: &Framing, aspect: f32) -> Affine2 {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn a_flip_by_axis_is_the_field_of_that_name_in_the_order_written() {
-        let mut framing = super::Framing::identity();
-        framing.flip(super::Axis::X);
-        assert!(framing.flip_x && !framing.flip_y);
-        assert_eq!(framing.flipped(), [true, false]);
-        framing.flip(super::Axis::Y);
-        framing.flip(super::Axis::X);
-        assert!(!framing.flip_x && framing.flip_y);
-        assert_eq!(framing.flipped(), [false, true]);
-    }
-
     use super::*;
     use std::f32::consts::FRAC_PI_2;
 
@@ -199,24 +161,15 @@ mod tests {
         (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5
     }
 
-    fn framing(zoom: f32, rotation: f32, translate: [f32; 2]) -> Framing {
-        Framing {
-            zoom,
-            rotation,
-            translate,
-            ..Framing::identity()
-        }
+    fn framing(zoom: f32, rotation: f32) -> Framing {
+        Framing { zoom, rotation }
     }
 
     #[test]
-    fn a_flip_mirrors_the_framed_picture_about_the_centre() {
-        let flipped = |flip_x, flip_y| Framing {
-            flip_x,
-            flip_y,
-            ..Framing::identity()
-        };
+    fn a_flip_mirrors_the_output_about_the_centre() {
+        let flipped = |x, y| flip_uv([x, y]);
         // The right edge shows what was at the left, at the same height.
-        let t = sample_transform(&flipped(true, false), 16.0 / 9.0);
+        let t = flipped(true, false);
         assert!(
             close(t.apply([1.0, 0.3]), [0.0, 0.3]),
             "{:?}",
@@ -224,35 +177,18 @@ mod tests {
         );
         assert!(close(t.apply([0.5, 0.5]), [0.5, 0.5]));
         // The bottom shows what was at the top.
-        let t = sample_transform(&flipped(false, true), 16.0 / 9.0);
+        let t = flipped(false, true);
         assert!(
             close(t.apply([0.3, 1.0]), [0.3, 0.0]),
             "{:?}",
             t.apply([0.3, 1.0])
         );
         // Both is a half turn.
-        let t = sample_transform(&flipped(true, true), 1.0);
+        let t = flipped(true, true);
         assert!(close(t.apply([1.0, 1.0]), [0.0, 0.0]));
-    }
-
-    #[test]
-    fn the_flip_mirrors_the_pan_and_not_the_other_way_round() {
-        // The left edge shows the spot that was a quarter right of centre:
-        // panned to the half, then flipped. Had the mirror come first the
-        // left edge would read from 1.25, off the monitor.
-        let t = sample_transform(
-            &Framing {
-                translate: [0.25, 0.0],
-                flip_x: true,
-                ..Framing::identity()
-            },
-            1.0,
-        );
-        assert!(
-            close(t.apply([0.0, 0.5]), [0.75, 0.5]),
-            "{:?}",
-            t.apply([0.0, 0.5])
-        );
+        // Its own inverse, which is what lets one mirror serve both ways.
+        assert!(close(t.apply(t.apply([0.3, 0.8])), [0.3, 0.8]));
+        assert!(close(flip_uv([false, false]).apply([0.3, 0.8]), [0.3, 0.8]));
     }
 
     #[test]
@@ -281,7 +217,7 @@ mod tests {
     }
     #[test]
     fn identity_framing_samples_where_it_draws() {
-        let t = sample_transform(&framing(1.0, 0.0, [0.0, 0.0]), 16.0 / 9.0);
+        let t = sample_transform(&framing(1.0, 0.0), 16.0 / 9.0);
         for p in [[0.3, 0.7], [0.0, 0.0], [1.0, 1.0]] {
             assert!(close(t.apply(p), p), "{:?} -> {:?}", p, t.apply(p));
         }
@@ -289,14 +225,14 @@ mod tests {
 
     #[test]
     fn zoom_pulls_the_sample_toward_the_centre() {
-        let t = sample_transform(&framing(2.0, 0.0, [0.0, 0.0]), 1.0);
+        let t = sample_transform(&framing(2.0, 0.0), 1.0);
         assert!(close(t.apply([1.0, 0.5]), [0.75, 0.5]));
         assert!(close(t.apply([0.5, 0.5]), [0.5, 0.5]));
     }
 
     #[test]
     fn positive_rotation_turns_the_image_counter_clockwise() {
-        let t = sample_transform(&framing(1.0, FRAC_PI_2, [0.0, 0.0]), 1.0);
+        let t = sample_transform(&framing(1.0, FRAC_PI_2), 1.0);
         // The right edge shows what was at the bottom (v = 1), which is the
         // bottom sweeping round to the right: counter-clockwise on screen.
         assert!(
@@ -307,38 +243,8 @@ mod tests {
     }
 
     #[test]
-    fn translation_moves_the_image_with_its_sign() {
-        // Centre now shows what used to be a quarter-width to its left, i.e.
-        // the image slid right.
-        let t = sample_transform(&framing(1.0, 0.0, [0.25, 0.0]), 1.0);
-        assert!(close(t.apply([0.5, 0.5]), [0.25, 0.5]));
-
-        // And up, which is v downward: screen units are y-up and texture v is
-        // not, so this pins a flip a uv-space pan would get backwards.
-        let t = sample_transform(&framing(1.0, 0.0, [0.0, 0.25]), 1.0);
-        assert!(
-            close(t.apply([0.5, 0.5]), [0.5, 0.75]),
-            "{:?}",
-            t.apply([0.5, 0.5])
-        );
-    }
-
-    #[test]
-    fn pan_is_not_scaled_by_the_zoom_it_composes_with() {
-        // Pan is what the camera does before it magnifies, so a quarter-width
-        // pan is a quarter width on screen at any zoom. Composing the two the
-        // other way round would put the centre at 0.625 instead.
-        let t = sample_transform(&framing(2.0, 0.0, [0.25, 0.0]), 1.0);
-        assert!(
-            close(t.apply([0.75, 0.5]), [0.5, 0.5]),
-            "{:?}",
-            t.apply([0.75, 0.5])
-        );
-    }
-
-    #[test]
     fn rotation_accounts_for_a_non_square_monitor() {
-        let t = sample_transform(&framing(1.0, FRAC_PI_2, [0.0, 0.0]), 2.0);
+        let t = sample_transform(&framing(1.0, FRAC_PI_2), 2.0);
         // A quarter turn of a 2:1 monitor overflows its own height; a naive
         // uv-space rotation would land at v = 1.0 instead.
         assert!(

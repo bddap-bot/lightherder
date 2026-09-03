@@ -16,7 +16,7 @@
 
 use crate::affine::Framing;
 use crate::input::Input;
-use crate::params::{Camera, Character, Key, Monitor, Params, Plug};
+use crate::params::{Camera, Key, Monitor, Params, Plug};
 
 /// In [`Params::cameras`] order. A and B are on the rotating, sliding shafts,
 /// one per structure; the third watches the rotating monitor alone.
@@ -56,8 +56,6 @@ impl Screen {
 const SEED_KEY: Key = Key {
     threshold: 0.35,
     softness: 0.08,
-    hue: 0.0,
-    tolerance: Key::TOLERANT,
 };
 
 /// The four M/Es, each a crossfade from its In1 to its In2. C and D are the
@@ -188,6 +186,26 @@ impl Rig {
         self.shows(Screen::ALL[m])
     }
 
+    /// Whether monitor `m` is on its switcher's program rather than on its
+    /// own camera direct. The rotating monitor has no select and is never on
+    /// a program: it shows camera B, always.
+    pub fn on_program(&self, m: usize) -> bool {
+        self.selects.get(m) == Some(&Select::Program)
+    }
+
+    /// Turn monitor `m`'s router select over, and whether there was one to
+    /// turn: the rotating monitor has none.
+    pub fn select(&mut self, m: usize) -> bool {
+        let Some(select) = self.selects.get_mut(m) else {
+            return false;
+        };
+        *select = match select {
+            Select::Direct => Select::Program,
+            Select::Program => Select::Direct,
+        };
+        true
+    }
+
     /// The switcher's source reversal, and its momentary cut: In1 and In2
     /// trade places, which is the crossfade run to the other end of its
     /// travel. Its own inverse, so a cut held and let go leaves the rig
@@ -237,11 +255,8 @@ impl Rig {
             framing: Framing {
                 zoom: 0.994,
                 rotation,
-                ..Framing::identity()
             },
             gain,
-            character: Character::CLEAN,
-            key: Key::OFF,
             look: Screen::ALL.map(|screen| glass(cam, screen)).to_vec(),
             delay: 0,
             divider: 1,
@@ -411,7 +426,6 @@ mod tests {
         );
         assert_eq!(plug.key, SEED_KEY);
         assert!(plug.key.threshold > 0.0 && plug.key.softness > 0.0);
-        assert!(params.cameras.iter().all(|c| c.key == Key::OFF));
     }
 
     #[test]

@@ -17,22 +17,20 @@
 
 use bytemuck::Zeroable;
 
-use crate::affine::{sample_transform, Framing};
-use crate::params::{Camera, Character, Key, Params};
+use crate::affine::{flip_uv, sample_transform, Framing};
+use crate::params::{Camera, Key, Params};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
 const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// Radius of the white blob, in screen units where the monitor is 1.0 tall.
-/// The blob and not the seed: a camera-seeded monitor has a seed and no
-/// spot, so the geometry belongs to the one variant that draws one.
-const BLOB_RADIUS: f32 = 0.06;
-
-/// Where the blob sits, in the same screen units. Off-centre on purpose: a
-/// radially symmetric spot at the centre is a fixed point of rotation, so a
-/// centred one would make the rotation knob do nothing visible.
-const BLOB_CENTRE: [f32; 2] = [0.25, 0.0];
+/// Twice display white, where every monitor's video amplifier runs out of
+/// rails. The knee is at half of it, so it lands exactly on 1.0: nothing a
+/// monitor can actually show is touched, and the reserve above white — which
+/// the half-float bank exists to keep — compresses onto 2.0 rather than
+/// running. A real amplifier always has rails and no knob on the rig turns
+/// them, so this is a constant of the instrument.
+pub const HEADROOM: f32 = 2.0;
 
 /// Most taps one monitor can be fed by. Sized for comfort: all-to-all with
 /// every camera the board can select is five taps, so this leaves room for
@@ -235,23 +233,10 @@ struct Tap {
     /// rgb: routing weight x splitter weight x camera gain, per channel.
     /// a: the source monitor's layer index.
     weight: [f32; 4],
-    /// The lens: xy and zw are the source-uv steps for one bloom radius
-    /// across and down the camera's image. Worked out here rather than in
-    /// the shader because the tap's affine already carries the camera's zoom
-    /// and turn, and a lens's halo is round in the camera's image — not in
-    /// the monitor's, which the camera may be viewing at any angle.
-    halo: [f32; 4],
-    /// xy: the source-uv step for one chroma-bleed offset along the
-    /// scanline, mapped the same way. zw: the fraction of the light the lens
-    /// scatters, and padding.
-    bleed: [f32; 4],
-    /// The camera's keyer: x luma threshold, y softness, z chroma tolerance,
-    /// w padding.
+    /// The switcher's keyer on the way in: x luma threshold, y softness, zw
+    /// padding. Every tap through a camera is unkeyed — the rig keys on the
+    /// switcher — so this is the seed's tap and nothing else.
     key: [f32; 4],
-    /// xyz: the RGB row measuring the key colour in a sample — zeroed when
-    /// the tolerance stands at its off rail, so the default keys nothing
-    /// however bright the loop runs. See `params::key_weights`.
-    keyvec: [f32; 4],
 }
 
 /// Per-monitor uniforms, flipped by hand in `shaders/feedback.wgsl`, which
@@ -260,23 +245,18 @@ struct Tap {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    /// xy: blob centre in uv. zw: blob radii in uv, already aspect-corrected.
-    blob: [f32; 4],
     /// Columns, each padded to 16 bytes: that is what a WGSL `mat3x3<f32>`
     /// is, and it is column-major where [`Colour::chroma_matrix`] is not.
     chroma: [[f32; 4]; 3],
-    /// x: brightness. y: contrast. z: gamma. w: the white blob's brightness.
+    /// x: brightness. y: contrast. zw: padding.
     levels: [f32; 4],
     /// x: tap count. y: this monitor's own layer, for the present pass.
     /// zw: where the bank splits round the slab this pass writes — the
     /// first layer past the lower view, and the first layer of the upper
     /// one.
     info: [f32; 4],
-    /// The analog stage's per-monitor lanes, which are not [`Character`]'s
-    /// fields — those are per camera and ride the taps. x: grain amplitude,
-    /// summed over the cameras the switcher routes here. y: the amplifier's
-    /// headroom. z: a frame counter, so the grain moves. w: the unsharp
-    /// mask, [`Monitor::sharpness`].
+    /// x: the unsharp mask, [`crate::params::Monitor::sharpness`]. yzw:
+    /// padding.
     analog: [f32; 4],
     /// NTSC luma, from [`crate::params::luma_row`]. Passed rather than
     /// written into the shader so there is one copy of it in the crate.
@@ -532,14 +512,7 @@ impl Feedback {
         }
     }
 
-    /// Where the white blob lands, in uv — the same spot on every monitor
-    /// that has one. A blob-seeded loop is driven from here, so anything
-    /// measuring the instrument needs to know it.
-    pub fn blob_uv(&self) -> [f32; 2] {
-        crate::affine::screen_to_uv(self.aspect()).apply(BLOB_CENTRE)
-    }
-
-    pub(crate) fn aspect(&self) -> f32 {
+    pub fn aspect(&self) -> f32 {
         self.width as f32 / self.height as f32
     }
 
@@ -642,7 +615,7 @@ impl Feedback {
         assert_eq!(
             Shape::of(params),
             self.shape,
-            "the graph's monitors, inputs and reach are baked into the bank at creation"
+            "the graph's monitors and reach are baked into the bank at creation"
         );
         // Everything else the tap flattening assumes — row lengths, weight
         // signs, the tap cap — is the loader's contract, re-asserted here so
@@ -654,20 +627,19 @@ impl Feedback {
             panic!("unvalidated params reached the GPU: {why}");
         }
         let aspect = self.aspect();
-        let blob = self.blob_uv();
 
         // Framings move every frame; the affine per camera is the same for
         // all of its taps, so it is worked out once.
-        let framings: Vec<[[f32; 3]; 2]> = params
+        let framings: Vec<crate::affine::Affine2> = params
             .cameras
             .iter()
-            .map(|camera| sample_transform(&camera.framing, aspect).rows())
+            .map(|camera| sample_transform(&camera.framing, aspect))
             .collect();
-        // What a tap with no camera samples through. An input is plugged
-        // into the switcher, so nothing frames it: it arrives square on and
-        // fills the monitor, which is the identity framing carried through
-        // the same transform every camera's is.
-        let square_on = sample_transform(&Framing::identity(), aspect).rows();
+        // What the seed's tap samples through. It is plugged into the
+        // switcher, so nothing frames it: it arrives square on and fills the
+        // monitor, which is the identity framing carried through the same
+        // transform every camera's is.
+        let square_on = sample_transform(&Framing::identity(), aspect);
         // The slab after the newest holds the one frame in the ring older
         // than any delay reaches, so it is the one a pass may draw on.
         let next = (self.newest + 1) % self.shape.history;
@@ -677,99 +649,45 @@ impl Feedback {
         );
 
         for (m, monitor) in params.monitors.iter().enumerate() {
+            // The router output's mirror, applied to the texel being written
+            // rather than to any one source: what it flips is the whole
+            // picture this monitor is handed, which is what a flip on an
+            // output is.
+            let mirror = flip_uv(monitor.flip);
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
             for (through, src, w) in taps_of(params, m, self.newest, self.pass) {
-                // There is no camera between the switcher and an input, so
+                // There is no camera between the switcher and the seed, so
                 // every stage a camera would have takes its identity and the
                 // layer arrives as itself. Its key is the switcher's own,
-                // which is where the rig keys at all.
-                let (rows, gain, character, key) = match through {
-                    Through::Camera(c) => {
-                        let camera = &params.cameras[c];
-                        (&framings[c], camera.gain, camera.character, camera.key)
-                    }
-                    Through::Seed => (&square_on, [1.0; 3], Character::CLEAN, params.input.key),
+                // which is where this rig keys at all.
+                let (framing, gain, key) = match through {
+                    Through::Camera(c) => (&framings[c], params.cameras[c].gain, Key::OFF),
+                    Through::Seed => (&square_on, [1.0; 3], params.input.key),
                 };
-                // A step of `r` screen units across and up the camera's
-                // image, carried through the tap's affine into the source
-                // it samples. Screen units are height-normalised, so the
-                // horizontal one is narrower by the aspect — the same
-                // correction the seed spot makes to stay round.
-                let step = |r: f32| {
-                    let (dx, dy) = (r / aspect, r);
-                    [
-                        rows[0][0] * dx,
-                        rows[1][0] * dx,
-                        rows[0][1] * dy,
-                        rows[1][1] * dy,
-                    ]
-                };
-                // Only the scanline direction is kept for the bleed:
-                // composite band-limits chroma in time, and time along a
-                // scanline is across the camera's image.
-                let halo = step(character.bloom_radius);
-                let bleed = step(character.chroma_bleed);
-                // The chroma key is disarmed outright at its rail rather
-                // than out-thresholded: the smoothstep alone would hold off
-                // frames, but a loop signal can run past white and project
-                // past any finite tolerance.
-                let keyvec = if key.tolerance >= Key::TOLERANT {
-                    [0.0; 3]
-                } else {
-                    crate::params::key_weights(key.hue)
-                };
+                let rows = mirror.then(framing).rows();
                 taps[count] = Tap {
                     row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
                     row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
                     weight: [w * gain[0], w * gain[1], w * gain[2], src as f32],
-                    halo,
-                    bleed: [bleed[0], bleed[1], character.bloom, 0.0],
-                    key: [key.threshold, key.softness, key.tolerance, 0.0],
-                    keyvec: [keyvec[0], keyvec[1], keyvec[2], 0.0],
+                    key: [key.threshold, key.softness, 0.0, 0.0],
                 };
                 count += 1;
             }
 
-            // Every camera the switcher routes here contributes its own
-            // grain, scaled by how much of it this monitor is shown. Its
-            // splitter does not come into it: the grain is the sensor's and
-            // the cable's, added after the glass. Summed in quadrature,
-            // because two sensors are two independent noise sources and
-            // adding their amplitudes would overstate the pair by 40%. The
-            // sends are not in the sum: an input arrives already a signal,
-            // down no cable of this graph's, and grains nothing.
-            let grain: f32 = params
-                .cameras
-                .iter()
-                .enumerate()
-                .map(|(c, camera)| (params.route(m, c) * camera.character.noise).powi(2))
-                .sum::<f32>()
-                .sqrt();
-
             let chroma = monitor.colour.chroma_matrix();
             let uniforms = Uniforms {
-                // The blob is round on screen, so its uv radius is narrower
-                // on the axis the monitor is wider on.
-                blob: [blob[0], blob[1], BLOB_RADIUS / aspect, BLOB_RADIUS],
                 chroma: std::array::from_fn(|col| {
                     [chroma[0][col], chroma[1][col], chroma[2][col], 0.0]
                 }),
                 levels: [
                     monitor.colour.brightness,
                     monitor.colour.contrast,
-                    monitor.colour.gamma,
-                    monitor.seed.brightness(),
+                    HEADROOM,
+                    0.0,
                 ],
                 info: [count as f32, (split + m) as f32, split as f32, above as f32],
-                analog: [
-                    grain,
-                    monitor.headroom,
-                    // Past 2^24 an f32 skips integers. This copy is the grain's
-                    // alone, so its wrap costs a repeat nobody will see.
-                    (self.pass % (1 << 24)) as f32,
-                    monitor.sharpness,
-                ],
+                analog: [monitor.sharpness, 0.0, 0.0, 0.0],
                 luma: {
                     let l = crate::params::luma_row();
                     [l[0], l[1], l[2], 0.0]

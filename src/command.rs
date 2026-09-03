@@ -25,12 +25,7 @@ pub enum Action {
     /// instrument has a panel of them and no display to point at one with,
     /// and the knob a hand wants back is the knob that hand was just on.
     ResetLastKnob,
-    /// Swap the focused monitor's seed for the other kind: a white blob on
-    /// the glass, or dark glass holding only what the switcher paints on it.
-    /// A button and not a knob, because the two are not two settings of one
-    /// thing — and the dark rig's level is already played on the switcher.
-    Seed,
-    /// Blank every monitor, so the loops restart from the seeds alone.
+    /// Blank every monitor, so the loops restart from the seed alone.
     Clear,
     /// Which way a press moves the tempo — passes a second, the speed the
     /// piece plays at. How far, and the range it moves inside, are
@@ -48,8 +43,14 @@ pub enum Action {
     Cut(Edge),
     /// A press, since pressing it again is the reverse of the reverse.
     Reverse,
-    Page,
-    /// A latch on a button with a lamp, not a knob: a flip is on or off.
+    /// The focused monitor's router select: its own camera direct, or its
+    /// switcher's program. A latch with a lamp, since one of the two is what
+    /// the monitor is on and nothing else says which. The rotating monitor
+    /// has no select, and the button is dead on it.
+    Select,
+    /// A latch on a button with a lamp, not a knob: a flip is on or off. On
+    /// the focused monitor, because the rig mirrors a router output and not
+    /// a camera.
     Flip(Axis),
     /// Halve or double what a full throw of a fader moves.
     Finer,
@@ -87,11 +88,6 @@ struct Command {
 const COMMANDS: &[Command] = &[
     cmd("blank", Action::Clear, "blank every monitor"),
     cmd("reset", Action::Reset, "reset every knob"),
-    cmd(
-        "seed",
-        Action::Seed,
-        "the focused monitor's seed: a white blob or dark glass",
-    ),
     cmd(
         "reset 1",
         Action::ResetLastKnob,
@@ -134,19 +130,19 @@ const COMMANDS: &[Command] = &[
         "the focused monitor's two strongest sources trade levels",
     ),
     cmd(
-        "page",
-        Action::Page,
-        "the faders and rotaries on their other page of knobs; lit on page 2",
+        "select",
+        Action::Select,
+        "the focused monitor on its switcher's program or its own camera; lit on program",
     ),
     cmd(
         "flip x",
         Action::Flip(Axis::X),
-        "mirror the focused camera left for right; lit while it is",
+        "mirror the focused monitor left for right; lit while it is",
     ),
     cmd(
         "flip y",
         Action::Flip(Axis::Y),
-        "mirror the focused camera top for bottom; lit while it is",
+        "mirror the focused monitor top for bottom; lit while it is",
     ),
     cmd(
         "precision -",
@@ -279,14 +275,13 @@ mod tests {
     fn the_commands_do_what_they_say() {
         assert_eq!(action_for_name("blank"), Some(Action::Clear));
         assert_eq!(action_for_name("reset"), Some(Action::Reset));
-        assert_eq!(action_for_name("seed"), Some(Action::Seed));
         assert_eq!(action_for_name("solo"), Some(Action::Solo));
         assert_eq!(action_for_name("help"), Some(Action::Overlay));
         assert_eq!(action_for_name("snap"), Some(Action::Screencap));
         assert_eq!(action_for_name("record"), Some(Action::Record(Edge::Down)));
         assert_eq!(action_for_name("cut"), Some(Action::Cut(Edge::Down)));
         assert_eq!(action_for_name("reverse"), Some(Action::Reverse));
-        assert_eq!(action_for_name("page"), Some(Action::Page));
+        assert_eq!(action_for_name("select"), Some(Action::Select));
         assert_eq!(action_for_name("precision -"), Some(Action::Finer));
         assert_eq!(action_for_name("precision +"), Some(Action::Coarser));
         assert_eq!(action_for_name("clutch"), Some(Action::Clutch(Edge::Down)));

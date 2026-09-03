@@ -52,7 +52,7 @@ impl Present {
         target: &wgpu::Texture,
         monitors: &Feedback,
         solo: Option<usize>,
-        overlay: Option<(&crate::overlay::Overlay, crate::midi::Page)>,
+        overlay: Option<&crate::overlay::Overlay>,
     ) {
         let tiles = tiles(monitors.monitors(), solo);
         let (cols, rows) = grid(tiles.len());
@@ -101,8 +101,8 @@ impl Present {
                 pass.set_bind_group(0, monitors.bind_group(), &[monitors.uniform_offset(m)]);
                 pass.draw(0..3, 0..1);
             }
-            if let Some((overlay, page)) = overlay {
-                overlay.draw(&mut pass, target_size, page);
+            if let Some(overlay) = overlay {
+                overlay.draw(&mut pass, target_size);
             }
         }
         queue.submit([encoder.finish()]);

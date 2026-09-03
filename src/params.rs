@@ -1,11 +1,9 @@
 //! The knobs on the instrument. No windowing, no GPU — a MIDI surface drives
 //! the same values a fader does.
 
-use std::fmt;
-
 use serde::{Deserialize, Deserializer};
 
-use crate::affine::Framing;
+use crate::affine::{Axis, Framing};
 use crate::input::Input;
 use crate::rig::Rig;
 
@@ -30,9 +28,6 @@ pub struct Colour {
     /// gain has not got. See the shader for why that is the distinction that
     /// matters.
     pub contrast: f32,
-    /// Phosphor transfer exponent. Above 1 the dark end is crushed and the
-    /// trails thin out; below 1 they lift and smear.
-    pub gamma: f32,
     /// Where the monitor's white sits on the Planckian locus, as a distance
     /// from D65 in mired — reciprocal megakelvin, the unit the locus is close
     /// to even in, where kelvin bunches every warm white into a corner of
@@ -133,7 +128,6 @@ impl Colour {
         saturation: 1.0,
         brightness: 0.0,
         contrast: 1.0,
-        gamma: 1.0,
         temperature: 0.0,
     };
 
@@ -167,137 +161,42 @@ impl Colour {
     }
 }
 
-/// What one camera's signal path does to the light on its way to the
-/// switcher: the lens in front of the sensor, and the composite cable behind
-/// it. It lives on the camera rather than globally because a graph's paths
-/// are not alike — one loop can glow and smear while its neighbour stays
-/// clean, which is most of what makes two structures read as two.
-///
-/// The monitor's end of the same story is its [`Monitor::headroom`]: these
-/// are the signal's imperfections, that one is the amplifier's.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Character {
-    /// Fraction of the light the lens scatters into a halo instead of
-    /// focusing. Redistributed, not added: a term that adds light is a term
-    /// the loop multiplies, and a few passes later it owns the monitor.
-    pub bloom: f32,
-    /// Radius of that halo in the camera's own image, in screen units where
-    /// the monitor is 1.0 tall. In the camera's image, so a camera that
-    /// zooms or turns takes its halo with it.
-    pub bloom_radius: f32,
-    /// How far colour smears along the scanline, same units. Composite video
-    /// carries chroma on a subcarrier with a fraction of luma's bandwidth,
-    /// so the colour arrives blurred while the detail it belongs to does not.
-    pub chroma_bleed: f32,
-    /// Amplitude of the grain the sensor and the cable add. Signed and
-    /// monochrome — it is luma noise — and added whether or not any light
-    /// arrived, which is what keeps a loop that has decayed to black from
-    /// staying there.
-    pub noise: f32,
-}
-
-impl Character {
-    /// A perfect lens, unlimited bandwidth and no grain: the path hands on
-    /// exactly what the camera saw. The radius is not zero because it is
-    /// only an aim point — nothing reads it until `bloom` is turned up, and
-    /// a radius of zero would make that knob look broken.
-    pub const CLEAN: Character = Character {
-        bloom: 0.0,
-        bloom_radius: 0.03,
-        chroma_bleed: 0.0,
-        noise: 0.0,
-    };
-}
-
-impl Default for Character {
-    fn default() -> Character {
-        Character::CLEAN
-    }
-}
-
-/// The keyer on one camera's path: what this camera refuses to hand on. Two
-/// keys that multiply — a luma key that cuts the dark, and a chroma key that
-/// cuts one colour. It sits with the gain, the framing and the character
-/// because it is one more thing a signal path does to the light, and the
-/// camera is the only signal path this instrument has: what the switcher
-/// hands a monitor from outside it hands over whole.
-///
-/// Every camera watches monitors, so every key here is a gate on the
-/// feedback itself — the dark of a trail refused a trip round, or one hue of
-/// it — which is its own instrument to play.
+/// The keyer on the switcher: what it refuses of the light coming in. A luma
+/// key, which is what lifts a lit subject off an unlit room — the rig keys
+/// on the switcher and nowhere else, so this is the whole of it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Key {
     /// The luma the key passes in full. Cutting is complete one `softness`
     /// below it, so at 0 the key passes everything exactly — which is what
     /// lets 0 be the off state without a switch beside the knob.
     pub threshold: f32,
-    /// Width of both keys' soft edge — luma units on the luma key, and the
-    /// same number reused on the chroma projection, whose scale is close
-    /// enough that a second knob would be sprawl. Zero is a hard edge; the
+    /// Width of the key's soft edge, in luma units. Zero is a hard edge; the
     /// shader keeps its smoothstep legal on its own.
     pub softness: f32,
-    /// The colour the chroma key cuts, as a phase of the chroma subcarrier —
-    /// the one way this instrument names a colour, so a key colour is a hue
-    /// and not three more knobs.
-    pub hue: f32,
-    /// How much of the key colour a pixel may carry before it is cut,
-    /// measured as its chroma's projection onto the key hue. At the top of
-    /// its travel — [`Key::TOLERANT`], past anything a frame can carry — the
-    /// key is off, which is what makes it the default.
-    pub tolerance: f32,
 }
 
 impl Key {
-    /// Above the widest chroma projection an RGB frame can carry (0.633, at
-    /// the saturated corner nearest the I axis), so a tolerance at this rail
-    /// cuts nothing — and the tap flattening zeroes the key vector there
-    /// outright, so even an over-bright loop signal is passed.
-    pub const TOLERANT: f32 = 0.7;
-
-    /// Both keys off: the path hands on everything, exactly. The softness is
-    /// not zero for the same reason `Character::CLEAN`'s bloom radius is not:
-    /// it is only an aim point while the keys are off, and a default of zero
-    /// would land the threshold knob hard-edged on its first press.
+    /// The key off: the switcher hands on everything, exactly. A threshold of
+    /// zero passes every luma there is, which is what lets zero be the off
+    /// state without a switch beside it.
     pub const OFF: Key = Key {
         threshold: 0.0,
         softness: 0.05,
-        hue: 0.0,
-        tolerance: Key::TOLERANT,
     };
-}
-
-impl Default for Key {
-    fn default() -> Key {
-        Key::OFF
-    }
-}
-
-/// The RGB row that measures "how much of hue `h`" a pixel's chroma carries:
-/// the two subcarrier axes blended at the hue's phase. Composed in f64 from
-/// [`DECODE`] like the chroma matrix, so the crate keeps one copy of the
-/// axes — and grey lands on exactly zero, both rows summing to nothing.
-pub fn key_weights(hue: f32) -> [f32; 3] {
-    let (sin, cos) = (hue as f64).sin_cos();
-    std::array::from_fn(|i| (cos * DECODE[1][i] + sin * DECODE[2][i]) as f32)
 }
 
 /// One camera in the graph: what it sees, how it frames it, and how much of
 /// the light it hands on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Camera {
-    /// How this camera's view is magnified, turned and shifted relative to
-    /// what it looks at.
+    /// How this camera's view is magnified and turned relative to what it
+    /// looks at.
     pub framing: Framing,
-    /// Per-channel gain applied to everything this camera sees. On a monitor
-    /// seeded by its cameras, an effective per-monitor gain below 1.0 dies
-    /// out and above 1.0 blooms; with a blob on the glass the loop settles
-    /// instead, brighter the closer to 1.0. The channels differ to colour
-    /// the trails.
+    /// Per-channel gain applied to everything this camera sees: the loss down
+    /// the cable and through the lens, which is what makes a loop settle
+    /// rather than run. The channels differ to colour the trails. Nothing on
+    /// the rig turns one, so nothing here does either.
     pub gain: [f32; 3],
-    /// What this path does to the light besides scale it.
-    pub character: Character,
-    /// What this path refuses to hand on.
-    pub key: Key,
     /// The beam splitter in front of the lens: how much of each monitor this
     /// camera sees. `[1.0]`-style one-hots are a camera aimed straight at one
     /// monitor; two non-zero entries are a camera looking through
@@ -306,7 +205,7 @@ pub struct Camera {
     /// Monitors, and nothing else. A camera here is a camera on a stand in a
     /// room of monitors, so the only things in front of its lens are glass
     /// and light already going round; light from outside arrives where a
-    /// switcher takes it, on [`Params::routing`]. That is what makes every
+    /// switcher takes it, on [`Params::send`]. That is what makes every
     /// camera recursive by construction rather than by convention.
     pub look: Vec<f32>,
     /// The frame delay unit on this camera's cable: how many passes old the
@@ -336,10 +235,6 @@ impl Params {
     pub const MAX_DELAY: u32 = 30;
 }
 
-fn unity_gain() -> [f32; 3] {
-    [1.0; 3]
-}
-
 /// One camera on one monitor with every stage doing nothing to the light —
 /// the graph [`Knob::identity`] reads each knob's neutral value out of.
 ///
@@ -351,9 +246,7 @@ fn identity_graph() -> Params {
     let mut params = crate::config::instrument();
     for camera in &mut params.cameras {
         camera.framing = Framing::identity();
-        camera.gain = unity_gain();
-        camera.character = Character::CLEAN;
-        camera.key = Key::OFF;
+        camera.gain = [1.0; 3];
         camera.delay = 0;
         camera.divider = 1;
     }
@@ -369,95 +262,14 @@ fn identity_graph() -> Params {
     params
 }
 
-/// What lights one monitor from outside the loop it is already in.
-///
-/// A sum type and not a level with an off value, because the two are
-/// different rigs rather than two settings of one: a blob on the glass is
-/// light *entering* the graph, and a monitor without one holds only what the
-/// switcher paints on it. A level can only tell those apart by a magic zero
-/// nothing names — which is why `config::validate` refuses a blob of no
-/// light rather than letting it be the dark rig spelled a second way. And
-/// the dark rig's level is already played elsewhere, on the switcher's
-/// crosspoints and the gains behind them, which is why this costs the
-/// surface a button and not a fader.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Seed {
-    /// A soft white spot on the glass at this brightness, which is above
-    /// zero: the classic way to start a loop, since one with gain below 1.0
-    /// and nothing entering it decays to black. Where the blob sits and how
-    /// wide it is belong to [`crate::feedback`], the only place that draws
-    /// it.
-    WhiteBlob(f32),
-    /// No light of its own: the glass is dark until the switcher paints
-    /// something on it, and what it paints — cameras, external inputs, or a
-    /// mix — is the crosspoints' business rather than the seed's. Named for
-    /// the glass and not for what lands on it, because a monitor lit by a
-    /// test pattern is as seedless as one lit by a camera.
-    Dark,
-}
-
-impl Seed {
-    /// A blob at the brightness every preset that has one runs at — the one
-    /// copy of that number, and what the toggle brings back. A config that
-    /// named its own level does not get it back by pressing the button
-    /// twice: a toggle is not an undo.
-    pub const BLOB: Seed = Seed::WhiteBlob(0.10);
-
-    /// The brightest a blob may be: display white. A spot brighter than the
-    /// monitor can show is one the amplifier's rail bends on the way in,
-    /// which is a level nobody chose.
-    pub const BRIGHTEST: f32 = 1.0;
-
-    /// The other kind — the whole of what the button does.
-    pub const fn toggled(self) -> Seed {
-        match self {
-            Seed::WhiteBlob(_) => Seed::Dark,
-            Seed::Dark => Seed::BLOB,
-        }
-    }
-
-    /// What the shader adds at the spot. Dark glass adds nothing there: every
-    /// photon on it arrived through the taps, like every other photon going
-    /// round.
-    pub const fn brightness(self) -> f32 {
-        match self {
-            Seed::WhiteBlob(brightness) => brightness,
-            Seed::Dark => 0.0,
-        }
-    }
-
-    /// Whether this monitor puts light of its own on the glass — the one bit
-    /// the surface's lamp reads. Off the level rather than off the variant,
-    /// so a lamp cannot claim a blob the shader is not drawing.
-    pub fn lit(self) -> bool {
-        self.brightness() > 0.0
-    }
-}
-
-impl fmt::Display for Seed {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Seed::WhiteBlob(brightness) => write!(f, "white blob {brightness:.3}"),
-            Seed::Dark => write!(f, "dark"),
-        }
-    }
-}
-
-/// One monitor in the graph: its front panel and what lights it.
+/// One monitor in the graph: its front panel, and the mirror the router
+/// output puts on what it is fed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Monitor {
     pub colour: Colour,
-    /// What lights this monitor's loop from outside it.
-    pub seed: Seed,
-    /// Where this monitor's video amplifier runs out of rails. The signal is
-    /// untouched below half of it and bends asymptotically onto it above, so
-    /// a loop driven past unity gain compresses into a structure instead of
-    /// clipping the whole monitor to flat white — which is the difference
-    /// between an analog feedback rig and a runaway multiply.
-    ///
-    /// A real amplifier always has rails, so there is no setting that turns
-    /// this off, and [`Monitor::KNEE_AT_WHITE`] is not one pretending to be.
-    pub headroom: f32,
+    /// Whether this monitor's router output is mirrored left for right and
+    /// top for bottom, in [`Axis`] order.
+    pub flip: [bool; 2],
     /// The unsharp mask on the front panel: how much of the difference
     /// between a texel and the mean of its four neighbours is added back.
     /// Zero is the stage skipped outright, so a rested knob is exactly
@@ -469,21 +281,16 @@ impl Default for Monitor {
     fn default() -> Self {
         Monitor {
             colour: Colour::NEUTRAL,
-            seed: Seed::Dark,
-            headroom: Monitor::KNEE_AT_WHITE,
+            flip: [false; 2],
             sharpness: 0.0,
         }
     }
 }
 
 impl Monitor {
-    /// Twice display white. The knee is at half the headroom, so it lands
-    /// exactly on 1.0: nothing a monitor can actually show is touched, and
-    /// the reserve above white — which the half-float bank exists to keep —
-    /// compresses onto 2.0 rather than running. That reserve is a real
-    /// change from before this rail existed, and it is the point of it: the
-    /// loop is bounded now, at every setting of every other knob.
-    pub const KNEE_AT_WHITE: f32 = 2.0;
+    pub fn flip(&mut self, axis: Axis) {
+        self.flip[axis as usize] = !self.flip[axis as usize];
+    }
 }
 
 /// The whole instrument for one frame: every camera, every monitor, and the
@@ -591,36 +398,20 @@ impl Focus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Knob {
+    /// The camera's slide along its shaft, which is what a zoom of the image
+    /// is at this end. The lens's own zoom is a setting of its own and not
+    /// this one — see #48.
     Zoom,
+    /// The camera's turn about its shaft.
     Rotation,
-    TranslateX,
-    TranslateY,
-    /// All three channels at once, rigidly.
-    Gain,
-    GainR,
-    GainG,
-    GainB,
-    /// The lens's scatter, and how wide it scatters.
-    Bloom,
-    BloomRadius,
-    ChromaBleed,
-    Noise,
     /// The frame delay unit on the camera's cable, in whole frames.
     Delay,
-    /// The keyer: the luma it demands, the edge both keys blend over, and
-    /// the colour the chroma key cuts with how much of it to tolerate.
-    KeyThreshold,
-    KeySoftness,
-    KeyHue,
-    KeyTolerance,
     Hue,
     Saturation,
     Brightness,
     Contrast,
-    Gamma,
     Temperature,
     Sharpness,
-    Headroom,
     /// How far the focused switcher stands toward its In2: 0 is In1 whole, 1
     /// is In2 whole. The routing is these four and the four selects, and
     /// nothing else.
@@ -708,32 +499,16 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 27] = [
+    pub const ALL: [Knob; 11] = [
         Knob::Zoom,
         Knob::Rotation,
-        Knob::TranslateX,
-        Knob::TranslateY,
-        Knob::Gain,
-        Knob::GainR,
-        Knob::GainG,
-        Knob::GainB,
-        Knob::Bloom,
-        Knob::BloomRadius,
-        Knob::ChromaBleed,
-        Knob::Noise,
         Knob::Delay,
-        Knob::KeyThreshold,
-        Knob::KeySoftness,
-        Knob::KeyHue,
-        Knob::KeyTolerance,
         Knob::Hue,
         Knob::Saturation,
         Knob::Brightness,
         Knob::Contrast,
-        Knob::Gamma,
         Knob::Temperature,
         Knob::Sharpness,
-        Knob::Headroom,
         Knob::Switcher,
         Knob::Period,
     ];
@@ -745,29 +520,13 @@ impl Knob {
         match self {
             Knob::Zoom => "zoom",
             Knob::Rotation => "rotation",
-            Knob::TranslateX => "pan x",
-            Knob::TranslateY => "pan y",
-            Knob::Gain => "loop gain",
-            Knob::GainR => "red gain",
-            Knob::GainG => "green gain",
-            Knob::GainB => "blue gain",
-            Knob::Bloom => "bloom",
-            Knob::BloomRadius => "bloom radius",
-            Knob::ChromaBleed => "chroma bleed",
-            Knob::Noise => "noise",
             Knob::Delay => "delay",
-            Knob::KeyThreshold => "key threshold",
-            Knob::KeySoftness => "key softness",
-            Knob::KeyHue => "key hue",
-            Knob::KeyTolerance => "key tolerance",
             Knob::Hue => "hue",
             Knob::Saturation => "saturation",
             Knob::Brightness => "brightness",
             Knob::Contrast => "contrast",
-            Knob::Gamma => "gamma",
             Knob::Temperature => "temperature",
             Knob::Sharpness => "sharpness",
-            Knob::Headroom => "headroom",
             Knob::Switcher => "switcher",
             Knob::Period => "period",
         }
@@ -777,66 +536,16 @@ impl Knob {
         Knob::ALL.into_iter().find(|knob| knob.name() == name)
     }
 
-    /// Whether the knob is a value of the graph or a reading of other knobs.
-    /// The rigid gain is the only one of the latter: it reads as the mean of
-    /// the three channel knobs and turns all three, so it is a reading rather
-    /// than a field. Anything walking the graph's *values* wants the fields,
-    /// and would otherwise name a knob no config can write when a channel is
-    /// at fault. Not the same fact as [`Params::knob_mut`]'s reach: the
-    /// delay and the period own fields too, counts that are no `f32`, so a
-    /// walk over the fields goes through [`Params::set`] and never `knob_mut`.
-    pub const fn owns_a_field(self) -> bool {
-        !matches!(self, Knob::Gain)
-    }
-
-    /// Whether turning one of these knobs moves a value the other reads.
-    ///
-    /// True of a knob and itself, and of the rigid gain and each of its three
-    /// channels, which write the very same three floats — so a fader on one
-    /// of them is holding a knob the other has just moved, and a reset of
-    /// either has to let go of both. Not true of two channels: red and green
-    /// are separate floats and a fader on one still agrees with its knob
-    /// after the other moves.
-    ///
-    /// The one place this crate says which knobs overlap, which is what
-    /// [`Params::reset`] asks.
-    pub const fn shares_a_field_with(self, other: Knob) -> bool {
-        use Knob::{Gain, GainB, GainG, GainR};
-        self as u8 == other as u8
-            || matches!(
-                (self, other),
-                (Gain, GainR | GainG | GainB) | (GainR | GainG | GainB, Gain)
-            )
-    }
-
     /// Which of a [`Focus`]'s indices the knob reads.
     pub const fn side(self) -> Side {
         match self {
-            Knob::Zoom
-            | Knob::Rotation
-            | Knob::TranslateX
-            | Knob::TranslateY
-            | Knob::Gain
-            | Knob::GainR
-            | Knob::GainG
-            | Knob::GainB
-            | Knob::Bloom
-            | Knob::BloomRadius
-            | Knob::ChromaBleed
-            | Knob::Noise
-            | Knob::Delay
-            | Knob::KeyThreshold
-            | Knob::KeySoftness
-            | Knob::KeyHue
-            | Knob::KeyTolerance => Side::Camera,
+            Knob::Zoom | Knob::Rotation | Knob::Delay => Side::Camera,
             Knob::Hue
             | Knob::Saturation
             | Knob::Brightness
             | Knob::Contrast
-            | Knob::Gamma
             | Knob::Temperature
-            | Knob::Sharpness
-            | Knob::Headroom => Side::Monitor,
+            | Knob::Sharpness => Side::Monitor,
             Knob::Switcher | Knob::Period => Side::Switcher,
         }
     }
@@ -882,38 +591,12 @@ impl Knob {
             Knob::Zoom => Limit::Ratio(0.25, 4.0),
             // Spinning one way for long enough must not run the number away.
             Knob::Rotation => Limit::Wrap,
-            Knob::TranslateX | Knob::TranslateY => Limit::Clamp(-1.0, 1.0),
-            Knob::Gain | Knob::GainR | Knob::GainG | Knob::GainB => Limit::Clamp(0.0, 1.2),
-            // A lens cannot scatter more light than it was given, and past
-            // 1.0 the mix extrapolates away from the image it is blurring.
-            Knob::Bloom => Limit::Clamp(0.0, 1.0),
-            // A halo a quarter of the monitor high is already most of the
-            // screen once the loop has run it round a few times.
-            Knob::BloomRadius | Knob::ChromaBleed => Limit::Clamp(0.0, 0.25),
-            // Grain is added every pass and then fed back, so it compounds:
-            // a tenth of full scale per pass is already snow.
-            Knob::Noise => Limit::Clamp(0.0, 0.25),
-            // Luma runs 0 to 1 in a frame; the loop's reserve above white is
-            // not something a keyer has any business waiting for.
-            Knob::KeyThreshold => Limit::Clamp(0.0, 1.0),
-            // A quarter of the scale is already a fog, not an edge.
-            Knob::KeySoftness => Limit::Clamp(0.0, 0.25),
-            // The top rail is the off state — see [`Key::TOLERANT`].
-            Knob::KeyTolerance => Limit::Clamp(0.0, Key::TOLERANT),
             // A phase: it comes back round instead of running away.
-            Knob::Hue | Knob::KeyHue => Limit::Wrap,
+            Knob::Hue => Limit::Wrap,
             Knob::Saturation | Knob::Contrast => Limit::Clamp(0.0, 4.0),
             // Potent inside a loop, so the rails are close: a tenth of a unit
             // added every pass floods the monitor to white in under a second.
             Knob::Brightness => Limit::Clamp(-0.5, 0.5),
-            // Zero would flatten every level to 1.0, and below it
-            // `pow(0, gamma)` is an infinity — the monitor's corners are
-            // exactly 0 whenever the seed does not reach them, and one pass
-            // later the chroma matrix turns that infinity into a NaN, which
-            // never leaves a loop that feeds itself. The floor sits well
-            // above either, because a phosphor curve worth playing lives
-            // nowhere near the rails.
-            Knob::Gamma => Limit::Ratio(0.25, 4.0),
             // Candlelight to open shade, in mired from D65; both ends well
             // inside the 1667 K to 25 000 K the locus fit is good for.
             Knob::Temperature => Limit::Clamp(-100.0, 340.0),
@@ -921,10 +604,6 @@ impl Knob {
             // the travel is fivefold on it every pass; past that the loop
             // shows its grain and nothing else.
             Knob::Sharpness => Limit::Clamp(0.0, 2.0),
-            // Zero would divide by it. The bottom of the range squeezes the
-            // whole picture into the darkest eighth, which is a sound worth
-            // having; the top is well clear of anything a monitor displays.
-            Knob::Headroom => Limit::Ratio(0.125, 8.0),
             Knob::Period => Limit::Whole(crate::rig::MAX_PERIOD),
             // A crossfade stands between its two inputs and nowhere else.
             Knob::Switcher => Limit::Clamp(0.0, 1.0),
@@ -996,72 +675,32 @@ impl Params {
     }
 
     /// Through [`Params::place`] rather than by writing the field, so the
-    /// rails and the wrap live in one place; the rigid gain is the one knob
-    /// that is not a field, and goes as a step so its three channels slide.
+    /// rails and the wrap live in one place.
     fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
-        if knob == Knob::Gain {
-            self.nudge(knob, value - self.knob(knob, focus), focus);
-        } else {
-            self.place(knob, value, focus);
-        }
+        self.place(knob, value, focus);
     }
 
-    /// Put `knob` back where its stage does nothing to the light.
-    ///
-    /// Every *field* the knob shares, rather than the knob itself, and that
-    /// is the whole reason this is not `set(knob, knob.identity())`. The
-    /// rigid gain is a reading of three floats and setting it slides all
-    /// three by one step, which [`rigid_gain_step`] clamps to the tightest
-    /// channel's remaining travel — so on a panel with red already on its
-    /// 1.2 rail a reset of the loop gain moves nothing at all, and says it
-    /// did. And a mean of 1.0 with the channel offsets left on is still a
-    /// stage that tints the light, which is not what identity means.
-    ///
-    /// Each field goes through [`Params::set`], so the rails, the wrap and
-    /// the reachability a fader has are unchanged.
+    /// Put `knob` back where its stage does nothing to the light. Through
+    /// [`Params::set`], so the rails and the wrap are unchanged.
     pub fn reset(&mut self, knob: Knob, focus: Focus) {
-        for field in Knob::ALL {
-            if field.owns_a_field() && knob.shares_a_field_with(field) {
-                self.set(field, field.identity(), focus);
-            }
-        }
+        self.set(knob, knob.identity(), focus);
     }
 
-    /// Where `knob` is standing. The rigid gain reads as the mean of its
-    /// three channels, which is the number its step slides: setting it to
-    /// that mean is what leaves the colour offsets alone.
-    ///
-    /// Every index is one the caller has already landed inside this graph,
-    /// the send's included — see [`Knob::is_on`].
+    /// Where `knob` is standing. Every index is one the caller has already
+    /// landed inside this graph — see [`Knob::is_on`].
     pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         match knob {
             Knob::Zoom => cam.framing.zoom,
             Knob::Rotation => cam.framing.rotation,
-            Knob::TranslateX => cam.framing.translate[0],
-            Knob::TranslateY => cam.framing.translate[1],
-            Knob::Gain => cam.gain.iter().sum::<f32>() / 3.0,
-            Knob::GainR => cam.gain[0],
-            Knob::GainG => cam.gain[1],
-            Knob::GainB => cam.gain[2],
-            Knob::Bloom => cam.character.bloom,
-            Knob::BloomRadius => cam.character.bloom_radius,
-            Knob::ChromaBleed => cam.character.chroma_bleed,
-            Knob::Noise => cam.character.noise,
             Knob::Delay => cam.delay as f32,
-            Knob::KeyThreshold => cam.key.threshold,
-            Knob::KeySoftness => cam.key.softness,
-            Knob::KeyHue => cam.key.hue,
-            Knob::KeyTolerance => cam.key.tolerance,
             Knob::Hue => mon.colour.hue,
             Knob::Saturation => mon.colour.saturation,
             Knob::Brightness => mon.colour.brightness,
             Knob::Contrast => mon.colour.contrast,
-            Knob::Gamma => mon.colour.gamma,
             Knob::Temperature => mon.colour.temperature,
             Knob::Sharpness => mon.sharpness,
-            Knob::Headroom => mon.headroom,
             Knob::Period => self.rig.periods[focus.switcher] as f32,
             Knob::Switcher => self.rig.switchers[focus.switcher],
         }
@@ -1070,17 +709,6 @@ impl Params {
     /// Turn `knob` by `delta` of its own step. Past a rail the rest of the
     /// step is dropped.
     pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
-        // The rigid gain knob is the one that is not a single value: clamp its
-        // step once against the tightest channel, so hitting the rail slides
-        // all three together instead of flattening the colour offsets.
-        if knob == Knob::Gain {
-            let ends = knob.limit(self).ends();
-            let step = rigid_gain_step(&self.cameras[focus.camera].gain, delta, ends);
-            for channel in [Knob::GainR, Knob::GainG, Knob::GainB] {
-                self.nudge(channel, step, focus);
-            }
-            return;
-        }
         let limit = knob.limit(self);
         let to = limit.valued(limit.stepped(self.knob(knob, focus)) + delta);
         self.place(knob, to, focus);
@@ -1111,39 +739,19 @@ impl Params {
         }
     }
 
-    /// Every index is one the caller has already landed inside this graph,
-    /// the send's included — see [`Knob::is_on`].
+    /// Every index is one the caller has already landed inside this graph —
+    /// see [`Knob::is_on`].
     fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
-        // One match rather than a branch on the side and a match inside each:
-        // the crosspoint reads both indices, so there is no side to branch on
-        // first, and the two `unreachable!` arms that split cost bought are
-        // gone with it.
         match knob {
             Knob::Zoom => &mut self.cameras[focus.camera].framing.zoom,
             Knob::Rotation => &mut self.cameras[focus.camera].framing.rotation,
-            Knob::TranslateX => &mut self.cameras[focus.camera].framing.translate[0],
-            Knob::TranslateY => &mut self.cameras[focus.camera].framing.translate[1],
-            Knob::GainR => &mut self.cameras[focus.camera].gain[0],
-            Knob::GainG => &mut self.cameras[focus.camera].gain[1],
-            Knob::GainB => &mut self.cameras[focus.camera].gain[2],
-            Knob::Bloom => &mut self.cameras[focus.camera].character.bloom,
-            Knob::BloomRadius => &mut self.cameras[focus.camera].character.bloom_radius,
-            Knob::ChromaBleed => &mut self.cameras[focus.camera].character.chroma_bleed,
-            Knob::Noise => &mut self.cameras[focus.camera].character.noise,
-            Knob::KeyThreshold => &mut self.cameras[focus.camera].key.threshold,
-            Knob::KeySoftness => &mut self.cameras[focus.camera].key.softness,
-            Knob::KeyHue => &mut self.cameras[focus.camera].key.hue,
-            Knob::KeyTolerance => &mut self.cameras[focus.camera].key.tolerance,
             Knob::Hue => &mut self.monitors[focus.monitor].colour.hue,
             Knob::Saturation => &mut self.monitors[focus.monitor].colour.saturation,
             Knob::Brightness => &mut self.monitors[focus.monitor].colour.brightness,
             Knob::Contrast => &mut self.monitors[focus.monitor].colour.contrast,
-            Knob::Gamma => &mut self.monitors[focus.monitor].colour.gamma,
             Knob::Temperature => &mut self.monitors[focus.monitor].colour.temperature,
             Knob::Sharpness => &mut self.monitors[focus.monitor].sharpness,
-            Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
             Knob::Switcher => &mut self.rig.switchers[focus.switcher],
-            Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
             Knob::Delay | Knob::Period => unreachable!("nudge() rounds a count to whole steps"),
         }
     }
@@ -1154,43 +762,29 @@ impl Params {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         format!(
-            "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
-             bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  delay {}/{}  \
-             key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
+            "cam {}/{}: zoom {:.3}  rot {:+.3}  delay {}/{}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             gamma {:.3}  temp {:+.1}  sharp {:.3}  headroom {:.3}  seed {}  \
-             shows {:.3} of cam {}\n\
+             temp {:+.1}  sharp {:.3}  flip {:?}  {}  shows {:.3} of cam {}\n\
              sw {}/{}: switcher {:.3}  period {}",
             focus.camera + 1,
             self.cameras.len(),
             cam.framing.zoom,
             cam.framing.rotation,
-            cam.framing.translate[0],
-            cam.framing.translate[1],
-            cam.gain[0],
-            cam.gain[1],
-            cam.gain[2],
-            cam.character.bloom,
-            cam.character.bloom_radius,
-            cam.character.chroma_bleed,
-            cam.character.noise,
             cam.delay,
             self.delay,
-            cam.key.threshold,
-            cam.key.softness,
-            cam.key.hue,
-            cam.key.tolerance,
             focus.monitor + 1,
             self.monitors.len(),
             mon.colour.hue,
             mon.colour.saturation,
             mon.colour.brightness,
             mon.colour.contrast,
-            mon.colour.gamma,
             mon.colour.temperature,
             mon.sharpness,
-            mon.headroom,
-            mon.seed,
+            mon.flip,
+            match self.rig.on_program(focus.monitor) {
+                true => "program",
+                false => "direct",
+            },
             self.route(focus.monitor, focus.camera),
             focus.camera + 1,
             focus.switcher + 1,
@@ -1199,15 +793,6 @@ impl Params {
             self.rig.periods[focus.switcher],
         )
     }
-}
-
-fn rigid_gain_step(gain: &[f32; 3], delta: f32, (low, high): (f32, f32)) -> f32 {
-    let travel = gain
-        .iter()
-        .map(|c| if delta >= 0.0 { high - c } else { c - low })
-        .fold(f32::INFINITY, f32::min)
-        .max(0.0);
-    delta.abs().min(travel) * delta.signum()
 }
 
 /// Into `(-pi, pi]`, so a knob spun in one direction never runs away.
@@ -1295,7 +880,7 @@ mod tests {
             params.set(knob, knob.identity(), focus);
             assert_eq!(params.knob(knob, focus), knob.identity(), "{knob:?}");
         }
-        assert_eq!(ratios, [Knob::Zoom, Knob::Gamma, Knob::Headroom]);
+        assert_eq!(ratios, [Knob::Zoom]);
     }
 
     #[test]
@@ -1354,23 +939,12 @@ mod tests {
         }
         let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
         assert_eq!(cam.framing.zoom, 4.0);
-        assert_eq!(cam.gain, [1.2; 3]);
-        assert_eq!(cam.framing.translate, [1.0, 1.0]);
-        assert_eq!(cam.character.bloom, 1.0);
-        assert_eq!(cam.character.bloom_radius, 0.25);
-        assert_eq!(cam.character.chroma_bleed, 0.25);
-        assert_eq!(cam.character.noise, 0.25);
-        assert_eq!(cam.key.threshold, 1.0);
-        assert_eq!(cam.key.softness, 0.25);
-        assert_eq!(cam.key.tolerance, Key::TOLERANT);
-        assert_eq!(mon.headroom, 8.0);
+        assert_eq!(cam.delay, params.delay);
         assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.switchers[0], 1.0);
-        let mon = &params.monitors[0];
         assert_eq!(mon.colour.saturation, 4.0);
         assert_eq!(mon.colour.brightness, 0.5);
         assert_eq!(mon.colour.contrast, 4.0);
-        assert_eq!(mon.colour.gamma, 4.0);
         assert_eq!(mon.colour.temperature, 340.0);
         assert_eq!(mon.sharpness, 2.0);
 
@@ -1381,20 +955,12 @@ mod tests {
         }
         let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
         assert_eq!(cam.framing.zoom, 0.25);
-        assert_eq!(cam.gain, [0.0; 3]);
-        assert_eq!(cam.framing.translate, [-1.0, -1.0]);
-        assert_eq!(cam.character.bloom, 0.0);
-        assert_eq!(cam.character.bloom_radius, 0.0);
-        assert_eq!(cam.character.chroma_bleed, 0.0);
-        assert_eq!(cam.character.noise, 0.0);
-        assert_eq!(cam.key.threshold, 0.0);
-        assert_eq!(cam.key.softness, 0.0);
-        assert_eq!(cam.key.tolerance, 0.0);
-        assert_eq!(mon.headroom, 0.125);
+        assert_eq!(cam.delay, 0);
+        assert_eq!(params.rig.periods[0], 0);
+        assert_eq!(params.rig.switchers[0], 0.0);
         assert_eq!(mon.colour.saturation, 0.0);
         assert_eq!(mon.colour.brightness, -0.5);
         assert_eq!(mon.colour.contrast, 0.0);
-        assert_eq!(mon.colour.gamma, 0.25);
         assert_eq!(mon.colour.temperature, -100.0);
         assert_eq!(mon.sharpness, 0.0);
     }
@@ -1410,34 +976,6 @@ mod tests {
                 knob.name()
             );
         }
-    }
-
-    #[test]
-    fn the_rigid_gain_knob_moves_the_way_it_is_pushed() {
-        let mut params = p();
-        let before = params.cameras[0].gain;
-        nudge(&mut params, Knob::Gain, -0.01);
-        for (after, before) in params.cameras[0].gain.iter().zip(before) {
-            assert!(*after < before, "down should lower {before}, got {after}");
-        }
-        nudge(&mut params, Knob::Gain, 0.02);
-        for (after, before) in params.cameras[0].gain.iter().zip(before) {
-            assert!(*after > before, "up should raise {before}, got {after}");
-        }
-    }
-
-    #[test]
-    fn the_rigid_gain_knob_keeps_its_colour_offsets_at_the_rail() {
-        let mut params = p();
-        let gain = params.cameras[0].gain;
-        let spread = [gain[1] - gain[0], gain[2] - gain[1]];
-        for _ in 0..10_000 {
-            nudge(&mut params, Knob::Gain, 0.01);
-        }
-        let gain = params.cameras[0].gain;
-        assert_eq!(gain[2], 1.2, "the leading channel should reach the top");
-        assert!((gain[1] - gain[0] - spread[0]).abs() < 1e-4);
-        assert!((gain[2] - gain[1] - spread[1]).abs() < 1e-4);
     }
 
     #[test]
@@ -1488,56 +1026,6 @@ mod tests {
         assert!((wrap_pi(-PI) - PI).abs() < 1e-6);
         assert!(wrap_pi(0.0).abs() < 1e-6);
         assert!((wrap_pi(PI + 0.1) - (-PI + 0.1)).abs() < 1e-5);
-    }
-
-    #[test]
-    fn a_channel_knob_moves_only_its_channel() {
-        let mut params = p();
-        let before = params.cameras[0].gain;
-        nudge(&mut params, Knob::GainG, 0.1);
-        let gain = params.cameras[0].gain;
-        assert_eq!(gain[0], before[0]);
-        assert_eq!(gain[2], before[2]);
-        assert!((gain[1] - (before[1] + 0.1)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn a_seed_is_one_of_two_rigs_and_the_button_swaps_them() {
-        assert_eq!(Seed::Dark.toggled(), Seed::BLOB);
-        assert_eq!(Seed::BLOB.toggled(), Seed::Dark);
-        // A level a config named is not what comes back. There is nowhere to
-        // remember it that is not a third state, and a state the instrument
-        // holds without showing is the thing this type exists to stop.
-        assert_eq!(Seed::WhiteBlob(0.42).toggled(), Seed::Dark);
-        assert_eq!(Seed::WhiteBlob(0.42).toggled().toggled(), Seed::BLOB);
-        // Only a blob puts light on the glass, and it is the light it says —
-        // which is what the surface's lamp reads, rather than the variant.
-        assert_eq!(Seed::WhiteBlob(0.42).brightness(), 0.42);
-        assert_eq!(Seed::Dark.brightness(), 0.0);
-        assert!(Seed::WhiteBlob(0.42).lit() && !Seed::Dark.lit());
-        assert!(!Seed::WhiteBlob(0.0).lit(), "a blob of nothing is not lit");
-    }
-
-    #[test]
-    fn the_readout_names_the_seed_s_rig_and_not_a_level() {
-        // The log line is the instrument's whole readout, and a level alone
-        // leaves a performer working out from "0.000" which of the two rigs
-        // the monitor is on.
-        let mut params = p();
-        params.monitors[0].seed = Seed::BLOB;
-        assert!(
-            params
-                .describe(Focus::default())
-                .contains("seed white blob"),
-            "{}",
-            params.describe(Focus::default())
-        );
-        params.monitors[0].seed = Seed::Dark;
-        assert!(
-            params.describe(Focus::default()).contains("seed dark"),
-            "{}",
-            params.describe(Focus::default())
-        );
     }
 
     #[test]
@@ -1598,61 +1086,23 @@ mod tests {
         },
     ];
 
-    #[test]
-    fn the_key_weights_spare_grey_and_the_tolerant_rail_clears_every_frame() {
-        use core::f32::consts::TAU;
-        for i in 0..=1000 {
-            let k = key_weights(-PI + TAU * i as f32 / 1000.0);
-            // Grey has no chroma, so no hue's key may touch it: both
-            // subcarrier rows of DECODE sum to zero and so does any blend.
-            let grey: f32 = k.iter().sum();
-            assert!(grey.abs() < 1e-5, "grey projects {grey}");
-            // The widest projection an RGB frame in 0..=1 can carry is the
-            // sum of the positive weights, at the corner that lights exactly
-            // those channels. TOLERANT clears it at every hue — that is the
-            // claim its value makes, so it is held here.
-            let most: f32 = k.iter().map(|w| w.max(0.0)).sum();
-            assert!(most < Key::TOLERANT, "a frame can project {most}");
-        }
-    }
-
     /// Every knob's identity, written out as the number it is rather than as
     /// the constant [`identity_graph`] is built from. Read off the same
     /// constant the code reads and a knob wired to the wrong field would
     /// agree with itself: this table is the independent word.
-    const IDENTITIES: [(Knob, f32); 27] = [
+    const IDENTITIES: [(Knob, f32); 11] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
-        (Knob::TranslateX, 0.0),
-        (Knob::TranslateY, 0.0),
-        (Knob::Gain, 1.0),
-        (Knob::GainR, 1.0),
-        (Knob::GainG, 1.0),
-        (Knob::GainB, 1.0),
-        (Knob::Bloom, 0.0),
-        // Not zero, and neither is the key's softness: both are aim points
-        // that nothing reads until the stage they belong to is turned up,
-        // and a reset to zero would land that knob hard-edged.
-        (Knob::BloomRadius, 0.03),
-        (Knob::ChromaBleed, 0.0),
-        (Knob::Noise, 0.0),
         (Knob::Delay, 0.0),
-        (Knob::KeyThreshold, 0.0),
-        (Knob::KeySoftness, 0.05),
-        (Knob::KeyHue, 0.0),
-        // The top of its travel is the off state, so that is where a keyer
-        // doing nothing to the light stands.
-        (Knob::KeyTolerance, 0.7),
         (Knob::Hue, 0.0),
         (Knob::Saturation, 1.0),
         (Knob::Brightness, 0.0),
         (Knob::Contrast, 1.0),
-        (Knob::Gamma, 1.0),
         (Knob::Temperature, 0.0),
         (Knob::Sharpness, 0.0),
-        // The rail at twice display white: an amplifier always has one, and
-        // this is the one that touches nothing a monitor can show.
-        (Knob::Headroom, 2.0),
+        // A crossfade has no setting that leaves the light alone, so its
+        // identity is the end of its travel it starts at — see
+        // [`identity_graph`].
         (Knob::Switcher, 0.0),
         (Knob::Period, 0.0),
     ];
@@ -1793,15 +1243,9 @@ mod tests {
                 knob.name(),
                 params.knob(knob, focus)
             );
-            // And nothing else moved. The rigid gain is the one knob that is
-            // not a field of its own — it turns the three channels and reads
-            // as their mean — so it and they move together in both
-            // directions, and that pair is the only exemption.
-            let channel = |k: Knob| matches!(k, Knob::GainR | Knob::GainG | Knob::GainB);
+            // And nothing else moved.
             for other in Knob::ALL {
-                let rigid = (knob == Knob::Gain && channel(other))
-                    || (channel(knob) && other == Knob::Gain);
-                if other == knob || rigid {
+                if other == knob {
                     continue;
                 }
                 assert_eq!(
@@ -1813,60 +1257,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn a_reset_of_the_rigid_gain_lands_every_channel_on_unity() {
-        // The rigid gain is a reading of three floats, not a field, and a
-        // rigid *step* is clamped to the tightest channel's remaining
-        // travel — so from a panel with red already on its rail, sliding the
-        // mean to 1.0 moves nothing at all and reports that it did.
-        let focus = Focus::default();
-        let mut params = p();
-        params.cameras[0].gain = [1.2, 0.6, 0.6];
-        params.reset(Knob::Gain, focus);
-        assert_eq!(params.cameras[0].gain, [1.0, 1.0, 1.0]);
-        assert_eq!(params.knob(Knob::Gain, focus), Knob::Gain.identity());
-
-        // And from a panel where a slide *could* have reached the mean, the
-        // offsets still go: a mean of 1.0 with red a tenth above green is a
-        // gain stage that tints the light, which is not doing nothing to it.
-        let mut params = p();
-        params.cameras[0].gain = [0.9, 0.8, 0.7];
-        params.reset(Knob::Gain, focus);
-        assert_eq!(params.cameras[0].gain, [1.0, 1.0, 1.0]);
-
-        // One channel reset leaves the other two where they were, which is
-        // the other half of what "shares a field" has to get right.
-        let mut params = p();
-        params.cameras[0].gain = [0.5, 0.6, 0.7];
-        params.reset(Knob::GainR, focus);
-        assert_eq!(params.cameras[0].gain, [1.0, 0.6, 0.7]);
-    }
-
-    #[test]
-    fn only_the_gain_and_its_channels_share_a_field() {
-        // The one place the crate says which knobs overlap, so both the
-        // reset and the surface's release read the same answer.
-        for knob in Knob::ALL {
-            assert!(knob.shares_a_field_with(knob), "{}", knob.name());
-            for other in Knob::ALL {
-                let gain = |k| matches!(k, Knob::GainR | Knob::GainG | Knob::GainB);
-                let want = knob == other
-                    || (knob == Knob::Gain && gain(other))
-                    || (gain(knob) && other == Knob::Gain);
-                assert_eq!(
-                    knob.shares_a_field_with(other),
-                    want,
-                    "{} and {}",
-                    knob.name(),
-                    other.name()
-                );
-            }
-        }
-        // Two channels are two floats: turning red leaves green's fader
-        // standing exactly where green still is.
-        assert!(!Knob::GainR.shares_a_field_with(Knob::GainG));
     }
 
     #[test]
@@ -2073,17 +1463,11 @@ mod tests {
             params.nudge(knob, step, focus);
             for (other, was) in Knob::ALL.into_iter().zip(before) {
                 let now = params.knob(other, focus);
-                // The rigid gain and its three channels are one value seen
-                // four ways, so turning any of them moves more than one.
-                let gain_family =
-                    |k: Knob| matches!(k, Knob::Gain | Knob::GainR | Knob::GainG | Knob::GainB);
                 let expected = if other == knob {
                     match knob.limit(&params) {
                         Limit::Ratio(..) => was * step.exp(),
                         Limit::Clamp(..) | Limit::Whole(_) | Limit::Wrap => was + step,
                     }
-                } else if gain_family(knob) && gain_family(other) {
-                    continue;
                 } else {
                     was
                 };
@@ -2117,31 +1501,6 @@ mod tests {
             "{} not {wrapped}",
             params.knob(Knob::Hue, focus)
         );
-        // And the rigid gain's three-channel step is delegated here too, not
-        // only in the test that names it.
-        params.set(Knob::Gain, 0.4, focus);
-        let gain = params.cameras[0].gain;
-        assert!((gain.iter().sum::<f32>() / 3.0 - 0.4).abs() < 1e-6);
-    }
-
-    #[test]
-    fn setting_the_rigid_gain_slides_the_channels_and_keeps_their_offsets() {
-        let mut params = p();
-        let focus = Focus::default();
-        // A triple equal to none of its own channels: the shipped gains are
-        // symmetric, so their mean *is* the middle channel and a reader
-        // returning `gain[1]` cannot be told from one returning the mean.
-        params.cameras[0].gain = [0.2, 0.9, 0.9];
-        let before = params.cameras[0].gain;
-        let offsets = [before[1] - before[0], before[2] - before[0]];
-        assert!((params.knob(Knob::Gain, focus) - 2.0 / 3.0).abs() < 1e-6);
-        params.set(Knob::Gain, 0.5, focus);
-        let after = params.cameras[0].gain;
-        // Against the array, not against `set`'s own idea of where it put it.
-        assert!((after.iter().sum::<f32>() / 3.0 - 0.5).abs() < 1e-6);
-        assert!((params.knob(Knob::Gain, focus) - 0.5).abs() < 1e-6);
-        assert!((after[1] - after[0] - offsets[0]).abs() < 1e-6);
-        assert!((after[2] - after[0] - offsets[1]).abs() < 1e-6);
     }
 
     #[test]
@@ -2179,10 +1538,7 @@ mod tests {
         // state no control can put it back into. Over
         // `Knob::ALL` rather than a list of the knobs that had the bug, so a
         // knob added later is covered the day it joins it.
-        //
-        // The rigid gain has no field to poison, and `validate` skips it for
-        // the same reason — `owns_a_field` is where that is said once.
-        for knob in Knob::ALL.into_iter().filter(|knob| knob.owns_a_field()) {
+        for knob in Knob::ALL {
             // Camera 1 and monitor 2, and the whole line compared rather than
             // hunted for the knob's name: this walk is the only thing left
             // standing behind that message, and against a node named 1 and a

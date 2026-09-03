@@ -2,7 +2,7 @@
 
 use crate::feedback::MAX_TAPS;
 use crate::midi::ROW_BUTTONS;
-use crate::params::{Camera, Focus, Knob, Node, Params, Seed, Side};
+use crate::params::{Camera, Focus, Knob, Node, Params, Side};
 use crate::rig::{self, Rig};
 
 /// The most of `node` there is — the rig's own counts, which is how far the
@@ -78,6 +78,11 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // written rather than against a rail no control could hit. Monitors only:
     // a camera watches the light going round and never the light coming in.
     for (i, camera) in params.cameras.iter().enumerate() {
+        if let Some(g) = camera.gain.iter().find(|g| !g.is_finite() || **g < 0.0) {
+            return Err(format!(
+                "camera {i}'s gain contains {g}; gains are finite and >= 0"
+            ));
+        }
         if camera.look.len() != m {
             return Err(format!(
                 "camera {i}'s look has {} entries; needs one per monitor, {m}",
@@ -90,26 +95,23 @@ pub fn validate(params: &Params) -> Result<(), String> {
             ));
         }
     }
-    // A blob's brightness is not a knob either, so this is the only place its
-    // level is decided. Zero is refused rather than loaded: a blob putting no
-    // light on the glass is what `dark` says, and two spellings of one rig is
-    // the ambiguity the union exists to delete.
-    for (i, monitor) in params.monitors.iter().enumerate() {
-        if let Seed::WhiteBlob(brightness) = monitor.seed {
-            if !(brightness > 0.0 && brightness <= Seed::BRIGHTEST) {
-                return Err(format!(
-                    "monitor {i}'s white blob is {brightness}; it runs above 0 \
-                     to {}, and a blob of no light is \"dark\"",
-                    Seed::BRIGHTEST
-                ));
-            }
-        }
+    // The switcher's key is fixed character rather than a knob, so this is
+    // the only place its numbers are decided.
+    let key = params.input.key;
+    if !(key.threshold.is_finite() && key.softness.is_finite())
+        || key.threshold < 0.0
+        || key.softness < 0.0
+    {
+        return Err(format!(
+            "the seed's key is {} over {}; both are finite and >= 0",
+            key.threshold, key.softness
+        ));
     }
     // Every knob, at every focus that names a value of its own, against the
     // one definition of its travel. This is the whole of the per-value
     // checking: a rail spelled a second time here is a rail the two could
     // differ on.
-    for knob in Knob::ALL.into_iter().filter(|knob| knob.owns_a_field()) {
+    for knob in Knob::ALL {
         let (low, high) = knob.limit(params).ends();
         for focus in focuses(knob.side(), params) {
             let value = params.knob(knob, focus);
@@ -254,10 +256,8 @@ mod tests {
         let poison: &[fn(&mut Params)] = &[
             |p| p.cameras[0].gain[0] = f32::NAN,
             |p| p.cameras[0].framing.rotation = f32::INFINITY,
-            |p| p.cameras[0].character.bloom = f32::NAN,
-            |p| p.cameras[0].key.hue = f32::INFINITY,
-            |p| p.monitors[0].colour.gamma = f32::NAN,
-            |p| p.monitors[0].headroom = f32::NAN,
+            |p| p.monitors[0].colour.saturation = f32::NAN,
+            |p| p.input.key.threshold = f32::NAN,
             |p| p.rig.switchers[2] = f32::INFINITY,
             |p| p.cameras[0].look[0] = f32::NAN,
         ];
@@ -265,21 +265,6 @@ mod tests {
             let mut params = instrument();
             poison(&mut params);
             assert!(validate(&params).is_err(), "poison {i} passed");
-        }
-    }
-
-    #[test]
-    fn a_white_blob_is_refused_outside_the_light_it_can_be() {
-        let with = |seed| {
-            let mut p = instrument();
-            p.monitors[0].seed = seed;
-            p
-        };
-        validate(&with(Seed::BLOB)).unwrap();
-        validate(&with(Seed::Dark)).unwrap();
-        for bad in [0.0, -0.1, Seed::BRIGHTEST + 0.1, f32::NAN] {
-            let why = validate(&with(Seed::WhiteBlob(bad))).unwrap_err();
-            assert!(why.contains("white blob"), "{bad}: {why}");
         }
     }
 

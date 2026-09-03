@@ -15,7 +15,7 @@ use crate::command::{Action, Edge};
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
-use crate::midi::{Map, Midi, Page, Shown};
+use crate::midi::{Map, Midi, Shown};
 use crate::overlay::Overlay;
 use crate::params::{Focus, Knob, Node, Params};
 use crate::present::Present;
@@ -339,7 +339,7 @@ impl Live {
     /// with no texture to give is the one way a present does nothing, and
     /// the caller counts the ones that landed so that a stale surface reads
     /// as the rate it really is.
-    fn show(&mut self, gpu: &Gpu, solo: Option<usize>, overlay: Option<Page>) -> bool {
+    fn show(&mut self, gpu: &Gpu, solo: Option<usize>, overlay: bool) -> bool {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -363,7 +363,7 @@ impl Live {
             &frame.texture,
             &self.feedback,
             solo,
-            overlay.map(|page| (&self.overlay, page)),
+            overlay.then_some(&self.overlay),
         );
         gpu.queue.present(frame);
         true
@@ -407,8 +407,8 @@ impl App {
 
     fn shown(&self) -> Shown {
         Shown {
-            seed: self.params.monitors[self.focus.monitor].seed,
-            flipped: self.params.cameras[self.focus.camera].framing.flipped(),
+            flipped: self.params.monitors[self.focus.monitor].flip,
+            program: self.params.rig.on_program(self.focus.monitor),
             overlay: self.overlay_shown,
             solo: self.solo,
         }
@@ -498,14 +498,6 @@ impl App {
             Action::Focus(node, index) => self.refocus(node, index),
             Action::Reset => self.reset(),
             Action::ResetLastKnob => self.reset_knob(),
-            // The focused monitor's, because the seed is the monitor's: the
-            // faders' index of the focus is the one that names it, exactly
-            // as the front panel beside it does.
-            Action::Seed => {
-                let seed = &mut self.params.monitors[self.focus.monitor].seed;
-                *seed = seed.toggled();
-                log::info!("{}", self.params.describe(self.focus));
-            }
             Action::Clear => {
                 if let Some(live) = self.live.as_mut() {
                     live.feedback.clear(&self.gpu.device, &self.gpu.queue);
@@ -567,17 +559,20 @@ impl App {
                 self.params.reverse(self.focus.switcher);
                 log::info!("{}", self.params.describe(self.focus));
             }
-            Action::Page => {
-                self.midi.turn_page();
-                log::info!("knob page {}", self.midi.page());
+            Action::Select => {
+                let monitor = self.focus.monitor;
+                match self.params.rig.select(monitor) {
+                    true => log::info!("{}", self.params.describe(self.focus)),
+                    false => log::info!("monitor {} has no select", monitor + 1),
+                }
             }
             Action::Flip(axis) => {
-                let framing = &mut self.params.cameras[self.focus.camera].framing;
-                framing.flip(axis);
+                let monitor = &mut self.params.monitors[self.focus.monitor];
+                monitor.flip(axis);
                 log::info!(
-                    "camera {} flipped {:?}",
-                    self.focus.camera + 1,
-                    framing.flipped()
+                    "monitor {} flipped {:?}",
+                    self.focus.monitor + 1,
+                    monitor.flip
                 );
             }
             Action::Finer => {
@@ -600,10 +595,6 @@ impl App {
         }
     }
 
-    fn overlay_page(&self) -> Option<Page> {
-        self.overlay_shown.then(|| self.midi.page())
-    }
-
     /// Draw the display into `capture` and hand it whatever falls due.
     ///
     /// The capture's own pass rather than the surface's: what the glass gets
@@ -622,7 +613,7 @@ impl App {
             &live.present,
             &live.feedback,
             solo,
-            self.overlay_page().map(|page| (&live.overlay, page)),
+            self.overlay_shown.then_some(&live.overlay),
         )
     }
 
@@ -807,7 +798,7 @@ impl ApplicationHandler for App {
                 // it is up here: the solo is the focus's and the focus is not
                 // the window's.
                 let solo = self.soloed();
-                let overlay = self.overlay_page();
+                let overlay = self.overlay_shown;
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
@@ -850,7 +841,7 @@ mod tests {
     use crate::affine::Axis;
     use crate::config;
     use crate::midi::TestSurface;
-    use crate::params::{Node, Seed};
+    use crate::params::Node;
 
     /// An instrument playing `params`, headless: no window has opened, so
     /// `live` is `None` the way it is before `resumed`. `None` when the
@@ -908,17 +899,17 @@ mod tests {
     }
 
     #[test]
-    fn a_flip_mirrors_the_focused_camera_and_again_puts_it_back() {
+    fn a_flip_mirrors_the_focused_monitor_and_again_puts_it_back() {
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let started = app.params.clone();
-        app.act(Action::Focus(Node::Camera, 1));
+        app.act(Action::Focus(Node::Monitor, 1));
         app.act(Action::Flip(Axis::X));
         assert_eq!(app.shown().flipped, [true, false]);
         let mut want = started.clone();
-        want.cameras[1].framing.flip_x = true;
-        assert_eq!(app.params, want, "only the focused camera, only that axis");
+        want.monitors[1].flip[0] = true;
+        assert_eq!(app.params, want, "only the focused monitor, only that axis");
         app.act(Action::Flip(Axis::Y));
         assert_eq!(app.shown().flipped, [true, true]);
         app.act(Action::Flip(Axis::X));
@@ -934,7 +925,7 @@ mod tests {
         let started = app.params.clone();
         turn(&mut app, Knob::Zoom, 0.5);
         app.act(Action::Focus(Node::Monitor, 0));
-        turn(&mut app, Knob::Gamma, 0.5);
+        turn(&mut app, Knob::Contrast, 0.5);
         assert_ne!(app.params, started);
         // The bars are handed over exactly once, so a rig rebuilt or replayed
         // under the reset would have them pending again.
@@ -946,34 +937,6 @@ mod tests {
             app.source.frame().is_none(),
             "the rig was rebuilt under the reset"
         );
-    }
-
-    #[test]
-    fn the_seed_button_swaps_one_monitor_s_rig_and_leaves_the_rest() {
-        // Two monitors, both lamp-lit, so "it toggled" and "it toggled the
-        // one under the faders" are different observations.
-        let Some(mut app) = playing(config::instrument()) else {
-            return;
-        };
-        app.act(Action::Focus(Node::Monitor, 1));
-        assert_eq!(app.params.monitors[1].seed, Seed::Dark);
-
-        app.act(Action::Seed);
-        assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
-        assert_eq!(app.params.monitors[0].seed, Seed::Dark, "both went");
-        // What the panel reads, which is the focused monitor's and follows
-        // the focus rather than the press.
-        assert_eq!(app.shown().seed, Seed::BLOB);
-        app.act(Action::Focus(Node::Monitor, 0));
-        assert_eq!(app.shown().seed, Seed::Dark);
-
-        // And back, through the name a `midi.toml` binds a button to.
-        app.act(Action::Focus(Node::Monitor, 1));
-        let Some(action) = crate::command::action_for_name("seed") else {
-            panic!("the seed should be a command")
-        };
-        app.act(action);
-        assert_eq!(app.params.monitors[1].seed, Seed::Dark);
     }
 
     #[test]
@@ -1025,11 +988,11 @@ mod tests {
             before.knob(Knob::Saturation, app.focus) + 1.0
         );
 
-        app.act(Action::Turn(Knob::Gamma, 1.0));
+        app.act(Action::Turn(Knob::Contrast, 1.0));
         app.act(Action::ResetLastKnob);
         assert_eq!(
-            app.params.knob(Knob::Gamma, app.focus),
-            Knob::Gamma.identity()
+            app.params.knob(Knob::Contrast, app.focus),
+            Knob::Contrast.identity()
         );
     }
 
@@ -1047,17 +1010,15 @@ mod tests {
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
-        // The seed carries a lamp of its own, and which monitors are seeded
-        // is the graph's business rather than this test's — said outright,
-        // so the panels below are exactly the lamps the focus is.
-        app.params.monitors[0].seed = Seed::Dark;
         let mut surface = plugged(&mut app);
 
         // One row per kind: camera 1 is S1, monitor 1 is M1 and switcher 1 is
         // R1, which are controls 32, 48 and 64.
         app.surface_frame();
         assert!(
-            surface.wire.panel_becomes(lamp(32) | lamp(48) | lamp(64)),
+            surface
+                .wire
+                .panel_becomes(lamp(32) | lamp(48) | lamp(64) | lamp(71)),
             "the focus the instrument started on never reached the surface"
         );
         // Solo 2 selects camera 2 — pressed on the surface rather than acted
@@ -1066,7 +1027,9 @@ mod tests {
         app.surface_frame();
         assert_eq!(app.focus.camera, 1, "the press was never played");
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(64)),
+            surface
+                .wire
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
             "the lamp did not follow the focus its own frame moved"
         );
         // Record is held rather than pressed, and its lamp is lit for as
@@ -1076,13 +1039,15 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(45)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(45)),
             "the record button never lit under the finger"
         );
         surface.release(45);
         app.surface_frame();
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(64)),
+            surface
+                .wire
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
             "the record button stayed lit after the finger left"
         );
         // The cut is the other held button, on marker prev.
@@ -1092,14 +1057,16 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(61)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(61)),
             "the cut button never lit under the finger"
         );
         surface.release(61);
         app.surface_frame();
         assert!(app.cut.is_none(), "the release was never played");
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(64)),
+            surface
+                .wire
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
             "the cut button stayed lit after the finger left"
         );
         // Help and solo are the two lamps whose state lives in the instrument
@@ -1111,7 +1078,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(46)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(46)),
             "the help lamp never lit for the overlay"
         );
         surface.press(44);
@@ -1121,7 +1088,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(46) | lamp(44)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(46) | lamp(44)),
             "the solo lamp never lit"
         );
         surface.press(46);
@@ -1130,7 +1097,9 @@ mod tests {
         surface.release(44);
         app.surface_frame();
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(64)),
+            surface
+                .wire
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
             "a latch let go kept its lamp"
         );
     }
@@ -1174,11 +1143,11 @@ mod tests {
 
         // A knob turned *after* the move is named again, so this clears the
         // name rather than disabling the button.
-        turn(&mut app, Knob::Gamma, 0.5);
+        turn(&mut app, Knob::Contrast, 0.5);
         app.act(Action::ResetLastKnob);
         assert_eq!(
-            app.params.knob(Knob::Gamma, app.focus),
-            Knob::Gamma.identity()
+            app.params.knob(Knob::Contrast, app.focus),
+            Knob::Contrast.identity()
         );
     }
 
@@ -1216,11 +1185,11 @@ mod tests {
             return;
         };
         let board = plugged(&mut app);
-        surface(&mut app, &board, 4, 0);
-        surface(&mut app, &board, 4, 127);
+        surface(&mut app, &board, 3, 0);
+        surface(&mut app, &board, 3, 127);
         assert_eq!(app.params.monitors[0].colour.contrast, 2.0);
         app.act(Action::Focus(Node::Monitor, 1));
-        surface(&mut app, &board, 4, 100);
+        surface(&mut app, &board, 3, 100);
         assert!(
             (app.params.monitors[1].colour.contrast - (1.0 - 27.0 / 127.0)).abs() < 1e-6,
             "{}",
@@ -1331,12 +1300,10 @@ mod tests {
         let board = plugged(&mut app);
         let started = app.params.clone();
         app.act(Action::Focus(Node::Switcher, 1));
-        app.act(Action::Page);
         // A quarter of sixty passes a throw: seventeen steps of it owe two.
         surface(&mut app, &board, 6, 0);
         surface(&mut app, &board, 6, 17);
         assert_eq!(app.params.rig.periods[1], 2);
-        app.act(Action::Page);
         surface(&mut app, &board, 7, 127);
         surface(&mut app, &board, 7, 76);
         let stood = app.params.knob(Knob::Switcher, app.focus);
