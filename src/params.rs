@@ -1760,10 +1760,6 @@ mod tests {
         // this is the one that touches nothing a monitor can show.
         (Knob::Headroom, 2.0),
         (Knob::Period, 0.0),
-        // Unity, like the loop gain — the switcher handing the camera on
-        // whole. Zero is the switcher turned off, which blanks the monitor's
-        // feed: a choice about the graph, not a stage doing nothing. The
-        // send is the same weight and reads the same way.
         (Knob::Route, 0.0),
         (Knob::Send, 0.0),
     ];
