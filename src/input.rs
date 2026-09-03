@@ -1,15 +1,13 @@
-//! The light the switcher has that the graph did not make.
+//! The light the switcher has that the rig did not make.
 //!
-//! A monitor and an external input are the same kind of thing to the pass
-//! that samples one: a layer of the source bank. Which layer a monitor is
-//! shown comes off the switcher — the cameras by
-//! [`crate::params::Params::routing`], the inputs each by their own
-//! [`crate::params::Plug::into`].
-//! That is the whole of this stage's model — an input is a source plugged
-//! into the switcher, so everything the switcher already does to a camera it
-//! does to this unchanged, and nothing new appears in the shader. No camera
-//! watches one: a camera watches monitors, which is what makes every loop in
-//! the graph a loop.
+//! A monitor and the seed are the same kind of thing to the pass that samples
+//! one: a layer of the source bank. How much of either a monitor shows comes
+//! off the switchers — [`crate::params::Params::route`] and
+//! [`crate::params::Params::send`]. That is the whole of this stage's model:
+//! the seed is a source plugged into the switcher, so everything the switcher
+//! already does to a camera it does to this unchanged, and nothing new
+//! appears in the shader. No camera watches it: a camera watches monitors,
+//! which is what makes every loop in the rig a loop.
 //!
 //! Where the pixels come from is two cases and two implementations.
 //! [`Input::Capture`] is an `ffmpeg` reading a device and writing raw RGBA

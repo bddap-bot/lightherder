@@ -125,8 +125,7 @@ impl Map {
     /// second page and the five rotaries past the third are dead — free for
     /// a `midi.toml`, and no hand throws one by accident.
     ///
-    /// `params` decides the rest: the delay is bound only where the graph has
-    /// reach, and the select rows are as wide as the rig — see
+    /// `params` decides the select rows, which are as wide as the rig — see
     /// [`nano_buttons`].
     pub(crate) fn nano_kontrol2(params: &Params) -> Map {
         Map {
@@ -142,10 +141,9 @@ impl Map {
                 fader(7, Knob::Switcher),
                 fader(16, Knob::Zoom),
                 fader(17, Knob::Rotation),
+                fader(18, Knob::Delay),
             ]
-            .into_iter()
-            .chain(Knob::Delay.is_on(params).then(|| fader(18, Knob::Delay)))
-            .collect(),
+            .into(),
             button: nano_buttons(params),
         }
     }
@@ -194,7 +192,7 @@ impl Map {
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
         let map: Map = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        map.validate(params)
+        map.validate()
             .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(map)
     }
@@ -202,7 +200,7 @@ impl Map {
     /// Everything about a map that has to be true before a note of it is
     /// played, checked once at load — the surface is read inside the frame
     /// loop and there is nothing to report an error to there.
-    fn validate(&self, params: &Params) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String> {
         if self.device.is_empty() {
             return Err("device is empty, which every card's line contains".into());
         }
@@ -216,18 +214,6 @@ impl Map {
                 return Err(format!("cc {cc} is bound twice"));
             }
             seen.push(cc);
-        }
-        for f in &self.fader {
-            // At load and not at play: the only other place to say it is
-            // inside the frame loop, where one sweep says it 127 times.
-            if !f.knob.is_on(params) {
-                return Err(format!(
-                    "cc {}: {:?} is {}",
-                    f.cc,
-                    f.knob.name(),
-                    f.knob.off_because(params).expect("is_on said no")
-                ));
-            }
         }
         for b in &self.button {
             if action_for_name(&b.command).is_none() {
@@ -685,10 +671,10 @@ impl TestSurface {
 
 impl Midi {
     /// The one door: a `Midi` cannot exist over a map the instrument would
-    /// refuse — nor over a map that does not fit the graph it will play, so
-    /// nothing downstream has to handle either.
+    /// refuse, so nothing downstream has to handle one.
     pub fn new(map: Map, params: &Params) -> Result<Midi, String> {
-        map.validate(params)?;
+        let _ = params;
+        map.validate()?;
         let action: Vec<Action> = map
             .button
             .iter()
@@ -1672,28 +1658,6 @@ mod tests {
     }
 
     #[test]
-    fn the_delay_is_the_third_rotary_where_the_graph_has_reach() {
-        let mut none = crate::config::instrument();
-        none.delay = 0;
-        assert!(!Map::nano_kontrol2(&none)
-            .fader
-            .iter()
-            .any(|f| f.knob == Knob::Delay));
-        let mut reach = crate::config::instrument();
-        reach.delay = 4;
-        let map = Map::nano_kontrol2(&reach);
-        assert_eq!(map.fader.last(), Some(&fader(18, Knob::Delay)));
-        assert!(Midi::new(map.clone(), &reach).is_ok());
-        let why = Midi::new(map, &none)
-            .err()
-            .expect("a delay fader on a graph with no reach");
-        assert!(
-            why.contains(r#""delay" is a frame delay unit"#) && why.contains("reach is 0"),
-            "{why}"
-        );
-    }
-
-    #[test]
     fn every_select_row_is_exactly_as_wide_as_its_kind() {
         // A button is owed to equipment: the rig has three cameras, five
         // monitors and four switchers, and the buttons past each are dead.
@@ -1779,29 +1743,23 @@ mod tests {
         // Within one list...
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(S_ROW, "reset"));
-        assert!(map
-            .validate(&crate::config::instrument())
-            .unwrap_err()
-            .contains("bound twice"));
+        assert!(map.validate().unwrap_err().contains("bound twice"));
 
         // ...and across the two, which matters more: `action_for` looks at
         // the faders first, so a button sharing a fader's number is silently
         // dead rather than ambiguous.
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(1, "reset"));
-        assert!(map
-            .validate(&crate::config::instrument())
-            .unwrap_err()
-            .contains("bound twice"));
+        assert!(map.validate().unwrap_err().contains("bound twice"));
 
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.fader.push(fader(200, Knob::Hue));
-        let why = map.validate(&crate::config::instrument()).unwrap_err();
+        let why = map.validate().unwrap_err();
         assert!(why.contains("200") && why.contains("127"), "{why}");
 
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(90, "wiggle"));
-        let why = map.validate(&crate::config::instrument()).unwrap_err();
+        let why = map.validate().unwrap_err();
         assert!(why.contains("wiggle"), "{why}");
         // The error lists what a command may be, because a config file is
         // written by hand and there are thirty-odd of them.
@@ -1809,7 +1767,7 @@ mod tests {
 
         let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.device = String::new();
-        assert!(map.validate(&crate::config::instrument()).is_err());
+        assert!(map.validate().is_err());
 
         // And the one door refuses all of it, so a `Midi` over a bad map is
         // unconstructable rather than quietly inert.

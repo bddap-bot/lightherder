@@ -1,18 +1,13 @@
-//! Dave Blair's 4K Light Herder as one graph: the nodes his schematic names,
-//! the four switchers and the router selects in front of them, and the
-//! flattening of a setting of those into the one switcher this instrument
-//! has.
+//! Dave Blair's 4K Light Herder: the nodes his schematic names, the four
+//! switchers and the router selects in front of them, and the graph a
+//! setting of those makes.
 //!
 //! Every switcher on the rig is a crossfade between two feeds and a router
 //! select picks one of two, so what any monitor shows is a weighted sum of
-//! the three cameras and the seed input — which is what [`Params::routing`]
-//! and each [`Plug::into`] already are. So the rig gets no mixer of its
-//! own: [`Rig::params`] multiplies the chain out and writes the products into
-//! the matrix, and from then on only the matrix exists. Switcher A and
-//! the four selects land on the matrix directly; switchers B, C and D reach
-//! a monitor only as products of one another, so a control on one of those would have to hold a [`Rig`] beside
-//! the matrix and re-flatten — a second state to drift, which is why none is
-//! held here.
+//! the three cameras and the seed. [`Rig`] is that setting and the whole of
+//! the routing state; [`Rig::feed`] multiplies the chain out on demand, and
+//! no copy of the products is kept — a stored matrix would be a second state
+//! standing beside the levers that set it, free to drift from them.
 
 use crate::affine::Framing;
 use crate::input::Input;
@@ -78,15 +73,15 @@ pub enum Select {
 }
 
 /// Everything on the rig that routes, which is the whole of the routing
-/// state: the matrix is worked out from this and held nowhere. The rotating
-/// monitor has no select — it shows camera B's feed, always — so the selects
-/// are the four structure monitors', in [`Params::monitors`] order.
+/// state: the matrix is worked out from this and held nowhere. The selects
+/// are the structure monitors', in [`Params::monitors`] order — the
+/// rotating monitor has none, since it shows camera B's feed always.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rig {
     /// How far each switcher stands toward its In2, in [`Switcher`] order:
     /// 0 is In1 whole, 1 is In2 whole.
     pub switchers: [f32; SWITCHERS],
-    pub selects: [Select; SWITCHERS],
+    pub selects: [Select; SELECTS],
     /// Passes between reversals of each switcher. Zero is the mode off, and
     /// the only latch it has: the knob at its floor.
     pub periods: [u32; SWITCHERS],
@@ -103,17 +98,18 @@ pub const CAMERAS: usize = 3;
 /// found, so they do not.
 pub const SHAFTS: usize = 2;
 
-/// Which shaft a camera's view stands on, in [`Params::cameras`] order. The
-/// lock is this table and the pair of shafts behind it: there is no second
-/// number for the two to disagree on.
-pub const fn shaft_of(camera: usize) -> usize {
-    match camera {
-        1 => 1,
-        _ => 0,
-    }
-}
+/// Which shaft each camera's view stands on, in [`Params::cameras`] order.
+/// The lock is this table and the pair of shafts behind it: there is no
+/// second number for the two to disagree on.
+pub const SHAFT_OF: [usize; CAMERAS] = [0, 1, 0];
 pub const MONITORS: usize = 5;
 pub const SWITCHERS: usize = 4;
+
+/// The monitors a router select stands in front of: every monitor but the
+/// rotating one, which is wired to camera B and has no select to press. Its
+/// own name rather than [`SWITCHERS`], which the rig happens to have as many
+/// of.
+pub const SELECTS: usize = MONITORS - 1;
 
 /// The longest period, in passes: a second at the default tempo. The
 /// original's rates are unverified; a beat slower than that is a hand on the
@@ -173,7 +169,7 @@ impl Rig {
     /// tenths.
     pub const PERFORMANCE: Rig = Rig {
         switchers: [0.25, 0.25, 0.5, 0.1],
-        selects: [Select::Program; SWITCHERS],
+        selects: [Select::Program; SELECTS],
         periods: [0; SWITCHERS],
     };
 
@@ -182,7 +178,7 @@ impl Rig {
     /// put back to.
     pub const IDENTITY: Rig = Rig {
         switchers: [0.0; SWITCHERS],
-        selects: [Select::Direct; SWITCHERS],
+        selects: [Select::Direct; SELECTS],
         periods: [0; SWITCHERS],
     };
 
@@ -237,15 +233,13 @@ impl Rig {
     /// every switcher in the mode beats on one grid — which is what the
     /// original's quantizing is for. A pass is a beat of the tempo, so
     /// nothing here reads a clock.
-    pub fn beat(&mut self, pass: u64) -> [bool; SWITCHERS] {
-        std::array::from_fn(|i| {
+    pub fn beat(&mut self, pass: u64) {
+        for i in 0..SWITCHERS {
             let period = u64::from(self.periods[i]);
-            let due = period != 0 && pass.is_multiple_of(period);
-            if due {
+            if period != 0 && pass.is_multiple_of(period) {
                 self.flip(i);
             }
-            due
-        })
+        }
     }
 
     fn shows(&self, screen: Screen) -> Feed {
@@ -272,7 +266,6 @@ impl Rig {
             gain,
             look: Screen::ALL.map(|screen| glass(cam, screen)).to_vec(),
             delay: 0,
-            divider: 1,
         };
         Params {
             rig: *self,
@@ -328,7 +321,7 @@ mod tests {
     fn all(select: Select, switchers: [f32; SWITCHERS]) -> Rig {
         Rig {
             switchers,
-            selects: [select; SWITCHERS],
+            selects: [select; SELECTS],
             periods: [0; SWITCHERS],
         }
     }

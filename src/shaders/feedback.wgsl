@@ -31,7 +31,11 @@ struct Uniforms {
     // xyz: FCC NTSC luma, handed over rather than written here so the crate
     // has one copy of it.
     luma: vec4<f32>,
-    taps: array<Tap, 32>,
+    // As long as feedback::MAX_TAPS, which is every camera through every
+    // monitor plus the seed. A second spelling of that number, held to it by
+    // the `min_binding_size` the pipeline is built with: a mismatch is a
+    // validation error at startup rather than a wrong read.
+    taps: array<Tap, 16>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

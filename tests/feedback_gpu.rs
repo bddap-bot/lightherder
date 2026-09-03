@@ -1039,7 +1039,6 @@ fn plain_camera(look: Vec<f32>) -> Camera {
         gain: [1.0; 3],
         look,
         delay: 0,
-        divider: 1,
     }
 }
 
@@ -1226,6 +1225,37 @@ fn a_router_output_flip_mirrors_what_the_monitor_is_handed() {
         plain.pixels,
         "a flip taken off did not put the picture back"
     );
+
+    // And the mirror is on the output, not on what the camera sees: with the
+    // camera turned a quarter, mirroring the picture it hands over and
+    // mirroring the picture it looks at are different places. A quarter turn
+    // puts the spot a quarter of the monitor above centre; the output flip
+    // then puts it the same distance below, where a flip on the camera's own
+    // sampling would have left it above — the turn's axis is the one the
+    // mirror would have been about.
+    h.step(&lit);
+    let mut turned = graph(&Single {
+        seed: 0.0,
+        loop_gain: [1.0; 3],
+        framing: Framing {
+            zoom: 1.0,
+            rotation: std::f32::consts::FRAC_PI_2,
+        },
+        ..lit
+    });
+    turned.monitors[SEEDED].flip = [false, true];
+    h.step_solo(&turned, SEEDED);
+    let img = h.read();
+    assert!(
+        img.at(0.5, 0.75) > 200.0,
+        "the output was not mirrored: {}",
+        img.at(0.5, 0.75)
+    );
+    assert!(
+        img.at(0.5, 0.25) < 2.0,
+        "the mirror landed on what the camera saw instead: {}",
+        img.at(0.5, 0.25)
+    );
 }
 
 #[test]
@@ -1382,12 +1412,14 @@ fn still_spot(h: &mut Harness) -> Image {
 }
 
 #[test]
-fn an_overdriven_loop_settles_at_the_rail_instead_of_running_away() {
-    // The rail's whole job. Its knee is at half of twice display white, so
-    // nothing an eight-bit present can show is bent and its curve cannot be
-    // read here — what can is the other end: a loop at a gain well over
-    // unity settles on the rail instead of running to an infinity, which one
-    // pass of the chroma matrix would turn into a NaN that never leaves.
+fn an_overdriven_loop_settles_on_the_rail_instead_of_running_away() {
+    // The rail's whole job, read where an eight-bit present can see it. Its
+    // knee is at half of twice display white, so the bend itself happens
+    // above anything the glass shows — but what the bank holds comes back
+    // round, so driving the loop far past white and then turning the gain
+    // right down brings the stored level into view. On the rail it is 2.0
+    // however hard it was driven; without one it is whatever the gain
+    // compounded to, which is off the top of the scale.
     let Some(mut h) = square() else { return };
     let at = h.spot_uv();
     let lit = Single {
@@ -1397,20 +1429,30 @@ fn an_overdriven_loop_settles_at_the_rail_instead_of_running_away() {
     };
     h.step(&lit);
     let seeded = h.read().at(at[0], at[1]);
-    assert!(seeded > 200.0, "nothing to overdrive: {seeded}");
+    assert!(seeded > 240.0, "the spot must start near white: {seeded}");
 
     let overdriven = Single {
         seed: 0.0,
         loop_gain: [1.8; 3],
         ..lit
     };
-    for _ in 0..200 {
+    for _ in 0..20 {
         h.step(&overdriven);
     }
+    // A twentieth of what the bank holds, which is the rail if there is one
+    // and 1.8^20 of white if there is not.
+    let readout = 0.05;
+    h.step(&Single {
+        seed: 0.0,
+        loop_gain: [readout; 3],
+        ..lit
+    });
     let peak = h.read().at(at[0], at[1]);
+    let want = 255.0 * lightherder::feedback::HEADROOM * readout;
     assert!(
-        peak > 250.0,
-        "the loop went out instead of settling: {peak}"
+        (peak - want).abs() < 6.0,
+        "the bank held {peak} of the rail's {want}: a loop that ran away reads 255, \
+         and one the rail cut short reads under"
     );
     // And the dark room around it is still dark: a runaway that had become a
     // NaN would have carried the whole monitor with it.
@@ -2157,78 +2199,4 @@ fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
         sharp.pixels, rest.pixels,
         "the mask found detail in a flat field"
     );
-}
-
-#[test]
-fn a_divided_camera_holds_each_frame_for_that_many_passes() {
-    // Monitor 3 is the seed dimming a step every pass and looping on
-    // nothing, so it is a clock. A camera on it drawing to monitor 1 with
-    // `divider`
-    // shows the clock as it stood on the last pass that was a multiple of
-    // the divider, and the same frame until the next one — and that frame is
-    // byte for byte what the undivided camera shows on that pass, so a hold
-    // moves when a frame changes and never what it is. Once more with a
-    // frame of delay on the cable, so the hold counts on from the delay
-    // rather than over it.
-    let clock = |divider: u32, delay: u32| {
-        let mut p = blank();
-        p.cameras[0].divider = divider;
-        p.cameras[0].delay = delay;
-        p.cameras[0].look = one_hot(MONITORS, SEEDED);
-        p.delay = delay;
-        seeding(&mut p);
-        p
-    };
-    let mut undelayed: Vec<Vec<u8>> = Vec::new();
-    for delay in [0, 1] {
-        let mut undivided: Vec<Vec<u8>> = Vec::new();
-        for divider in 1..=Camera::MAX_DIVIDER {
-            let mut p = clock(divider, delay);
-            let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
-                return;
-            };
-            let passes = 3 * Camera::MAX_DIVIDER + 1;
-            let frames: Vec<Vec<u8>> = (0..passes)
-                .map(|pass| {
-                    p.rig.switchers[3] = 1.0 - 0.05 * pass as f32;
-                    h.step_solo(&p, 0);
-                    h.read().pixels
-                })
-                .collect();
-            if divider == 1 {
-                undivided = frames;
-                if delay == 0 {
-                    undelayed = undivided.clone();
-                }
-                continue;
-            }
-            for (pass, frame) in frames.iter().enumerate() {
-                let fresh = pass - pass % divider as usize;
-                assert!(
-                    *frame == undivided[fresh],
-                    "delay {delay}, divider {divider}: pass {pass} is not the undivided pass {fresh}"
-                );
-                if let Some(earlier) = fresh.checked_sub(delay as usize) {
-                    assert!(
-                        *frame == undelayed[earlier],
-                        "delay {delay}, divider {divider}: pass {pass} is not the undelayed pass {earlier}"
-                    );
-                }
-            }
-            let lit = frames
-                .iter()
-                .step_by(divider as usize)
-                .filter(|frame| frame.iter().any(|b| *b > 200))
-                .count();
-            assert!(
-                lit >= 2,
-                "delay {delay}, divider {divider}: the clock never showed"
-            );
-            assert!(
-                frames[0] != frames[divider as usize]
-                    || frames[divider as usize] != frames[2 * divider as usize],
-                "delay {delay}, divider {divider}: the clock never moved"
-            );
-        }
-    }
 }

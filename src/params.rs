@@ -211,18 +211,6 @@ pub struct Camera {
     /// original's: a sudden movement comes back as an echoing pulse, a
     /// smooth one as a frozen smear.
     pub delay: u32,
-    /// This path's frame rate as a fraction of the graph's: the camera hands
-    /// on a fresh frame every `divider` passes and the same one in between,
-    /// at most [`Camera::MAX_DIVIDER`]. One is every pass. What it does is
-    /// the original's 30 fps router output on a 60 fps rig: a stutter, and
-    /// the image slower to fractal, with the tempo untouched.
-    pub divider: u32,
-}
-
-impl Camera {
-    /// The slowest path. The original's 24 fps is not a whole divider of
-    /// its 60, so the nearest step below it, 20, is the slowest here.
-    pub const MAX_DIVIDER: u32 = 3;
 }
 
 impl Params {
@@ -232,8 +220,9 @@ impl Params {
     pub const MAX_DELAY: u32 = 30;
 }
 
-/// One camera on one monitor with every stage doing nothing to the light —
-/// the graph [`Knob::identity`] reads each knob's neutral value out of.
+/// The rig with every stage doing nothing to the light — the graph
+/// [`Knob::identity`] reads each knob's neutral value out of: zoom 1, no
+/// turn, no delay, a neutral front panel and every switcher at In1.
 ///
 /// A whole `Params` rather than the handful of constants it is made of, so a
 /// knob's identity is read by the same [`Params::knob`] the surface reads its
@@ -245,7 +234,6 @@ fn identity_graph() -> Params {
     for camera in &mut params.cameras {
         camera.gain = [1.0; 3];
         camera.delay = 0;
-        camera.divider = 1;
     }
     for monitor in &mut params.monitors {
         *monitor = Monitor::default();
@@ -290,13 +278,12 @@ impl Monitor {
     }
 }
 
-/// The whole instrument for one frame: every camera, every monitor, and the
-/// switcher routing the first onto the second. This is both the live state
-/// the knobs mutate and the on-disk config format — one struct, so the two
-/// cannot drift.
+/// The whole instrument for one frame: the shafts the cameras stand on,
+/// every camera, every monitor, and the switchers routing the first onto the
+/// second. The live state the knobs mutate, and the only one there is.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Params {
-    /// The shafts the cameras stand on — see [`crate::rig::shaft_of`]. Camera
+    /// The shafts the cameras stand on — see [`crate::rig::SHAFT_OF`]. Camera
     /// A and the rotating monitor share the first, so turning it turns both
     /// and there is nothing to keep in step.
     pub shafts: [Framing; crate::rig::SHAFTS],
@@ -459,31 +446,6 @@ impl Limit {
     }
 }
 
-/// Which node a knob's value belongs to, and so which of a [`Focus`]'s
-/// indices it reads. Most knobs live on one node and read one; the
-/// switcher's two crosspoints are edges, and read the pair of indices their
-/// own kind of edge joins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Side {
-    Camera,
-    Monitor,
-    Switcher,
-}
-
-impl Side {
-    /// Whether the focus's index of `node` addresses a knob on this side:
-    /// the indices a walk over the side's focuses steps, and the select
-    /// buttons that move such a knob out from under a hand.
-    pub const fn reads(self, node: Node) -> bool {
-        matches!(
-            (self, node),
-            (Side::Camera, Node::Camera)
-                | (Side::Monitor, Node::Monitor)
-                | (Side::Switcher, Node::Switcher)
-        )
-    }
-}
-
 /// What a knob does when it runs out of room.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Limit {
@@ -537,37 +499,18 @@ impl Knob {
         Knob::ALL.into_iter().find(|knob| knob.name() == name)
     }
 
-    /// Which of a [`Focus`]'s indices the knob reads.
-    pub const fn side(self) -> Side {
+    /// Which node the knob's value belongs to, and so which of a [`Focus`]'s
+    /// indices it reads.
+    pub const fn node(self) -> Node {
         match self {
-            Knob::Zoom | Knob::Rotation | Knob::Delay => Side::Camera,
+            Knob::Zoom | Knob::Rotation | Knob::Delay => Node::Camera,
             Knob::Hue
             | Knob::Saturation
             | Knob::Brightness
             | Knob::Contrast
             | Knob::Temperature
-            | Knob::Sharpness => Side::Monitor,
-            Knob::Switcher | Knob::Period => Side::Switcher,
-        }
-    }
-
-    /// Whether the graph has what this knob acts on: an input for the send,
-    /// a delay unit with any reach for the delay. Nothing else can be
-    /// missing — [`crate::config::validate`] refuses a graph with no camera
-    /// or no monitor. The factory map leaves out a knob that is not on and
-    /// [`crate::midi::Map`] refuses a hand-written binding of one, off this
-    /// one answer.
-    pub fn is_on(self, params: &Params) -> bool {
-        self.off_because(params).is_none()
-    }
-
-    /// Why the graph has nothing for this knob to act on, for the refusal.
-    pub fn off_because(self, params: &Params) -> Option<String> {
-        match self {
-            Knob::Delay if params.delay == 0 => {
-                Some("a frame delay unit, and this graph's reach is 0".to_string())
-            }
-            _ => None,
+            | Knob::Sharpness => Node::Monitor,
+            Knob::Switcher | Knob::Period => Node::Switcher,
         }
     }
 
@@ -637,48 +580,27 @@ impl Params {
     }
 
     /// How many frames of every monitor the bank keeps as a ring: the one a
-    /// pass is drawing, the one every camera reads, one more per frame of
-    /// the graph's reach, and the longest hold on top — a held frame is one
-    /// the ring keeps that many passes past the delay.
+    /// pass is drawing, the one every camera reads, and one more per frame
+    /// of the graph's reach.
     pub fn history(&self) -> usize {
-        let hold = self
-            .cameras
-            .iter()
-            .map(|c| c.divider - 1)
-            .max()
-            .unwrap_or(0);
-        2 + self.delay as usize + hold as usize
+        2 + self.delay as usize
+    }
+
+    /// How camera `c`'s view is magnified and turned, which is where the
+    /// shaft it stands on stands.
+    pub fn framing(&self, c: usize) -> Framing {
+        self.shafts[crate::rig::SHAFT_OF[c]]
     }
 
     /// How much of camera `c` monitor `m` shows, and how much of the seed:
     /// the matrix, off the switchers and the selects. Not stored — see
     /// [`Params::rig`].
-    /// How camera `c`'s view is magnified and turned, which is where its
-    /// shaft stands.
-    pub fn framing(&self, c: usize) -> Framing {
-        self.shafts[crate::rig::shaft_of(c)]
-    }
-
     pub fn route(&self, m: usize, c: usize) -> f32 {
         self.rig.feed(m).cameras[c]
     }
 
     pub fn send(&self, m: usize) -> f32 {
         self.rig.feed(m).seed
-    }
-
-    /// The switcher's source reversal, and the foot pedal's momentary cut:
-    /// In1 and In2 trade places on the focused switcher. Its own inverse, so
-    /// the pedal's release is the same call as its press.
-    pub fn reverse(&mut self, switcher: usize) {
-        self.rig.flip(switcher);
-    }
-
-    /// Every switcher whose period divides `pass` reverses. Whether the
-    /// `focused` one did: its crossfade is a knob a fader can be holding, and
-    /// a reversal moves it without the hand.
-    pub fn beat(&mut self, pass: u64, focused: usize) -> bool {
-        self.rig.beat(pass)[focused]
     }
 
     /// Through [`Params::place`] rather than by writing the field, so the
@@ -694,7 +616,7 @@ impl Params {
     }
 
     /// Where `knob` is standing. Every index is one the caller has already
-    /// landed inside this graph — see [`Knob::is_on`].
+    /// landed inside this graph.
     pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
@@ -746,12 +668,11 @@ impl Params {
         }
     }
 
-    /// Every index is one the caller has already landed inside this graph —
-    /// see [`Knob::is_on`].
+    /// Every index is one the caller has already landed inside this graph.
     fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
         match knob {
-            Knob::Zoom => &mut self.shafts[crate::rig::shaft_of(focus.camera)].zoom,
-            Knob::Rotation => &mut self.shafts[crate::rig::shaft_of(focus.camera)].rotation,
+            Knob::Zoom => &mut self.shafts[crate::rig::SHAFT_OF[focus.camera]].zoom,
+            Knob::Rotation => &mut self.shafts[crate::rig::SHAFT_OF[focus.camera]].rotation,
             Knob::Hue => &mut self.monitors[focus.monitor].colour.hue,
             Knob::Saturation => &mut self.monitors[focus.monitor].colour.saturation,
             Knob::Brightness => &mut self.monitors[focus.monitor].colour.brightness,
@@ -891,11 +812,10 @@ mod tests {
     }
 
     #[test]
-    fn a_side_reads_exactly_the_indices_its_knobs_are_stored_under() {
+    fn a_knob_reads_exactly_the_index_it_is_stored_under() {
         for knob in Knob::ALL {
             let mut params = crate::config::instrument();
             params.delay = 1;
-            assert!(knob.is_on(&params), "{knob:?}");
             let at = Focus::default();
             // Every neighbouring focus as it stood, since the rig's nodes
             // are not alike: what a side does not read must be exactly what
@@ -913,7 +833,7 @@ mod tests {
             assert_ne!(before, after, "{knob:?} did not move");
             for (i, node) in Node::ALL.into_iter().enumerate() {
                 let elsewhere = params.knob(knob, at.with(node, 1));
-                let want = match knob.side().reads(node) {
+                let want = match knob.node() == node {
                     true => stood[i],
                     false => after,
                 };
@@ -1137,8 +1057,7 @@ mod tests {
         let stood = params.rig.switchers[0];
         params.rig.periods[0] = 3;
         for pass in 1..=12u64 {
-            let moved = params.beat(pass, 0);
-            assert_eq!(moved, pass % 3 == 0, "pass {pass}");
+            params.rig.beat(pass);
             let expect = if (pass / 3) % 2 == 1 {
                 1.0 - stood
             } else {
@@ -1153,25 +1072,21 @@ mod tests {
         }
         params.rig.periods[0] = 0;
         for pass in 13..=30u64 {
-            assert!(!params.beat(pass, 0), "pass {pass}");
-            assert_eq!(params.rig.switchers[0], stood);
+            params.rig.beat(pass);
+            assert_eq!(params.rig.switchers[0], stood, "pass {pass}");
         }
-        // One grid for every switcher in the mode; only the focused
-        // switcher's move is reported, since only its fader can be holding a
-        // knob.
+        // One grid for every switcher in the mode, and each keeps its own
+        // beat.
         let other = params.rig.switchers[1];
         params.rig.periods[0] = 4;
         params.rig.periods[1] = 2;
-        assert!(
-            !params.beat(2, 0),
-            "switcher 2's beat reported as switcher 1's"
-        );
+        params.rig.beat(2);
         assert_eq!(params.rig.switchers[0], stood, "not this switcher's beat");
         assert_eq!(params.rig.switchers[1], 1.0 - other);
-        assert!(params.beat(4, 0));
+        params.rig.beat(4);
         assert_eq!(params.rig.switchers[0], 1.0 - stood);
         assert_eq!(params.rig.switchers[1], other);
-        assert!(params.beat(6, 1));
+        params.rig.beat(6);
         assert_eq!(params.rig.switchers[1], 1.0 - other);
     }
 
@@ -1216,11 +1131,11 @@ mod tests {
         );
         params.reset(Knob::Delay, focus);
         assert_eq!(params.cameras[0].delay, 0);
-        // With no reach there is nothing to dial, and the knob says so.
+        // With no reach there is nothing to dial: the knob's rail is the
+        // reach, so it holds still at zero.
         params.delay = 0;
-        assert!(!Knob::Delay.is_on(&params));
-        params.delay = 1;
-        assert!(Knob::Delay.is_on(&params));
+        params.nudge(Knob::Delay, 4.0, focus);
+        assert_eq!(params.cameras[0].delay, 0);
     }
 
     #[test]
@@ -1557,10 +1472,10 @@ mod tests {
                 switcher: 0,
             };
             let name = knob.name();
-            let node = match knob.side() {
-                Side::Camera => format!("camera {}'s {name}", focus.camera),
-                Side::Monitor => format!("monitor {}'s {name}", focus.monitor),
-                Side::Switcher => format!("switcher {}'s {name}", focus.switcher),
+            let node = match knob.node() {
+                Node::Camera => format!("camera {}'s {name}", focus.camera),
+                Node::Monitor => format!("monitor {}'s {name}", focus.monitor),
+                Node::Switcher => format!("switcher {}'s {name}", focus.switcher),
             };
             let (low, high) = knob.limit(&crate::config::instrument()).ends();
             // A count has no field below zero to poison.

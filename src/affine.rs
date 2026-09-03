@@ -68,10 +68,9 @@ impl Affine2 {
     }
 }
 
-/// Framing of a camera pointed at a monitor: how the monitor's image is
-/// magnified and turned on its way back onto that monitor. The rig's two
-/// freedoms and no others — a camera on a shaft slides and turns, and
-/// nothing on it pans.
+/// Where a shaft stands: how the image a camera on it sees is magnified and
+/// turned on its way back onto the monitor. The rig's two freedoms and no
+/// others — a camera on a shaft slides and turns, and nothing on it pans.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Framing {
     /// >1 magnifies the image once per pass.
@@ -91,7 +90,7 @@ impl Framing {
 }
 
 /// In the order the pair of flips is written down, which is the order
-/// [`Framing::flipped`] reads them out in.
+/// [`crate::params::Monitor::flip`] holds them in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
     X,

@@ -32,9 +32,9 @@ fn finished(capture: Capture) {
 
 /// One beat of the tempo, before the pass it falls on. Not said on the log:
 /// at a period of one it would be a line a pass.
-fn beat(played: &mut u64, params: &mut Params, focus: Focus) {
+fn beat(played: &mut u64, params: &mut Params) {
     *played += 1;
-    params.beat(*played, focus.monitor);
+    params.rig.beat(*played);
 }
 
 struct Live {
@@ -154,12 +154,12 @@ fn start(event_loop: EventLoop<()>, mut app: App) -> Result<(), Box<dyn std::err
     }
 }
 
-/// `params` is the loaded graph, already validated by `config::load`; `cli`
-/// says how big its monitors are and whether the window covers the display.
+/// `params` is the rig; `cli` says how big its monitors are and whether the
+/// window covers the display.
 ///
-/// The inputs are opened before the window is, so a file that is not there or
-/// a device that will not open says so on the terminal instead of behind a
-/// black layer of a running instrument.
+/// The seed is opened before the window is, so a device that will not open
+/// says so on the terminal instead of behind a black layer of a running
+/// instrument.
 ///
 /// Async because opening a GPU is, and because the one caller that cannot
 /// block on it — the browser — is the reason the adapter is opened out here
@@ -401,7 +401,7 @@ impl App {
 
     #[cfg(test)]
     fn beat(&mut self) {
-        beat(&mut self.played, &mut self.params, self.focus);
+        beat(&mut self.played, &mut self.params);
     }
 
     fn shown(&self) -> Shown {
@@ -427,7 +427,13 @@ impl App {
     /// on a one-node graph that press is the only way to ask what the knobs
     /// are on, and the log line is the only place the answer appears.
     fn refocus(&mut self, node: Node, index: usize) {
-        let moved_under = |knob: Knob| knob.side().reads(node) && index != self.focus.at(node);
+        // The index and not the value: two monitors may sit on the same hue,
+        // and a rewind after a select between them owes the monitor the hand
+        // was on rather than the one it is on now. Cameras A and 3 share a
+        // shaft, so a select between those two clears a name that had not
+        // moved — over-eager, which costs a rewind that says so, where the
+        // other way round costs the wrong node put back.
+        let moved_under = |knob: Knob| knob.node() == node && index != self.focus.at(node);
         if self.last_knob.is_some_and(moved_under) {
             self.last_knob = None;
         }
@@ -537,12 +543,12 @@ impl App {
             Action::Cut(edge) => {
                 let moved = match (edge, self.cut.take()) {
                     (Edge::Down, None) => {
-                        self.params.reverse(self.focus.switcher);
+                        self.params.rig.flip(self.focus.switcher);
                         self.cut = Some(self.focus.switcher);
                         true
                     }
                     (Edge::Up, Some(held)) => {
-                        self.params.reverse(held);
+                        self.params.rig.flip(held);
                         true
                     }
                     (_, held) => {
@@ -555,7 +561,7 @@ impl App {
                 }
             }
             Action::Reverse => {
-                self.params.reverse(self.focus.switcher);
+                self.params.rig.flip(self.focus.switcher);
                 log::info!("{}", self.params.describe(self.focus));
             }
             Action::Select => {
@@ -807,7 +813,7 @@ impl ApplicationHandler for App {
                 // an expose, a resize or the overlay unanswered.
                 let passes = self.tempo.take_due(Instant::now());
                 for _ in 0..passes {
-                    beat(&mut self.played, &mut self.params, self.focus);
+                    beat(&mut self.played, &mut self.params);
                     live.pass(&self.gpu, &self.params, &mut self.source);
                 }
                 // Nothing is drawn to a window nothing can see. The
@@ -952,7 +958,7 @@ mod tests {
             switcher: 0,
         };
         let before = app.params.clone();
-        // Zoom, because the preset loads it at 0.994 rather than at 1.0: a
+        // Zoom, because the rig stands at 0.994 rather than at 1.0: a
         // reset that put back *what was loaded* instead of the identity
         // would land on the wrong number, and there is nowhere else in this
         // test that difference shows.
@@ -1289,6 +1295,54 @@ mod tests {
         // Pressed again, it is the reverse of the reverse.
         app.act(Action::Reverse);
         assert_eq!(app.params, before);
+    }
+
+    #[test]
+    fn the_select_puts_the_focused_monitor_on_its_program_or_its_own_camera() {
+        // The other half of the routing state, and the only control that
+        // moves it. On Direct a monitor shows its own camera whatever the
+        // switchers say; on Program it shows the crossfade. The rotating
+        // monitor has neither, and the button is dead on it.
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        app.act(Action::Focus(Node::Monitor, 0));
+        app.params.rig.switchers[0] = 1.0;
+        assert!(app.shown().program, "the rig starts on its programs");
+        assert_eq!(app.params.route(0, 1), 1.0, "switcher A is at camera B");
+
+        app.act(Action::Select);
+        assert!(!app.shown().program);
+        assert_eq!(app.params.route(0, 0), 1.0, "direct is the monitor's own");
+        assert_eq!(app.params.route(0, 1), 0.0);
+        // Only the focused one: the other structure-A monitor is its own.
+        assert_eq!(app.params.route(1, 1), 1.0, "monitor 2 went with it");
+
+        app.act(Action::Select);
+        assert!(app.shown().program, "the latch did not come back");
+        assert_eq!(app.params.route(0, 1), 1.0);
+
+        // The rotating monitor shows camera B and has no select to press.
+        app.act(Action::Focus(Node::Monitor, 4));
+        let before = app.params.clone();
+        app.act(Action::Select);
+        assert_eq!(app.params, before, "the rotating monitor grew a select");
+        assert!(!app.shown().program);
+    }
+
+    #[test]
+    fn a_beat_belongs_to_the_switchers_whichever_monitor_the_focus_is_on() {
+        // The periods live on the four switchers and the rig has five
+        // monitors, so a beat that read the focus's monitor index would fall
+        // off the end the moment the last monitor was selected.
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        app.act(Action::Focus(Node::Monitor, 4));
+        app.params.rig.periods[3] = 1;
+        let before = app.params.rig.switchers[3];
+        app.beat();
+        assert_eq!(app.params.rig.switchers[3], 1.0 - before);
     }
 
     #[test]

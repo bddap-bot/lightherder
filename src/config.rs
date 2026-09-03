@@ -1,8 +1,7 @@
 //! The instrument's graph, and everything the GPU side assumes about it.
 
-use crate::feedback::MAX_TAPS;
 use crate::midi::ROW_BUTTONS;
-use crate::params::{Camera, Focus, Knob, Node, Params, Side};
+use crate::params::{Focus, Knob, Node, Params};
 use crate::rig::{self, Rig};
 
 /// The most of `node` there is — the rig's own counts, which is how far the
@@ -33,8 +32,8 @@ pub fn instrument() -> Params {
 /// the ones a knob does not distinguish would be the same checks and five
 /// times the loop, once a frame. The rest stay at zero, since a knob on any
 /// other side never reads them.
-fn focuses(side: Side, params: &Params) -> impl Iterator<Item = Focus> {
-    let count = |node| match side.reads(node) {
+fn focuses(side: Node, params: &Params) -> impl Iterator<Item = Focus> {
+    let count = |node| match side == node {
         true => params.count(node),
         false => 1,
     };
@@ -113,16 +112,16 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // differ on.
     for knob in Knob::ALL {
         let (low, high) = knob.limit(params).ends();
-        for focus in focuses(knob.side(), params) {
+        for focus in focuses(knob.node(), params) {
             let value = params.knob(knob, focus);
             if !(low..=high).contains(&value) {
                 // Built only on the way out, so the frame-by-frame
                 // re-assertion above stays allocation-free.
                 let (name, node) = (knob.name(), focus);
-                let what = match knob.side() {
-                    Side::Camera => format!("camera {}'s {name}", node.camera),
-                    Side::Monitor => format!("monitor {}'s {name}", node.monitor),
-                    Side::Switcher => format!("switcher {}'s {name}", node.switcher),
+                let what = match knob.node() {
+                    Node::Camera => format!("camera {}'s {name}", node.camera),
+                    Node::Monitor => format!("monitor {}'s {name}", node.monitor),
+                    Node::Switcher => format!("switcher {}'s {name}", node.switcher),
                 };
                 return Err(format!("{what} is {value}; it runs {low} to {high}"));
             }
@@ -139,37 +138,12 @@ pub fn validate(params: &Params) -> Result<(), String> {
             Params::MAX_DELAY
         ));
     }
-    // Not a knob either, so the walk above does not see it: a divider of
-    // zero is a path that never hands on a frame, and one past the slowest
-    // is bank bought for a rate the original never ran at.
-    for (i, camera) in params.cameras.iter().enumerate() {
-        if !(1..=Camera::MAX_DIVIDER).contains(&camera.divider) {
-            return Err(format!(
-                "camera {i}'s divider is {}; it runs 1 to {}",
-                camera.divider,
-                Camera::MAX_DIVIDER
-            ));
-        }
-    }
-    // The flattened routing-times-look products are what the shader iterates,
-    // and its uniform array is a fixed size. Bounded against every crossfade
-    // wherever it can stand, not against where it happens to be: a switcher
-    // sweeps mid-performance, so a feed of zeroes now is no promise about the
-    // tap count a second later.
-    let reachable = crate::feedback::reachable_taps(params);
-    if reachable > MAX_TAPS {
-        return Err(format!(
-            "a monitor here could be fed by {reachable} taps once the switchers \
-             are turned up; at most {MAX_TAPS}"
-        ));
-    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::Knob;
 
     #[test]
     fn the_instrument_validates() {
@@ -283,56 +257,8 @@ mod tests {
             validate(&with(3, 4)).unwrap_err(),
             "camera 0's delay is 4; it runs 0 to 3"
         );
-        // The ring the reach and a divided path's hold buy between them.
-        let mut p = with(4, 4);
-        p.cameras[1].divider = 2;
-        assert_eq!(p.history(), 7);
-    }
-
-    #[test]
-    fn a_divider_outside_one_to_the_slowest_is_refused() {
-        let with = |divider: u32| {
-            let mut p = instrument();
-            p.cameras[0].divider = divider;
-            p
-        };
-        assert!(validate(&with(Camera::MAX_DIVIDER)).is_ok());
-        assert_eq!(
-            validate(&with(0)).unwrap_err(),
-            "camera 0's divider is 0; it runs 1 to 3"
-        );
-        assert_eq!(
-            validate(&with(Camera::MAX_DIVIDER + 1)).unwrap_err(),
-            "camera 0's divider is 4; it runs 1 to 3"
-        );
-        assert_eq!(instrument().history(), 4);
-    }
-
-    #[test]
-    fn the_tap_bound_holds_at_every_setting_of_the_switchers() {
-        // `taps_of` drops a feed at zero and a crossfade can be swept, so the
-        // count validate holds against has to be the reachable one: what the
-        // rig runs is at or under it, and every switcher turned up reaches
-        // exactly it.
-        let params = instrument();
-        let reachable = crate::feedback::reachable_taps(&params);
-        for m in 0..params.monitors.len() {
-            let now = crate::feedback::taps_of(&params, m, 0, 0).count();
-            assert!(now <= reachable, "monitor {m} has {now} of {reachable}");
-            assert!(reachable <= MAX_TAPS, "{reachable} past {MAX_TAPS}");
-        }
-    }
-
-    #[test]
-    fn a_knob_the_rig_has_no_field_for_is_refused_a_reading() {
-        // The delay is the one knob the graph can be without, and the map
-        // refuses a binding of one that is off.
-        let mut none = instrument();
-        none.delay = 0;
-        assert!(!Knob::Delay.is_on(&none));
-        assert!(Knob::Delay.is_on(&instrument()));
-        for knob in Knob::ALL.into_iter().filter(|k| *k != Knob::Delay) {
-            assert!(knob.is_on(&none), "{knob:?}");
-        }
+        // The ring the reach buys: the frame being drawn, the one every
+        // camera reads, and one more per frame of reach.
+        assert_eq!(with(4, 4).history(), 6);
     }
 }

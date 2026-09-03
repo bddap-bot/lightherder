@@ -32,10 +32,12 @@ const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// them, so this is a constant of the instrument.
 pub const HEADROOM: f32 = 2.0;
 
-/// Most taps one monitor can be fed by. The rig needs seven — three cameras
-/// through their glass, plus the seed — so this leaves room to spare.
-/// `config::validate` holds the line.
-pub const MAX_TAPS: usize = 32;
+/// Most taps one monitor can be fed by, and so the length of the shader's
+/// uniform array. Every camera through every monitor its glass could see,
+/// plus the seed: the rig cannot reach it — its cameras see two monitors
+/// each and the seed is one tap, so six is what a pass is actually handed —
+/// but it is the bound a look matrix cannot cross, so nothing has to check.
+pub const MAX_TAPS: usize = crate::rig::CAMERAS * crate::rig::MONITORS + 1;
 
 /// The most GPU memory a bank may ask for. A cap in bytes rather than in
 /// pixels because it is the layers that do the multiplying: the rig's five
@@ -139,12 +141,11 @@ impl Shape {
         (newest + self.history - back) % self.history
     }
 
-    /// The slab `camera` reads on pass number `pass`. The ring moves on one
-    /// slab a pass and so does the look-back, so the slab stays put for
-    /// `divider` passes and then jumps: no frame is copied to hold it.
-    fn read(self, newest: usize, camera: &Camera, pass: u64) -> usize {
-        let phase = (pass % camera.divider as u64) as u32;
-        self.back(newest, camera.delay + phase)
+    /// The slab `camera` reads: the ring moves on one slab a pass and so
+    /// does the look-back, so a delayed cable hands on a frame that many
+    /// passes old without a copy being kept to hold it.
+    fn read(self, newest: usize, camera: &Camera) -> usize {
+        self.back(newest, camera.delay)
     }
 }
 
@@ -156,18 +157,12 @@ impl Shape {
 /// far back as its delay and its hold, an input's the layer
 /// [`Feedback::write_input`] writes its frame to.
 ///
-/// A routed camera fans out over its beam splitter, since a camera watching
-/// two monitors is two taps. A patched input is exactly one tap and carries
-/// no camera.
-///
-/// The one definition of which edges become taps, so that what
-/// [`Feedback::step`] writes and what [`reachable_taps`] bounds cannot drift
-/// apart on the zero-weight rule.
+/// A camera fans out over its beam splitter, since a camera watching two
+/// monitors is two taps. The seed is exactly one tap and carries no camera.
 pub(crate) fn taps_of(
     params: &Params,
     m: usize,
     newest: usize,
-    pass: u64,
 ) -> impl Iterator<Item = (Through, usize, f32)> + '_ {
     let shape = Shape::of(params);
     let feed = params.rig.feed(m);
@@ -183,7 +178,7 @@ pub(crate) fn taps_of(
                 .enumerate()
                 .filter(|(_, look)| **look > 0.0)
                 .map(move |(src, look)| {
-                    let layer = shape.monitor(shape.read(newest, camera, pass), src);
+                    let layer = shape.monitor(shape.read(newest, camera), src);
                     (Through::Camera(c), layer, feed.cameras[c] * look)
                 })
         });
@@ -191,24 +186,6 @@ pub(crate) fn taps_of(
         .then(move || (Through::Seed, shape.seed(), feed.seed))
         .into_iter();
     through_cameras.chain(straight_in)
-}
-
-/// The most taps any one monitor's pass can ever be given.
-///
-/// [`taps_of`] drops a feed whose weight is zero, and a crossfade can be swept
-/// mid-performance — so the count the rig runs at is not a bound on the count
-/// the shader will be handed. This is that count with every feed treated as
-/// live, which is what [`crate::config::validate`] holds against [`MAX_TAPS`]:
-/// each camera contributes the monitors its splitter can see, and the seed
-/// the one tap it is. The look weights are the other way about: no knob turns
-/// one, so a monitor a camera cannot see stays uncounted.
-pub(crate) fn reachable_taps(params: &Params) -> usize {
-    let through_cameras: usize = params
-        .cameras
-        .iter()
-        .map(|camera| camera.look.iter().filter(|look| **look > 0.0).count())
-        .sum();
-    through_cameras + 1
 }
 
 /// What a tap came through: one of the graph's cameras, or an input on its
@@ -615,12 +592,12 @@ impl Feedback {
             self.shape,
             "the graph's monitors and reach are baked into the bank at creation"
         );
-        // Everything else the tap flattening assumes — row lengths, weight
-        // signs, the tap cap — is the loader's contract, re-asserted here so
-        // a hand-built Params that skipped `config::load` fails loudly
-        // instead of sampling the wrong layer. One compare per value the
-        // graph holds, and no allocation on the success path, which is what
-        // makes it affordable every frame.
+        // Everything the tap flattening assumes — the counts, the splitter
+        // weights, every knob inside its rails — re-asserted here, so a
+        // Params a knob has poisoned fails loudly instead of feeding a NaN
+        // into a loop it can never leave. One compare per value the graph
+        // holds, and no allocation on the success path, which is what makes
+        // it affordable every frame.
         if let Err(why) = crate::config::validate(params) {
             panic!("unvalidated params reached the GPU: {why}");
         }
@@ -653,7 +630,7 @@ impl Feedback {
             let mirror = flip_uv(monitor.flip);
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
-            for (through, src, w) in taps_of(params, m, self.newest, self.pass) {
+            for (through, src, w) in taps_of(params, m, self.newest) {
                 // There is no camera between the switcher and the seed, so
                 // every stage a camera would have takes its identity and the
                 // layer arrives as itself. Its key is the switcher's own,
@@ -790,10 +767,6 @@ mod tests {
         // an input is one layer past the ring, delayed or not.
         rig.delay = 3;
         assert_eq!(rig.history(), 5);
-        rig.cameras[0].divider = 3;
-        assert_eq!(rig.history(), 7);
-        assert_eq!(layers(&rig), 7 * 5 + 1);
-        rig.cameras[0].divider = 1;
         assert_eq!(layers(&rig), 5 * 5 + 1);
         assert_eq!(bank_bytes(&rig, (1920, 1080)), 26 * 1920 * 1080 * 8);
     }
@@ -809,16 +782,14 @@ mod tests {
         // the graph nor the resolution alone is what went wrong.
         let mut most = rig.clone();
         most.delay = crate::params::Params::MAX_DELAY;
-        most.cameras[0].divider = crate::params::Camera::MAX_DIVIDER;
-        assert_eq!(Shape::of(&most).layers(), 171);
+        assert_eq!(Shape::of(&most).layers(), 161);
         let why = bank_fits(&most, (1920, 1080)).unwrap_err();
         assert!(
-            why.contains("171 bank layers") && why.contains("1920x1080"),
+            why.contains("161 bank layers") && why.contains("1920x1080"),
             "{why}"
         );
         // Eight frames of reach fit at 1080.
         most.delay = 8;
-        most.cameras[0].divider = 1;
         assert_eq!(Shape::of(&most).layers(), 51);
         assert!(bank_fits(&most, (1920, 1080)).is_ok());
         // At 4K the same ring is past the cap by bytes, and the refusal says
