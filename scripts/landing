@@ -20,7 +20,7 @@ check() {
     echo "TV binary $have is not the release build of $head ($built): run scripts/landing deploy"
     ok=1
   fi
-  pages=$(timeout 60 gh run list --workflow pages --json headSha,conclusion \
+  pages=$(timeout 60 gh run list --workflow pages --json headSha,conclusion,status \
     --jq "map(select(.headSha == \"$head\")) | .[0] | if . == null then \"no run\" elif .conclusion == \"\" then .status else .conclusion end")
   if [ "$pages" != success ]; then
     echo "pages workflow on $head: $pages"
