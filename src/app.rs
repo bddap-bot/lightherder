@@ -643,9 +643,9 @@ impl App {
         }
     }
 
-    /// Start recording the display. Nothing on a press that repeats — a held
-    /// key sends one — since the recording running is what the press asked
-    /// for and starting a second would drop the first mid-file.
+    /// Start recording the display. Nothing on a press that repeats, since
+    /// the recording running is what the press asked for and starting a
+    /// second would drop the first mid-file.
     fn record(&mut self) {
         if self.capture.is_some() {
             return;
