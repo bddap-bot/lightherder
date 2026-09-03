@@ -32,17 +32,15 @@ const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// them, so this is a constant of the instrument.
 pub const HEADROOM: f32 = 2.0;
 
-/// Most taps one monitor can be fed by. Sized for comfort: all-to-all with
-/// every camera the board can select is five taps, so this leaves room for
-/// each to look through a splitter several ways on top. `config::validate`
-/// holds the line.
+/// Most taps one monitor can be fed by. The rig needs seven — three cameras
+/// through their glass, plus the seed — so this leaves room to spare.
+/// `config::validate` holds the line.
 pub const MAX_TAPS: usize = 32;
 
 /// The most GPU memory a bank may ask for. A cap in bytes rather than in
-/// pixels because it is the layers that do the multiplying: the largest
-/// undelayed graph `config::validate` allows — eight monitors and four
-/// inputs — is 1.2 GiB of half-float at 3840x2160 and four times that at
-/// 7680x4320, a frame of delay is another copy of every monitor on top, and
+/// pixels because it is the layers that do the multiplying: the rig's five
+/// monitors two frames deep, plus the seed, are 1.3 GiB of half-float at
+/// 3840x2160, a frame of delay is another copy of every monitor on top, and
 /// a card asked for more than it has fails inside the driver rather than at
 /// the command line.
 pub const MAX_BANK_BYTES: u64 = 2 << 30;

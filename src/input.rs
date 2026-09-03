@@ -392,10 +392,8 @@ mod video {
     }
 
     /// A `<video>` where a terminal has an ffmpeg, playing the page's own
-    /// camera whatever device the graph named: a graph is written for the
-    /// rig, and a browser has one camera to offer, behind its own prompt.
-    /// A file has no way into a page — a graph there is a preset — so a
-    /// capture is the whole of it.
+    /// camera whatever device the rig names: the instrument has one seed and
+    /// a browser has one camera to offer, behind its own prompt.
     ///
     /// The pixels come back through a 2D canvas the size of a bank layer,
     /// the video drawn onto it letterboxed as ffmpeg's `pad` would, and read

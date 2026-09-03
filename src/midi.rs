@@ -1159,7 +1159,9 @@ mod tests {
             "the card does not name the surface"
         );
         assert!(
-            card.contains("  marker prev  the focused monitor shows only the focused input (or camera) while this is held down (cut)"),
+            card.contains(
+                "  marker prev  the focused switcher runs to its other source while this is held down (cut)"
+            ),
             "the cut is not on marker prev"
         );
     }

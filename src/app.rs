@@ -51,8 +51,7 @@ pub struct App {
     /// block and `resumed` is not a place to wait for an adapter.
     gpu: Gpu,
     params: Params,
-    /// What Reset restores: the graph as it was loaded, not the single
-    /// preset's knobs.
+    /// What Reset restores: the rig as it was built.
     initial: Params,
     /// The camera, the monitor and the switcher the knobs act on.
     focus: Focus,

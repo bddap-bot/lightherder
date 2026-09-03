@@ -122,12 +122,12 @@ const COMMANDS: &[Command] = &[
     cmd(
         "cut",
         Action::Cut(Edge::Down),
-        "the focused monitor shows only the focused input (or camera) while this is held down",
+        "the focused switcher runs to its other source while this is held down",
     ),
     cmd(
         "reverse",
         Action::Reverse,
-        "the focused monitor's two strongest sources trade levels",
+        "the focused switcher's two sources trade places",
     ),
     cmd(
         "select",

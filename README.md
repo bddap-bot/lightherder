@@ -4,222 +4,179 @@ A GPU video-feedback instrument: a software realization of an analog
 video-feedback rig, where cameras are pointed at the monitors they are drawing
 to. Rust + wgpu, no CPU pixel work in the loop.
 
-A graph of monitors and cameras: a routing matrix mixes any camera onto any
-monitor, beam splitters let one camera watch a blend of monitors, and each
-monitor keeps its own colour controls. Each path carries its own analog
-character — the lens's bloom, composite chroma bleed, grain — and each monitor
-its own amplifier rail. Every camera watches monitors and only monitors, so
-every path in the graph is a loop; light from outside — test patterns, video
-files, capture devices — enters where a real rig's does, on the switcher.
-The instrument writes nothing down: the graph comes from the command line and
+The rig is **Dave Blair's 4K Light Herder**, and there is no other — three
+cameras, five monitors, four switchers and one seed, with the freedoms his
+schematic gives them and no others. Nothing on the command line names an
+instrument, because there is one: `lightherder [options]`, and a bare word is
+a typo rather than a piece to play. It reads no graph and writes nothing down;
 the panel lives as long as the run, the way the hardware it is modelled on
 does.
+
+Every camera watches monitors and only monitors, so every path in the rig is a
+loop. The one light the rig did not make is a camera on the room —
+`/dev/video0` — plugged into the switcher, which is where a real rig plugs one
+in.
 
 ## How it works
 
 A "monitor" is one layer of an offscreen `Rgba16Float` texture array. A
-"camera" is a fullscreen pass that samples a layer through an affine
-transform — zoom, rotation, pan — multiplies by a per-channel gain and writes
-the result back. That output is the next frame's input, which is the whole
-trick: pull the camera back a little each pass and the image walks inward,
-turn it a little and it spirals.
+"camera" is a fullscreen pass that samples a layer through an affine transform
+— the slide and the turn of the shaft it stands on — multiplies by a
+per-channel gain and writes the result back. That output is the next frame's
+input, which is the whole trick: pull the camera back a little each pass and
+the image walks inward, turn it a little and it spirals.
 
-The wiring between them is a graph. A routing matrix says how much of each
-camera every monitor displays, and each camera's beam splitter says how much
-of each monitor it sees. Both are just weights, and sampling is linear, so
-the whole path from a monitor's next frame back to the bank of previous
-frames flattens on the CPU into a handful of *taps* — (source layer,
-sampling transform, weight) — and each monitor is one render pass summing
-its taps. There is no intermediate blend texture because none is needed. All
-monitors step from the same previous frames, the simultaneous capture a rig
-of real cameras performs, and the window shows the whole bank tiled in a
-grid — or one monitor of it on the whole display, which is the same tiling
-with one tile in it.
+The wiring flattens. What a monitor shows is a weighted sum of the three
+cameras and the seed; each camera sees a blend of monitors through the glass
+in front of its lens; sampling is linear — so the whole path from a monitor's
+next frame back to the bank of previous frames collapses on the CPU into a
+handful of *taps* — (source layer, sampling transform, weight) — and each
+monitor is one render pass summing its taps. There is no intermediate blend
+texture because none is needed. All monitors step from the same previous
+frames, the simultaneous capture a rig of real cameras performs, and the
+window shows the whole bank tiled in a grid — or one monitor of it on the
+whole display, which is the same tiling with one tile in it.
 
-The graph is Dave Blair's 4K Light Herder itself, and there is no other: three cameras,
-five monitors, one seed input. Cameras A and B each see their structure's
-upper monitor directly and its lower one in the 50/50 glass, at half each;
-camera 3 sees the rotating monitor, which shows camera B's feed. Four
-switchers, each a crossfade, do the rest: A mixes camera B's feed into
-structure A, B mixes into structure B a chain (C, then D) that carries
-camera A, camera 3 and the seed, and each structure monitor is on its camera
-direct or its switcher's program. It runs every monitor on program,
-both cross-links a quarter open, C half open and the seed a tenth of D. A
-crossfade is a weighted sum, so the whole chain multiplies out into the
-routing matrix (`src/rig.rs`) and there is no second mixer: switcher A and
-the four selects land on the matrix directly, the rest only as products.
+Half-float keeps headroom above 1.0, so dozens of passes do not quantise into
+bands. A sample that falls outside a monitor reads as black rather than as a
+smeared border texel, because a real camera aimed past the monitor sees an
+unlit room.
 
-Before that output is written, it passes the monitor's own front panel: the
-chroma decode, the video amplifier and the phosphor, in that order. The decode
-works in NTSC luma/chroma rather than RGB, which is what makes hue a *phase* —
-the two chroma axes are the real and imaginary parts of one subcarrier, so hue
-turns it and saturation scales it, and luma comes out untouched. Colour
-temperature is the phosphor's white point, a distance along the Planckian
-locus from D65: the chroma of that white rides the luma into the channels, so
-a grey warms to candlelight or cools to shade at the same brightness, and the
-hue does not turn it — a turned chroma is not a turned phosphor. Decode, turn,
-white and encode compose into one 3x3, which the CPU works out once a frame:
-chained per fragment instead they leave a ten-thousandth of the signal behind
-on every pass, and a loop that feeds itself turns that into a colour cast. Then contrast
-about mid-grey, brightness as a lift, and a power curve for the phosphor.
-Before any of that, on what the switcher hands the monitor, its sharpness: an
-unsharp mask a texel wide, the detail an LCD's driver board puts back — the
-difference between a texel and the mean of its four neighbours, less whatever
-the lens already blurred away, added back by the knob. All
-of it is inside the loop, so every knob compounds once per pass: a few
-hundredths of a radian of hue walks the trail through the spectrum, a gamma
-above 1 crushes the dark end and thins it out — far enough and it takes the
-seed with it, leaving a black monitor that looks like a loop that has died —
-and a brightness above zero lifts the whole frame and floods it.
+## The rig
 
-Contrast pivots about mid-grey rather than about black on purpose. A gain
-about black is exactly what the loop gain already is, and the front panel is
-not the place for a second one.
+Two **structures**, A and B. Each is an upper and a lower monitor at a right
+angle with 50/50 glass at 45° between them, and a camera looking into the
+glass: it sees its upper monitor directly and its lower one in the reflection,
+at half each. The fifth monitor turns on a shaft of its own and shows camera
+B, always. **Camera 3** is fixed on that rotating monitor and sees nothing
+else.
 
-## Analog character
+The cameras stand on **two shafts, not three**. Camera A and the rotating
+monitor are belt-locked to one — they turn and slide in unison — and camera 3
+watches that monitor, so what camera 3 sees moves with camera A off the one
+number the two share. Camera B has its own shaft. `zoom` and `rotation` on
+camera A and on camera 3 are therefore the same knob: the lock is that fact
+and the pair of shafts behind it, not a second number kept in step with a
+first.
 
-Four things a real rig does that a clean multiply does not, each hung where
-the physics puts it and each per node rather than per instrument — which is
-the point. One loop in a graph can glow and smear while the one beside it
-stays sharp, and that is most of what makes two structures read as two.
+Four **switchers**, the M/Es, each a crossfade between two feeds:
 
-Three of them belong to the camera's signal path. **Bloom** is the lens
-scattering a fraction of the light into a halo instead of focusing it: a
-redistribution, never an addition, because a term that adds light is a term
-the loop multiplies. **Chroma bleed** is composite bandwidth — NTSC carries
-colour on a subcarrier with a fraction of luma's bandwidth, so the colour
-arrives smeared along the scanline while the detail it belongs to does not.
-**Grain** is the sensor and the cable, monochrome and signed and present in
-the dark, which is what keeps a loop that has decayed to black from staying
-there.
+| | In1 | In2 |
+| --- | --- | --- |
+| A | camera A | camera B |
+| B | camera B | C's program |
+| C | camera A | D's program |
+| D | camera 3 | the seed |
 
-The fourth belongs to the monitor: **headroom**, where its video amplifier
-runs out of rails. Below half of it the signal is untouched; above, it bends
+and one **router select** per structure monitor: its own camera direct, or its
+switcher's program. One or the other, never a mix — mixing is the switcher's
+job, one stage upstream. The rotating monitor has no select, and the button is
+dead on it.
+
+**Those eight levers are the whole of the routing state.** A crossfade is a
+weighted sum, so the chain multiplies out into the matrix of camera and seed
+shares the taps are built from — and that matrix is worked out every time it
+is asked for and held nowhere. Switcher A and the four selects land on it
+directly; B, C and D reach a monitor only as products of one another, so a
+stored matrix would be a second state standing beside the levers that set it,
+free to drift from them. At every setting of the eight, on every monitor, the
+shares sum to exactly one: nothing on the rig's cabling amplifies.
+
+It starts with every monitor on its program — on Direct the switchers would
+feed nothing — both cross-links a quarter open, C half and D a tenth. So each
+structure is made of the other and still keeps a shape of its own, and the
+seed arrives on a B monitor at 0.0125. Structure A never takes the seed
+directly: it reaches A only as light already round B's loop.
+
+Each camera's gain is a per-channel loss down the cable and through the lens,
+just under unity, which is what makes a loop settle rather than run. A's blue
+survives best and B's red does, so the two structures' trails cool and warm
+away from each other. Nothing on the rig turns one, so nothing here does
+either.
+
+Out of the box both shafts pull back — 0.6% a pass — and turn the same way at
+their own rates, 0.05 and 0.08 radians, so the structures stay distinct and no
+round trip cancels its own rotation.
+
+## The front panel
+
+Before a monitor's output is written it passes that monitor's own front panel:
+the chroma decode, the video amplifier, and the amplifier's rails.
+
+The decode works in NTSC luma/chroma rather than RGB, which is what makes hue
+a *phase* — the two chroma axes are the real and imaginary parts of one
+subcarrier, so hue turns it and saturation scales it, and luma comes out
+untouched. Colour temperature is the phosphor's white point, a distance along
+the Planckian locus from D65: the chroma of that white rides the luma into the
+channels, so a grey warms to candlelight or cools to shade at the same
+brightness, and the hue does not turn it — a turned chroma is not a turned
+phosphor. Decode, turn, white and encode compose into one 3x3, which the CPU
+works out once a frame: chained per fragment instead they leave a
+ten-thousandth of the signal behind on every pass, and a loop that feeds
+itself turns that into a colour cast.
+
+Then contrast about mid-grey, and brightness as a lift. Contrast pivots about
+mid-grey rather than about black on purpose: a gain about black is exactly
+what the loop gain already is, and the front panel is not the place for a
+second one.
+
+Then the **rails**, at twice display white, where the video amplifier runs out
+of them. Below half of that the signal is untouched; above, it bends
 asymptotically onto it, the two arms meeting at the knee in both value and
 slope. This is the difference between an analog feedback rig and a runaway
-multiply — push the loop gain past unity with the rail wide open and the
-middle of the spiral becomes a flat white disc, bring the rail down onto the
-signal and the same overdrive compresses into a structure you can still see.
+multiply: with the rail wide open the middle of an overdriven spiral is a flat
+white disc, and with the rail on the signal the same overdrive compresses into
+a structure you can still see. It is a constant of the instrument rather than
+a knob — a real amplifier always has rails, and nothing on the rig turns
+them. The knee lands exactly on 1.0, so nothing a monitor can actually show is
+touched, and the reserve above white that the half-float bank exists to keep
+compresses onto 2.0 rather than running.
 
-Bloom and bleed ride the taps that were already there, so no intermediate
-texture appears. Their offsets are worked out on the CPU through each tap's
-own affine: a halo is round in the *camera's* image and a bleed runs along
-the *camera's* scanline, whatever angle or zoom that camera is watching from.
-The bleed needs no matrix — NTSC's luma weights sum to one, so adding the
-same amount to all three channels moves luma by exactly that and leaves the
-subcarrier alone, and "this point's luma, the neighbourhood's colour" is one
-dot product. A path with no character takes no extra samples at all.
+Before any of that, on what the switcher hands the monitor: its **sharpness**,
+an unsharp mask a texel wide — the detail an LCD's driver board puts back, the
+difference between a texel and the mean of its four neighbours, added back by
+the knob. At rest the stage is skipped outright, so a rested knob is exactly
+inert inside a loop that would compound a residual.
 
-None of it is on: a clean path and a wide-open rail are an exact identity,
-guarded over a hundred passes for the same reason the colour stage is.
+All of it is inside the loop, so every knob compounds once per pass: a few
+hundredths of a radian of hue walks the trail through the spectrum, and a
+brightness above zero lifts the whole frame and floods it.
 
-## External inputs
+## The seed
 
 A camera watches monitors. That is the instrument: a camera on a stand in a
-room of monitors sees the light already going round, so every path in the
-graph closes and there is no such thing as an aimable source. Light that the
-graph did not make plugs into the **switcher** instead, beside the cameras,
-which is where a real rig plugs it in.
+room of monitors sees the light already going round, so every path closes and
+there is no such thing as an aimable source. The light the rig did not make
+arrives on the **switcher**, beside the cameras, as In2 of M/E D.
 
-An input is a further layer of the same source bank, and the switcher has a
-second half addressed to those layers — `routing[m][c]` weights the cameras
-onto monitor `m`, and each input carries its own `into[m]`, its weight onto
-the same monitors. Each list is counted against its own kind, so a camera
-added to a graph cannot silently take over an input's level: a list that no longer
-matches its own kind is a refusal rather than a shift. Nothing in the shader
-knows which kind of layer it sampled, and a monitor sums the two halves
-without being told which was which.
+It is one physical camera, `/dev/video0`, and the monitors start dark — on
+this rig the seed is what sparks the loops. It is a further layer of the same
+source bank, so nothing in the shader knows which kind of layer it sampled,
+and a monitor sums the cameras and the seed without being told which was
+which. It is not part of any loop: nothing draws to it and no camera watches
+it. It arrives square on and whole, because there is no lens between it and
+the switcher — framing, gain and glass are a camera's, and the seed passes
+none of them.
 
-What an input is *not* is part of the loop: no camera draws to one and none
-watches one, so it is light entering the graph rather than light going round
-it — the same role a white blob has. It arrives square on and whole, because
-there is no lens between the switcher and it: framing, gain, bloom and the
-keyer are a camera's, and an input passes none.
-
-```toml
-inputs = [
-  { source = { pattern = "bars" }, into = [0.0] },
-  { source = { file = "clip.mp4" }, into = [0.5] },    # looped, at its own rate, onto the monitor at half
-  { source = { capture = { format = "v4l2", device = "/dev/video0" } }, into = [0.0] },
-]
-cameras = [{ look = [1.0] }]                           # watches the monitor, as every camera does
-routing = [[0.98]]                                     # …and the switcher sends it back
-```
-
-A file and a capture device are one implementation — an `ffmpeg` reading
-something and writing raw RGBA down a pipe, scaled and letterboxed to the
-monitor size — so anything ffmpeg can open is an input. That includes its own
-generators (`{ format = "lavfi", device = "testsrc2" }`) and a screen
-(`{ format = "x11grab", device = ":0.0" }`), which is why there is exactly one
-drawn pattern: bars earn being drawn with levels a test can assert without
-pinning an ffmpeg version, and geometry ffmpeg can draw itself. A pattern is
-also still — motion is the camera's job — so it is uploaded once rather than
-every frame.
-
-A source that has not produced its first frame by the time the window would
-open is an error on the terminal, not a black layer, and one that ends
-mid-performance says so in the log and leaves its last frame on the layer.
-ffmpeg only has to be on `PATH` if a graph actually asks for a file or a
-device; `shell.nix` has one.
-
-A graph file names what ffmpeg opens, so running someone else's is trusting
-it with that much. A `file` may only be a path — the file protocol is forced,
-so an `http://` URL is refused rather than fetched for as long as the
-instrument runs — but a `capture` is a format and a device string handed
-straight to ffmpeg, and `{ format = "lavfi", device = "movie=/private.mp4" }`
-puts a local file on screen. Read a graph before you play it.
-
-Injection level is the crosspoint the input is sent on — a knob like the
-other crosspoint, on fader 1 against the focused monitor. Near unity a little
-goes a long way: a hundredth of the seed onto a monitor whose loop runs at
-0.985 and whose glass is dark goes round seventy times before it fades, and
-every photon on that monitor came in from outside. Turn it up mid-performance
-and the outside floods in; turn it to zero and the loop keeps running on what
-it has.
-
-### The keyer
-
-Each camera's path carries a keyer beside its gain and its character: what
-this path refuses to hand on. Two keys that multiply, both off by default. The
-**luma key** passes everything at or above its threshold and finishes cutting
-one softness below it, so a subject in front of a dark room feeds the rig and
-the room feeds nothing. The **chroma key** cuts the pixels leaning toward its
-key colour — named as a hue, the way this instrument names every colour —
-with a tolerance for how much of it a pixel may carry; at the top of its
-travel the key is off, so grey and the far hues always pass. All four are
-ordinary knobs, set in the graph file and mappable from a MIDI surface. On the camera
-because that is the only signal path the instrument has — the gain, the
-framing and the character are all there, and what the
-switcher hands a monitor from outside it hands over whole. A camera watches
-monitors, so a key is a gate between one monitor and the next: on a loop's own
-camera it gates the feedback, refusing the dark of a trail or one hue of it a
-trip round.
-
-Lifting a subject off its room is what the rig keys for: `/dev/video0` meets
-a luma key on its way into the switcher, so the lit subject is handed on and
-the unlit room behind it is not. That is where a key can sit at all — on the
+On its way in it meets the switcher's **luma key**: passing from mid-grey up
+and cutting to nothing a little below, which is a lit subject against an unlit
+room — what a camera pointed at a couch faces. The lit subject feeds the rig
+and the room behind it does not. That is where a key can sit at all; on a
 loop's own camera it would gate the trail it is building, so there would never
-be a trail.
+be a trail. It is fixed character, not a control: the board has no key.
 
-A monitor's **seed** is what lights its loop from outside: either a soft
-white blob on the glass, or nothing of its own — dark glass, holding only
-what the switcher paints on it. One or the other, not a level with an off
-value, because the two are different rigs and the dark rig's level is already
-played on the switcher. PLAY swaps them, and the
-button is
-lit while the focused monitor has its blob. A blob is what starts a loop with
-gain below 1.0, which decays to black with nothing feeding it. The spot sits
-off-centre on purpose: a radially symmetric spot in the middle is a fixed
-point of rotation, so a centred one would leave the rotation knob with
-nothing visible to do. Half-float keeps
-headroom above 1.0 so dozens of passes do not quantise into bands. Samples
-that fall outside the monitor read as black rather than a smeared edge,
-because a real camera aimed past the monitor sees an unlit room.
+How much of it reaches a monitor is the switchers' business, which is what
+makes it playable without a knob of its own. Near unity a little goes a long
+way — every photon on a monitor lit only through the chain came in from
+outside — so sweeping M/E D floods the outside in, and running it back to In1
+leaves the loops on what they have.
 
-Out of the box the default knobs settle into a spiral: the camera pulls back
-0.6% and turns 0.05 radians per pass, at a gain just under unity that is
-spread across the channels, so the trail cools from white to blue as it winds
-in.
+The pixels are an `ffmpeg` reading the device and writing raw RGBA down a
+pipe, scaled and letterboxed to the monitor size. A source that has not
+produced its first frame by the time the window would open is an error on the
+terminal, not a black layer, and one that ends mid-performance says so in the
+log and leaves its last frame on the layer. In a browser it is a `<video>`
+playing the page's own camera, read back through a canvas into the same bytes.
 
 ## The control surface
 
@@ -230,127 +187,114 @@ whose card is named in `/proc/asound/cards`, and when the cable comes out the
 read ends and it goes back to looking. ALSA raw MIDI and no library — a
 controller is `/dev/snd/midiC<card>D0`, and reading it gives the wire bytes.
 
-Out of the box, with no configuration. The select rows are the exception to
-"out of the box": they are the graph's, and on the default `single` rig — one
-camera, one monitor, no inputs — all three are dead but for R5–R8, the
-reversal, the flips and the page on every rig.
+Out of the box, with no configuration. Eleven knobs on sixteen continuous
+controls, so there is no page button and the five rotaries past the third are
+dead.
 
 | control | is |
 |---|---|
-| fader 1 | the **send**, on a rig that has an input; nothing on one that has not |
-| faders 2–8 | the focused **monitor**: hue, saturation, brightness, contrast, gamma, headroom, and the crosspoint — how much of the focused camera it shows |
-| rotaries 1–8 | the focused **camera**: zoom, rotation, pan x, pan y, loop gain, bloom, chroma bleed, noise |
-| fader 2, page 2 | the focused **monitor**'s colour temperature, under the hue fader as the original's toggle puts it under the hue knobs: down cools the white toward shade, up warms it toward candlelight, a quarter of the way up is daylight |
-| fader 3, page 2 | the focused **monitor**'s sharpness, beside the temperature as the other face of the original's toggle: at the bottom the stage is skipped; up, every rim the cameras hand it steepens |
-| fader 7, page 2 | the focused **monitor**'s period: every this many passes its two strongest sources trade levels, as the reversal does; at the bottom the mode is off; nothing on a graph with one source |
-| fader 8, page 2 | the focused **camera**'s delay, in whole frames up to the graph's reach; nothing on a graph with none |
-| rotaries 1–8, page 2 | the focused **camera** still: red, green and blue gain, bloom radius, key threshold, key softness, key hue, key tolerance |
-| S 1–5 | focus camera 1–5, as many as the graph has a choice of |
+| faders 1–6 | the focused **monitor**'s front panel: hue, saturation, brightness, contrast, temperature, sharpness |
+| fader 7 | the focused **switcher**'s period: passes between reversals, 0 to 60, and 0 is the mode off |
+| fader 8 | the focused **switcher**'s crossfade — the lever the piece is played on, nearest the hand that is already on the select rows |
+| rotaries 1–3 | the focused **camera**: where it stands on its shaft (zoom, rotation) and how late its cable is (delay) |
+| rotaries 4–8 | dead — free for a `midi.toml`, and no hand throws one by accident |
+| S 1–3 | focus camera A, B, 3 |
+| S 4, S 5 | dead |
 | S 6, S 7 | **precision -**, **precision +**: halve or double what a full throw of a fader moves, on a ladder from a whole travel down to a sixteenth; a quarter to begin with; the log says which rung |
 | S 8 | **clutch**: while held, every fader and rotary moves nothing, so a hand can bring one back from a rail; lit while held |
-| M 1–8 | focus monitor 1–8, likewise |
-| R 1–4 | focus input 1–4, likewise |
-| R 5 | **reverse**: the focused monitor's two strongest sources trade levels; nothing on a monitor showing one thing |
-| R 6, R 7 | **flip x**, **flip y**: mirror the focused camera left for right, top for bottom; lit while it is |
-| R 8 | **page**: the faders and rotaries on their other page of knobs; lit on page 2 |
-| marker next | blank the monitors |
+| M 1–5 | focus monitor: upper A, lower A, upper B, lower B, rotating |
+| M 6–8 | dead |
+| R 1–4 | focus switcher A, B, C, D |
+| R 5 | **reverse**: the focused switcher's In1 and In2 trade places — the crossfade run to the other end of its travel |
+| R 6, R 7 | **flip x**, **flip y**: mirror the focused monitor's router output left for right, top for bottom; lit while it is |
+| R 8 | **select**: the focused monitor on its switcher's program or on its own camera; lit on program; dead on the rotating monitor, which has none |
+| marker next | blank every monitor, so the loops restart from the seed alone |
 | ◀◀ rewind | put the last knob turned back to its identity |
 | ■ stop | reset every knob |
-| ▶ play | the focused monitor's seed: white blob or camera; lit while it is the blob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | ▶▶ forward | the focused monitor on the whole display, or the tiled bank |
 | \|◀ track prev, ▶\| track next | the tempo: slower / faster, four presses to halve or double it |
 | ● marker set | write what the display is showing to a file |
 | ● record | record the display for as long as it is held down |
-| marker prev | **cut**: while held, the focused monitor shows the focused input alone — or, on a rig with no inputs, the focused camera — and letting go puts its crosspoints back |
+| marker prev | **cut**: the switcher's foot pedal — the press throws the focused switcher end to end and the release puts it back |
+| ▶ play | nothing — the factory map binds it to no command, so it stays dark |
 
-So the left hand works one monitor, the right hand one camera, and the two
-crosspoints bracket the front panel: outside light enters at fader 1 and loop
-light arrives at fader 8. The three
-select rows point the knobs at a node, one kind of node each: Solo the
-cameras, Mute the monitors, Record the inputs.
+So the left hand works one monitor and one switcher, the right hand one
+camera, and the three select rows point the knobs at a node, one kind each:
+Solo the cameras, Mute the monitors, Record the switchers. Solo selects
+because that is what a hand off a mixer reaches for it to do, and the other
+two rows follow it downward in the order the light travels — the cameras that
+film the glass, the glass, then what routes between them.
 
-**A row is the choice its kind offers, and nothing else.** The surface is
-built for the graph about to be played. A rig of one camera and two monitors
-binds M1 and M2 and leaves fifteen select buttons dead — unlit, silent,
-and free for a `midi.toml` to claim; R5–R8 are the reversal, the flips and the page on every rig, and S6–S8 the precision pair and the clutch. The Solo row is dead there
-because one camera is no choice: a button that selects the only camera there
-is selects what is already selected, and the rule is that a button is
-owed to equipment, not spent on it. Dead is the point.
+**A row is exactly as wide as its kind.** The rig is three cameras, five
+monitors and four switchers, so five select buttons are dead — unlit, silent,
+and free for a `midi.toml` to claim; the commands take the rest of the tails,
+which is why R5–R8 and S6–S8 cost the transport nothing. A button is owed to
+equipment, not spent on it. Dead is the point.
 
-The loud cases are the other way round. More of a kind than a row is wide and
-the config is refused at load rather than played with a node no hand can
-bring the knobs to; a `midi.toml` that binds a select button on a node the
-graph has not got — or the send on a rig with no input to send — is refused
-the same way, rather than lighting a button that lies or spending a fader on
-silence. Nothing is bound to quit — the window manager ends the instrument,
-and a slipped finger on the surface must not be able to. Every knob the graph has is on
-the factory map, on one page or the other; page 2 keeps the rotaries the camera's,
-puts the monitor's colour temperature on fader 2, its sharpness on fader 3, its
-period on fader 7 and the camera's delay on fader 8, and leaves the other faders free for a `midi.toml`
-to claim.
+The loud cases are the other way round. A `midi.toml` that binds a select
+button on a node the rig has not got is refused at load rather than lighting a
+button that lies. Nothing is bound to quit — the window manager ends the
+instrument, and a slipped finger on the surface must not be able to.
 
 **A fader turns its knob by how far it moves, never to where it stands.** A
 fader sends where it is, and what the instrument reads off that is the
 distance since it was last heard from: a knob moves by that fraction of its
 travel, scaled by the precision — a quarter by default, so a full throw covers
 a quarter of the knob and one step of the 127 covers a five-hundredth. Nothing
-jumps: a hot-plug, a page turn, a change of focus, a reset, a cut or a beat
-of the period all leave every fader turning on from wherever the knob now is.
-The rails clamp — a step past one is dropped, not owed — and a fader that has
-run out of travel is brought back under the **clutch**: while S8 is held, every
-fader and rotary moves nothing, and letting go resumes from the new position.
-Rotation, hue and the key hue wrap instead of clamping. Zoom, gamma and
-headroom are ratios, and a step multiplies instead of adding: a throw doubles
-the zoom from wherever it stands, one code moves it half a percent, and unity
-zoom and gamma sit in the middle of their travel, so the thousandths either
-side of 1.0 get the same hand as the doublings above it. The two whole-number
-knobs, the delay and the period, are turned a frame at a time, ticking over
-at the half like a detent; at a quarter a full throw over a reach of four is
-one frame, and at a sixteenth the delay wants two throws, clutched between,
-for the same frame.
+jumps: a hot-plug, a change of focus, a reset, a cut or a beat of the period
+all leave every fader turning on from wherever the knob now is. The rails
+clamp — a step past one is dropped, not owed — and a fader that has run out of
+travel is brought back under the **clutch**: while S8 is held, every fader and
+rotary moves nothing, and letting go resumes from the new position. Rotation
+and hue wrap instead of clamping, a whole revolution end to end. Zoom is a
+ratio and a step multiplies instead of adding: a throw doubles it from
+wherever it stands, one code moves it half a percent, and unity sits in the
+middle of the travel, so the thousandths either side of 1.0 get the same hand
+as the doublings above. The two whole-number knobs, the delay and the period,
+are turned a frame at a time, ticking over at the half like a detent.
 
 The buttons are read on the way down, which assumes the surface's buttons are
-**momentary** rather than latching — Korg's editor calls it Button Behavior.
-A latching button plays on every second press.
+**momentary** rather than latching — Korg's editor calls it Button Behavior. A
+latching button plays on every second press.
 
 ### Putting one knob back, and playing the tempo
 
-Stop puts the whole panel back to the graph as it was loaded. **Rewind puts
+Stop puts the whole panel back to the instrument as it started. **Rewind puts
 back the one knob you were just turning**, to its *identity* — the value at
-which its stage does nothing to the light: zoom 1, no turn, no pan, unity
-gain, a clean path, the keys off, a neutral front panel. The
-crosspoint is the one knob with no such value — it is a weight in a sum
-rather than a stage the light passes through, and its row *is* the monitor's
-loop gain — so its identity is the connection not made. Unity there would put
-a second camera on the monitor at full and take a `crossed` row to 2.0,
-where zero loses that camera visibly and the fader puts it straight back.
+which its stage does nothing to the light: zoom 1, no turn, no delay, a
+neutral front panel and no sharpening. The crossfade is the one knob with no
+such value — it is not a stage the light passes through but where a sum
+stands — so its identity is the end of its travel it started at, In1 whole.
+The picture visibly loses the mix and the fader puts it straight back, which
+is the error that corrects itself.
 
-Named by having been turned rather than by a control of its own, because
-there are two dozen of them and no display to point at one with, and the knob a
-hand wants back is the one that hand was just on. Which stops being true the
-moment the panel moves without the hands, so a whole-panel reset and a change
-of focus both clear the name — otherwise rewind after either would put back a
-knob nobody has touched.
+Named by having been turned rather than by a control of its own, because there
+are eleven of them across twelve nodes and no display to point at one with, and
+the knob a hand wants back is the one that hand was just on. Which stops being
+true the moment the panel moves without the hands, so a whole-panel reset and
+a change of focus onto another node of the same kind both clear the name —
+otherwise rewind after either would put back a knob nobody has touched.
 
 **The track pair plays the tempo**: |◀ slower, ▶| faster, a press being the
 fourth root of two so four of them halve or double the rate. It is the one
-control that acts on the whole piece rather than on a node of the graph, and
-the TRACK silkscreen is the one pair the surface prints as a pair — a minus
-and a plus want a pair to sit on. `--rate` is where the piece starts; the
-track pair is where it is played from there, and the rate line a second later
-is the readout. Nothing latches: a tempo is heard, not held.
+control that acts on the whole piece rather than on a node of the rig, and the
+TRACK silkscreen is the one pair the surface prints as a pair — a minus and a
+plus want a pair to sit on. `--rate` is where the piece starts; the track pair
+is where it is played from there, and the rate line a second later is the
+readout. Nothing latches: a tempo is heard, not held.
 
 ### The lit buttons
 
-**The Solo button of the focused camera is lit, and so is the focused
-monitor's**, so the panel says where each hand's knobs are without anyone
-reading the log line. They follow the focus wherever it moves and go out when
-the instrument does. A node the map bound no button to has none to light, and
-lights none: a lamp on the wrong button is worse than no lamp. A latched mode
-lights the button holding it by the same rule, off that
-button's *action*, so a `midi.toml` that moves the overlay moves its lamp with
-it.
+**The focused camera's Solo button is lit, and so are the focused monitor's
+and the focused switcher's**, so the panel says where each hand's knobs are
+without anyone reading the log line. They follow the focus wherever it moves
+and go out when the instrument does. A latched mode — the overlay, the solo,
+the flips, and the select, which is the one bit nothing else on a fullscreen
+display says — lights the button holding it by the same rule, off that
+button's *action*, so a `midi.toml` that moves a binding moves its lamp with
+it. A node or a mode the map bound no button to lights nothing rather than the
+nearest button: a lamp on the wrong button is worse than no lamp.
 
 That takes setting up, and the app does the setting up. A nanoKONTROL2 leaves
 the factory in **LED Mode: Internal**, where a button lights itself while it is
@@ -363,12 +307,11 @@ is always the surface its owner set up. The cost is a handshake on every
 connect, which is where it belongs.
 
 **That switch is one switch for the whole panel**, which is why the app then
-drives every button rather than the eight it came for: external mode takes
-every row's lights, not just the Solo row's. So a button the map binds is lit
-while it is held — exactly what internal mode did for it — and the focused
-camera's is lit whether or not a finger is on it. What the instrument adds is
-one lamp; what it takes away is nothing. A button the map binds nothing to
-stays dark,
+drives every button rather than the few it came for: external mode takes every
+row's lights, not just the Solo row's. So a button the map binds is lit while
+it is held — exactly what internal mode did for it — and the focused camera's
+is lit whether or not a finger is on it. What the instrument adds is one lamp;
+what it takes away is nothing. A button the map binds nothing to stays dark,
 which is now what it means.
 
 The mode goes back to Internal on the way out, so the surface lights its own
@@ -402,7 +345,9 @@ a channel.
 
 `$XDG_CONFIG_HOME/lightherder/midi.toml`, named on the log at startup. If it
 is not there you get the layout above; if it is there and will not load, the
-instrument says why and does not start.
+instrument says why and does not start. It remaps the surface and nothing
+else — there is no config file for the rig, because there is nothing in the
+rig to choose.
 
 ```toml
 # Matched case-insensitively against the card's line in /proc/asound/cards.
@@ -412,14 +357,9 @@ device = "nanoKONTROL"
 cc = 0
 knob = "hue"        # any knob name the card prints
 
-[[fader]]
-cc = 0
-knob = "noise"
-page = 2            # the same control, once the page button has turned the knobs over
-
 [[button]]
 cc = 71
-command = "page"
+command = "select"
 
 [[button]]
 cc = 41
@@ -427,24 +367,23 @@ command = "blank"   # any command name the card prints
 
 [[button]]
 cc = 90
-command = "mon 1"       # focus monitor 1, off a control the surface has spare
+command = "mon 1"   # focus the upper A monitor, off a spare control
 ```
 
 A fader names a **knob** and spans its whole travel — for the two knobs that
-wrap, rotation and hue, that is one full revolution from bottom to top. A
-fader is on `page` 1 unless it says 2; the buttons are on both pages, so a
-control may carry one knob a page and a button on no page; a map with a knob
-on page 2 and no `page` button is refused. A
-button names a **command**, spelled the way the overlay captions it: `blank`,
-`reset`, `reset 1`, `seed`, `solo`, `help`, `snap`, `record`, `cut`, `reverse`, `page`, `flip x`, `flip y`, `rate -`,
-`rate +`, `precision -`, `precision +`, `clutch`, and `cam 1`…`cam 5`, `mon 1`…`mon 8`, `in 1`…`in 4` for the focus —
-as many of each as a graph may legally hold.
+wrap, rotation and hue, that is one full revolution from bottom to top. The
+knobs are `zoom`, `rotation`, `delay`, `hue`, `saturation`, `brightness`,
+`contrast`, `temperature`, `sharpness`, `switcher` and `period`. A button
+names a **command**, spelled the way the overlay captions it: `blank`,
+`reset`, `reset 1`, `solo`, `help`, `snap`, `record`, `cut`, `reverse`,
+`select`, `flip x`, `flip y`, `rate -`, `rate +`, `precision -`,
+`precision +`, `clutch`, and `cam 1`–`cam 3`, `mon 1`–`mon 5`, `sw 1`–`sw 4`
+for the focus.
 
 Every channel is listened to, so a surface set to some other MIDI channel
-still works. A control number may only be bound once, and a command name that
-nothing answers to is refused at load with the list of the ones that do. So
-is a binding on equipment the graph has not got — a select on a camera
-nobody owns, or the send on a rig with no input to send.
+still works. A control number may only be bound once, and a name that nothing
+answers to is refused at load with the list of the ones that do — a surface
+that quietly plays the wrong knobs is worse than one that will not start.
 
 ## Run it
 
@@ -452,19 +391,11 @@ nobody owns, or the send on a rig with no input to send.
 nix-shell --run "cargo run --release"
 ```
 
-There is one instrument and nothing on the command line names it: Blair's 4K
-Light Herder, three cameras and five monitors, seeded by `/dev/video0` through
-the switcher's luma key.
-
 It comes up covering the display, because an instrument on a stage is the only
 thing on its screen; `--windowed` is how you get at the rest of the machine.
 Quitting is the window manager's — closing the window, or a `TERM`. Nothing on
 the surface stops the instrument: a slipped finger mid-performance must not be
 able to.
-
-```
-nix-shell --run "cargo run --release -- --windowed"
-```
 
 | | |
 | --- | --- |
@@ -475,54 +406,34 @@ nix-shell --run "cargo run --release -- --windowed"
 | `--bench` | what a frame costs, off screen, and exit |
 
 Through `cargo run` they need the `--` above, which is cargo's and not this
-program's; a built binary takes them directly.
+program's; a built binary takes them directly. Two of them at once — `--bench
+--cheatsheet` — is refused rather than answered silently with one, and a rate
+outside the range is refused rather than clamped: a performer who typed 6000
+meant something, and playing 240 instead answers neither the number nor the
+mistake behind it.
 
 The resolution is every monitor's size, and so the resolution the whole loop
 runs at. The window's shape has nothing to do with it: the bank is tiled into
 the window, each monitor letterboxed in its cell rather than stretched — and
-FORWARD solos the focused monitor onto the whole window and back, which is that
-same tiling with one tile in it. Nor is it part of a graph — every position
-here is in screen units and every weight a
-ratio, so it changes how much detail the loop carries and — the grain aside,
-which is hashed per texel and so is finer on a bigger monitor — nothing about
-what it does. On a 4K display ask for `3840x2160` and what is on the glass is
+FORWARD solos the focused monitor onto the whole window and back, which is
+that same tiling with one tile in it. It is fixed for a run rather than
+following the window, so resizing rescales the view instead of scrambling the
+loops' state. Every position in the rig is in screen units and every weight a
+ratio, so the size changes how much detail the loop carries and nothing about
+what it does: it is a property of the machine this is deployed on rather than
+of the piece. On a 4K display ask for `3840x2160` and what is on the glass is
 the loop's own detail rather than an upscale of a smaller one.
 
-`look` is the camera's beam splitter, a weight per monitor. `delay` on the
-graph is its frame delay units' reach, 0 to 30 frames, and defaults to none;
-`delay` on a camera is the unit on that camera's cable, whole frames up to
-the reach on top of the one pass every camera is behind by. The reach is
-bought at load — a frame of it is another copy of every monitor in the bank —
-and is as far as the delay fader goes; a camera's `delay` past it is refused.
-`divider` on a camera is that path's frame rate as a fraction of the graph's, 1 to 3
-and defaulting to 1: the camera hands on a fresh frame every that many passes
-and the same one in between — the original's 30 fps router output on a 60 fps
-rig, and at 3 the nearest whole step below its 24: a stutter and an image slower
-to fractal, at the same tempo. The largest divider on the graph, N, is N-1 more
-copies of every monitor in the bank, bought at load like the reach.
-`period` on a monitor is the original's period mode on that switcher column:
-every that many passes the monitor's two strongest sources trade levels,
-counted on one grid from the start of the run so every monitor in the mode
-beats in step; 0 to 60 passes, and 0 — the default — is the mode off. There is
-no latch beside the knob: the board is full, and a period at its floor is the
-off switch. `colour` is the front panel — `hue`, `saturation`, `brightness`,
-`contrast`, `gamma`, and `temperature`, the white point in mired from D65:
-+340 is candlelight, -100 open shade, 0 the default. `sharpness` on a monitor is
-its unsharp mask, 0 to 2, and 0 — the default — is the stage skipped.
-`framing` may also set `flip_x` and
-`flip_y`, the original's router-output mirrors, applied to the framed
-picture as a whole. `seed` is
-`{ white_blob = <brightness> }` or `"dark"`, and defaults to `"dark"` — a
-monitor lit only by what the switcher hands it. `routing[m][c]` is how much
-of camera `c` monitor `m` shows and an input's `into[m]` how much of it; an
-input is always written with its `into`. Anything omitted — framing, gain,
-colour, the inputs list itself — is neutral.
+The delay units reach two frames — a camera's `delay` rotary is whole frames
+up to that, on top of the one pass every camera is behind by. The reach is
+bought in bank rather than in taps: a frame of it is another copy of all five
+monitors, and the cap holds about four at 4K.
 
 The `shell.nix` pins nixpkgs, puts the Vulkan loader and windowing libraries
 on `LD_LIBRARY_PATH`, which wgpu and winit open at run time, and carries the
-`ffmpeg` the seed runs. Without Nix, a Rust toolchain recent
-enough for wgpu 30 and winit 0.30 and a working Vulkan/Metal/DX12 driver will
-do, plus ffmpeg if you want those inputs.
+`ffmpeg` the seed runs. Without Nix, a Rust toolchain recent enough for wgpu
+30 and winit 0.30, a working Vulkan/Metal/DX12 driver, and an `ffmpeg` on
+`PATH` will do — the seed is a capture device, so ffmpeg is not optional here.
 
 The adapter is opened before the window exists — which is what lets a browser
 start the same instrument without blocking, and means nothing has checked that
@@ -534,11 +445,11 @@ integrated adapter instead.
 ## Deploy
 
 **The pass rate is a tempo, not a smoothness setting.** The loop evolves one
-pass at a time — the camera pulls back 0.6% and turns 0.05 rad per *pass*, and
-the trail decays per pass — so a spiral drawn in a second at sixty is drawn in
-a quarter of one at 240, the top of the range. That makes the rate a control
-rather than a property of the machine: the surface's track pair moves it while
-the piece plays, and `--rate` starts it somewhere other than sixty.
+pass at a time — the shafts pull back 0.6% and turn per *pass*, and the trail
+decays per pass — so a spiral drawn in a second at sixty is drawn in a quarter
+of one at 240, the top of the range. That makes the rate a control rather than
+a property of the machine: the surface's track pair moves it while the piece
+plays, and `--rate` starts it somewhere other than sixty.
 
 **The display keeps its own clock, and it is vsync.** A pass is not a present.
 Passes fall due on the wall clock at the tempo; the picture goes out on every
@@ -559,8 +470,8 @@ passes anyway, one or two to a present.
 The log prints both clocks once a second — `sim 60 Hz of 60, present 72 Hz` —
 and deployed there is no terminal in front of the instrument, so that line is
 the whole of what can be read. The two say different things. Passes under the
-tempo is the machine or the graph, and the piece really is playing slow.
-Presents are the display's own rate and say nothing about the piece.
+tempo is the machine, and the piece really is playing slow. Presents are the
+display's own rate and say nothing about the piece.
 
 **When the display belongs to another user's session** — as it does on the
 machine this was built for — the instrument runs as that user, who cannot read
@@ -579,82 +490,67 @@ list of paths copied out to go stale:
 sudo -u USER env XDG_RUNTIME_DIR=/run/user/UID WAYLAND_DISPLAY=wayland-0 \
     DISPLAY=:0 HOME=/home/USER \
     nix-shell /srv/lightherder/shell.nix --run \
-    "/srv/lightherder/lightherder --resolution 3840x2160 analog"
+    "/srv/lightherder/lightherder --resolution 3840x2160"
 ```
 
 Its own log is how you know it worked, since nothing else on that machine can
-see the screen — and it takes two lines, because they are two different things:
-`1 monitors of 3840x2160` is the bank, and `window 3840x2160 (covering the
-display), presenting Fifo at Rgba8UnormSrgb` is the window. A 4K window over a
-1080p bank prints the second and not the first. Then the rate line a second
-later, counted from the first pass rather than from before the pipelines were
-built.
+see the screen — and it takes two lines, because they are two different
+things: `5 monitors of 3840x2160, 3 cameras, one seed` is the bank, and
+`window 3840x2160 (covering the display), presenting Fifo at Rgba8UnormSrgb`
+is the window. A 4K window over a 1080p bank prints the second and not the
+first. Then the rate line a second later, counted from the first pass rather
+than from before the pipelines were built.
 
 ### What a frame costs
 
-On a display a pass has a whole beat to fit inside, so a rate line at the tempo
-says only that it fit — not by how much. `--bench` runs the same passes with
-nothing pacing them: 600 frames after a warm-up, the graph
-stepped and presented into a target the size of the display.
-
-| graph | 1920x1080 | 3840x2160 |
-| --- | --- | --- |
-| `single` | 0.16 ms | 0.48 ms |
-| `external` | 0.19 | 0.55 |
-| `analog` | 0.28 | 0.86 |
-| `webcam` (2 monitors) | 0.26 | 0.76 |
-| `crossed` (2 monitors) | 0.31 | 0.89 |
-| `insanity` (4 monitors, all-to-all) | 0.82 | 2.96 |
-
-A beat at sixty is 16.7 ms, so the heaviest graph that ships uses a seventh of
-one at 4K. Measured on an RTX 2080. What the numbers leave out is a frame's
-edges rather than its loop: handing the frame to the compositor, and the
-upload of a live input, which for a video file or a capture device is a
-conversion and two writes of a whole frame every frame. `--bench` opens no
-input at all — every input layer stays black, which a tap samples for what it
-would charge a picture — so `external`'s and `webcam`'s rows are the passes
+On a display a pass has a whole beat to fit inside, so a rate line at the
+tempo says only that it fit — not by how much. `--bench` runs the same passes
+with nothing pacing them: 600 frames after a warm-up, the rig stepped and
+presented into a target the size of the display. What it leaves out is a
+frame's edges rather than its loop — handing the frame to the compositor, and
+the upload of the seed, which is a conversion and two writes of a whole frame
+every frame. It opens no input at all: the seed's layer stays black, which a
+tap samples for what it would charge a picture, so the number is the passes
 and not the wire.
 
-The bank itself is what grows: at eight bytes a texel, a ring holding every
-monitor twice plus once more per frame of the graph's delay reach and per pass of
-its longest hold, and every
-input once — half a gigabyte for `insanity` at 4K, refused past two, and
-refused past 256 layers whatever the resolution, which is what eight monitors
-at the full delay ask for.
+The bank is what grows. At eight bytes a texel it holds every monitor twice —
+a pass reads every layer while writing one — plus once more per frame of the
+delay units' reach and per pass of the longest hold, and the seed's own layer
+past the ring: 21 layers, which is 1.3 GiB at 4K against a 2 GiB cap. A ring
+deeper than the cap is refused at load with both halves of why in the message,
+since neither the resolution nor the depth alone is what went wrong.
 
 ## Playing it
 
 **The control surface is the instrument.** There is no keyboard: if a control
-is not on the board it does not exist, so every knob a hand turns and every
-command a hand presses is on the panel above, and everything else is the graph
-file. The card prints on startup and `--cheatsheet` prints it without starting
-anything; the surface's cycle button toggles the same panel on the glass,
-drawn as it is actually mapped and each control captioned in a couple of
-words. Every knob logs its new value on change.
+is not on the board it does not exist. The card prints on startup and
+`--cheatsheet` prints it without starting anything; the surface's cycle button
+toggles the same panel on the glass, drawn as it is actually mapped and each
+control captioned in a couple of words. Every knob logs its new value on
+change, and the log line is the only readout there is: the focused camera,
+monitor and switcher, every knob on them, and whether that monitor is on
+program or direct.
 
-The knobs act on the focused camera (framing, gain and character), the focused
-monitor (colour and headroom) and the focused input (the send). The three
-select rows pick a node of any of the three outright, and the log line names
-them — so a rig with nothing to choose plays camera one, monitor one and input
-one, on the knobs the config gave them.
+The knobs act on the focused camera (where it stands on its shaft, and its
+delay), the focused monitor (its front panel) and the focused switcher (its
+crossfade and its period). The three select rows pick a node of any of the
+three outright.
 
-Splitter weights are config; the two crosspoints are not — fader 8 sweeps how
-much of the focused camera the focused monitor shows, and fader 1 sweeps how
-much of the focused input it shows, on a rig that has one.
+The front panel starts neutral, so the instrument out of the box is the rig
+described above and nothing else. Turn one against it: the saturation fader
+swept is the quickest way to see what a stage inside the loop does.
 
-The colour and character knobs start neutral, so the instrument out of the box
-is the loop described above and nothing else. Turn one against it: the
-saturation fader swept is the quickest way to see what a stage inside the loop
-does, and the bloom rotary swept is the quickest way to see what the loop does
-to a stage — a lens that scatters a tenth of the light per pass has spread it
-everywhere by the tenth pass.
+Zoom is the sensitive one. A few thousandths either side of `zoom 1.000` is
+the difference between an image that walks inward, one that stands still, and
+one that blows outward — and since camera A and camera 3 share a shaft, a
+thousandth there moves both readings at once.
 
-Zoom and gain are the sensitive ones. A few thousandths either side of
-`zoom 1.000` is the difference between an image that walks inward, one that
-stands still, and one that blows outward. A gain over 1.0 stops the trail
-decaying and blows the head of the spiral out into a hard white disc — a
-couple of thousandths over takes a few seconds to get there, further over is
-immediate — and the structure inside it is gone.
+The **period** is the original's mode on a switcher column: every that many
+passes the switcher reverses itself, counted on one grid from the start of the
+run rather than from when the period was dialled in, so every switcher in the
+mode beats together. A pass is a beat of the tempo, so nothing in it reads a
+clock. There is no latch beside the knob — the board is full, and a period at
+its floor is the off switch.
 
 ## Tests
 
@@ -662,53 +558,53 @@ immediate — and the structure inside it is gone.
 nix-shell --run "cargo test"
 ```
 
-The transform, parameter and letterbox tests are pure. The tests in `tests/`
-render on a real GPU and read the pixels back, checking that the seed lights
-the monitor where it says it does, that the previous frame comes back round,
-that a pan moves the image the way the knob says, that the seed stays round on
-a non-square monitor, that the default knobs settle without clipping, and that
-each colour knob does its own job — saturation greys without dimming, hue
-moves light between the channels at constant luma, contrast leaves mid-grey
-where it is while a gain would not, brightness lifts black itself, gamma
-bends the response instead of scaling it, and the temperature leaves a grey
-grey at rest and warms or cools it at the rails without moving its luma, and
-sharpness leaves the frame byte for byte at rest, steepens the seed's rim and
-a stepped input's edges both ways when turned up, reaches one texel and no
-further, and leaves a flat field and the frame's border alone. The
-graph gets the same treatment: a seed sent across the crossed wiring bounces
-between the monitors without
-leaving a copy behind, mix weights deliver exactly the fraction they name, a
-beam splitter delivers light from a monitor its routing row never touches,
-insanity mode puts a quarter of one seed on all four monitors at once, and
-the instrument settles without clipping. So does the character stage: the
-lens widens the spot without changing how much light is in the frame, the
-bleed carries colour sideways while leaving luma where it was, the grain
-differs frame to frame and arrives on an unlit monitor, the rail bends a peak
-onto the curve it claims while leaving everything under its knee alone, and
-two paths in one graph take their character separately. A camera with a
-frame delay hands on the frame it saw that many passes ago — monitor 1 lights
-on pass delay + 1 and no other, and the frame is byte for byte the undelayed
-one; an input lands past the whole ring; and blanking the monitors empties
-the ring under a flash still in flight. External inputs get
-the same: what was written to an input's layer is what the monitor it is
-patched to shows, it is current in the bank the cameras read, blanking
-the monitors leaves it alone, the switcher sums it with a camera on one
-monitor, and it arrives square on however the cameras are framed.
-On a machine with no adapter each one prints the reason straight to the
+The transform, parameter, tempo and letterbox tests are pure. The rig is
+checked as arithmetic: a monitor on direct shows its own camera whatever the
+switchers say, the rotating monitor shows camera B whatever the setting, the
+seed reaches a B monitor only through the whole chain, a B monitor on program
+is that chain multiplied out, every feed sums to one at every setting of the
+eight levers, the performance matrix is these rows — written out rather than
+re-derived, so a wrong wire cannot agree with itself — and camera 3 moves with
+camera A and cannot be moved alone.
+
+The tests in `tests/` render on a real GPU and read the pixels back: that the
+seed lights the monitor where it says it does, that the previous frame comes
+back round, that the gain is applied once per pass, that what a camera sees
+past a monitor's edge is black, that the seed stays round on a non-square
+monitor, that the instrument settles without clipping, and that each colour
+knob does its own job — saturation greys without dimming, hue moves light
+between the channels at constant luma, contrast leaves mid-grey where it is
+while a gain would not, brightness lifts black itself, the temperature leaves
+a grey grey at rest and warms or cools it at the rails without moving its
+luma, a level pushed below black comes back black, and the whole colour stage
+is inert at its defaults and inside the loop. Sharpness leaves the frame byte
+for byte at rest, steepens the seed's rim and a step both ways when turned up,
+and reaches one texel and no further. The rails hold an overdriven loop: at a gain
+well over unity it settles on them instead of running to an infinity.
+
+The wiring gets the same treatment: the matrix sends each camera across, a
+crossfade delivers the fractions it names, a beam splitter blends two monitors
+into one camera, a structure takes half of the other through the cross-link, a
+router-output flip mirrors what the monitor is handed, and a solo puts one
+monitor on the whole target. So does the seed: it shows on the monitor the
+switcher sends it to, its layer is current however the ring turns and sits
+past the whole ring, blanking the monitors leaves it alone, the switcher sums
+it with a camera on one monitor, it arrives whole however the cameras are set,
+and the luma key cuts the dark, passes the bright and blends the edge between.
+A camera with a frame delay hands on the frame it saw that many passes ago,
+byte for byte, and blanking empties the ring under a flash still in flight. On
+a machine with no adapter each one prints the reason straight to the
 process's stderr and returns; libtest still counts them as passed.
 
-The input decoding is tested without a GPU: the drawn bars against the
-levels they name, the ffmpeg command lines against the options that make them
-loop, letterbox and stay off the network rather than race and stretch, a capture
-source against what ffmpeg was told to generate, a real file written and
-decoded, and a file that is not there refused at once rather than after the
+The capture path is tested by writing a file and decoding it back. The input
+decoding is tested without a GPU: the drawn test pattern against the levels
+it names, the ffmpeg command line against the options that make it letterbox
+and stay off the network rather than race and stretch, a capture source against
+what
+ffmpeg was told to generate, a pipe that keeps delivering past the two buffers
+it owns, and a source that will not open refused at once rather than after the
 first-frame timeout. Outside the pinned shell the ones that need ffmpeg print
 a skip, on the same terms as the GPU tests.
-
-A graph file is tested as a file: one naming every field of the format, off
-its default in every one, loaded through the door the command line uses; and
-one the instrument would refuse, refused there rather than at the GPU. There
-is nothing to round-trip against, because nothing writes one.
 
 The surface is tested without one plugged in, at every layer and then through
 all of them at once. The decoder against the ways a fader sweep actually
@@ -718,15 +614,19 @@ dump that must not read as a hundred knob moves, and notes and bends that are
 not knobs. The turn against a fader's first word placing it and not moving
 anything, a full throw at every rung of the precision ladder, the clutch
 holding every control still and letting go without a jump, a whole-frame knob
-owed a frame at a time, and a page turn and an unplug that throw nothing. The
-map against a duplicate binding, a command nothing
-answers to, a fader and a button on equipment the graph has not got, and a
-literal file rather than a round trip, because a round trip agrees with
-itself whatever the fields are called. The card search against a `/proc/asound/cards`
-with two other cards that also have raw MIDI devices. And the whole path —
-discovery, the open, the reader thread, the decode, the map and the turn —
-against a device that is not there when the instrument starts, appears, sends
-a sweep down a pipe, and goes away again, which is what hot-plug is.
+owed a frame at a time, and an unplug that throws nothing and lets go of every
+button a finger was on. The factory map is asserted pair by pair — coverage
+alone let hue and brightness swap CCs and `blank` and `reset` swap buttons,
+a surface whose silkscreen lies with every behaviour test still green — and
+every select row is checked to be exactly as wide as its kind. The map is
+tested against a duplicate binding, a command nothing answers to, and a
+literal file rather than a round trip, because a round trip agrees with itself
+whatever the fields are called. The card search runs against a
+`/proc/asound/cards` with two other cards that also have raw MIDI devices. And
+the whole path — discovery, the open, the reader thread, the decode, the map
+and the turn — against a device that is not there when the instrument starts,
+appears, sends a sweep down a pipe, and goes away again, which is what
+hot-plug is.
 
 The lights are tested at the file descriptor, over a socket pair standing in
 for the device node: what the instrument writes really leaves a descriptor and
@@ -745,10 +645,6 @@ against the same focus said sixty times, which must put nothing on the wire,
 against a held button, which must light with the focus rather than instead of
 it, against a lamp no button of the map answers to, which must never reach the
 wire, and against the exit, which must put the lamps out and the mode back.
-The two halves of the select row are lit one side at a time, so neither can
-cover for the other; a latched mode is checked to light the button its command
-is bound to, and to light nothing when the map binds that command nowhere; and
-the first of two buttons bound to one node is the one that lights.
 
 ## In a browser
 
@@ -757,10 +653,10 @@ The same instrument, on WebGPU, at
 takes an argument, `?rate=30` — the same range `--rate` takes, refused rather
 than clamped outside it — and nothing else is: there is one instrument. What
 is not there is what a browser has no way to give it: the ALSA control
-surface, so a tab plays and nothing turns a knob. The seed it does have:
-where a terminal runs ffmpeg on `/dev/video0`, a page plays a `<video>` of its
-own camera — asked for with `getUserMedia` — and reads it back through a
-canvas into the same bytes, so the visitor is what sparks the loops.
+surface, so a tab plays and nothing turns a knob. The seed it does have: where
+a terminal runs ffmpeg on `/dev/video0`, a page plays a `<video>` of its own
+camera — asked for with `getUserMedia` — and reads it back through a canvas
+into the same bytes, so the visitor is what sparks the loops.
 
 `web/build.sh` builds `web/dist` — the module, its glue and the page — and
 every push to `main` runs it and publishes the result. Locally:
