@@ -79,35 +79,47 @@ pub enum Select {
     Program,
 }
 
-/// A setting of everything on the rig that routes. The rotating monitor has
-/// no select: it shows camera B's feed, always.
+/// Everything on the rig that routes, which is the whole of the routing
+/// state: the matrix is worked out from this and held nowhere. The rotating
+/// monitor has no select — it shows camera B's feed, always — so the selects
+/// are the four structure monitors', in [`Params::monitors`] order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rig {
     /// How far each switcher stands toward its In2, in [`Switcher`] order:
     /// 0 is In1 whole, 1 is In2 whole.
-    pub switchers: [f32; 4],
-    pub upper_a: Select,
-    pub lower_a: Select,
-    pub upper_b: Select,
-    pub lower_b: Select,
+    pub switchers: [f32; SWITCHERS],
+    pub selects: [Select; SWITCHERS],
+    /// Passes between reversals of each switcher. Zero is the mode off, and
+    /// the only latch it has: the knob at its floor.
+    pub periods: [u32; SWITCHERS],
 }
+
+/// The rig's counts, which are the instrument's: nothing chooses them.
+pub const CAMERAS: usize = 3;
+pub const MONITORS: usize = 5;
+pub const SWITCHERS: usize = 4;
+
+/// The longest period, in passes: a second at the default tempo. The
+/// original's rates are unverified; a beat slower than that is a hand on the
+/// reversal, not a rhythm.
+pub const MAX_PERIOD: u32 = 60;
 
 /// One feed on the rig's cabling, as the share of each camera and of the
 /// seed it carries. The shares sum to one: nothing on the path amplifies.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Feed {
-    cameras: [f32; 3],
-    seed: f32,
+pub(crate) struct Feed {
+    pub(crate) cameras: [f32; CAMERAS],
+    pub(crate) seed: f32,
 }
 
 impl Feed {
     const SEED: Feed = Feed {
-        cameras: [0.0; 3],
+        cameras: [0.0; CAMERAS],
         seed: 1.0,
     };
 
     fn camera(cam: Cam) -> Feed {
-        let mut cameras = [0.0; 3];
+        let mut cameras = [0.0; CAMERAS];
         cameras[cam as usize] = 1.0;
         Feed { cameras, seed: 0.0 }
     }
@@ -145,10 +157,17 @@ impl Rig {
     /// tenths.
     pub const PERFORMANCE: Rig = Rig {
         switchers: [0.25, 0.25, 0.5, 0.1],
-        upper_a: Select::Program,
-        lower_a: Select::Program,
-        upper_b: Select::Program,
-        lower_b: Select::Program,
+        selects: [Select::Program; SWITCHERS],
+        periods: [0; SWITCHERS],
+    };
+
+    /// Every switcher on its In1 and every monitor on its own camera: the
+    /// routing that does nothing, which is where the panel's crossfades are
+    /// put back to.
+    pub const IDENTITY: Rig = Rig {
+        switchers: [0.0; SWITCHERS],
+        selects: [Select::Direct; SWITCHERS],
+        periods: [0; SWITCHERS],
     };
 
     fn program(&self, switcher: Switcher) -> Feed {
@@ -161,12 +180,44 @@ impl Rig {
         Feed::mix(one, two, self.switchers[switcher as usize])
     }
 
+    /// What monitor `m` shows, as the share of each camera and of the seed:
+    /// the matrix, worked out from the switchers and selects every time it is
+    /// asked for rather than flattened into a copy that could stand apart
+    /// from them.
+    pub(crate) fn feed(&self, m: usize) -> Feed {
+        self.shows(Screen::ALL[m])
+    }
+
+    /// The switcher's source reversal, and its momentary cut: In1 and In2
+    /// trade places, which is the crossfade run to the other end of its
+    /// travel. Its own inverse, so a cut held and let go leaves the rig
+    /// exactly where it found it.
+    pub fn flip(&mut self, switcher: usize) {
+        self.switchers[switcher] = 1.0 - self.switchers[switcher];
+    }
+
+    /// Every switcher whose period divides `pass` reverses. Counted from the
+    /// start of the run rather than from when a period was dialled in, so
+    /// every switcher in the mode beats on one grid — which is what the
+    /// original's quantizing is for. A pass is a beat of the tempo, so
+    /// nothing here reads a clock.
+    pub fn beat(&mut self, pass: u64) -> [bool; SWITCHERS] {
+        std::array::from_fn(|i| {
+            let period = u64::from(self.periods[i]);
+            let due = period != 0 && pass.is_multiple_of(period);
+            if due {
+                self.flip(i);
+            }
+            due
+        })
+    }
+
     fn shows(&self, screen: Screen) -> Feed {
         let (select, camera, switcher) = match screen {
-            Screen::UpperA => (self.upper_a, Cam::A, Switcher::A),
-            Screen::LowerA => (self.lower_a, Cam::A, Switcher::A),
-            Screen::UpperB => (self.upper_b, Cam::B, Switcher::B),
-            Screen::LowerB => (self.lower_b, Cam::B, Switcher::B),
+            Screen::UpperA => (self.selects[0], Cam::A, Switcher::A),
+            Screen::LowerA => (self.selects[1], Cam::A, Switcher::A),
+            Screen::UpperB => (self.selects[2], Cam::B, Switcher::B),
+            Screen::LowerB => (self.selects[3], Cam::B, Switcher::B),
             Screen::Rotating => return Feed::camera(Cam::B),
         };
         match select {
@@ -195,23 +246,21 @@ impl Rig {
             delay: 0,
             divider: 1,
         };
-        let feeds = Screen::ALL.map(|screen| self.shows(screen));
         Params {
+            rig: *self,
             cameras: vec![
                 camera(Cam::A, 0.05, [0.980, 0.986, 0.992]),
                 camera(Cam::B, 0.08, [0.992, 0.986, 0.980]),
                 camera(Cam::Three, 0.12, [0.985; 3]),
             ],
-            monitors: vec![Monitor::default(); Screen::ALL.len()],
-            inputs: vec![Plug {
+            monitors: vec![Monitor::default(); MONITORS],
+            input: Plug {
                 source: Input::Capture {
                     format: "v4l2".into(),
                     device: "/dev/video0".into(),
                 },
                 key: SEED_KEY,
-                into: feeds.iter().map(|feed| feed.seed).collect(),
-            }],
-            routing: feeds.iter().map(|feed| feed.cameras.to_vec()).collect(),
+            },
             // Two frames, not the original's thirty: a frame of reach is a copy
             // of all five monitors, and the bank cap at 4K holds about four.
             delay: 2,
@@ -238,17 +287,15 @@ mod tests {
         );
     }
 
-    fn all(select: Select, switchers: [f32; 4]) -> Rig {
+    fn all(select: Select, switchers: [f32; SWITCHERS]) -> Rig {
         Rig {
             switchers,
-            upper_a: select,
-            lower_a: select,
-            upper_b: select,
-            lower_b: select,
+            selects: [select; SWITCHERS],
+            periods: [0; SWITCHERS],
         }
     }
 
-    const SETTINGS: [[f32; 4]; 4] = [
+    const SETTINGS: [[f32; SWITCHERS]; 4] = [
         [0.0; 4],
         [1.0; 4],
         [0.3, 0.7, 0.1, 0.9],
@@ -268,11 +315,8 @@ mod tests {
 
     #[test]
     fn upper_a_on_program_with_switcher_a_at_in2_reads_camera_b_and_nothing_else() {
-        let rig = Rig {
-            switchers: [1.0, 0.0, 0.0, 0.0],
-            lower_a: Select::Direct,
-            ..all(Select::Program, [0.0; 4])
-        };
+        let mut rig = all(Select::Program, [1.0, 0.0, 0.0, 0.0]);
+        rig.selects[1] = Select::Direct;
         assert_feed(rig.shows(Screen::UpperA), [0.0, 1.0, 0.0], 0.0);
         assert_feed(rig.shows(Screen::LowerA), [1.0, 0.0, 0.0], 0.0);
         assert_feed(rig.shows(Screen::UpperB), [0.0, 1.0, 0.0], 0.0);
@@ -317,13 +361,9 @@ mod tests {
 
     #[test]
     fn each_select_is_its_own_monitors() {
-        let rig = Rig {
-            switchers: [1.0; 4],
-            upper_a: Select::Direct,
-            lower_a: Select::Program,
-            upper_b: Select::Program,
-            lower_b: Select::Direct,
-        };
+        let mut rig = all(Select::Program, [1.0; SWITCHERS]);
+        rig.selects[0] = Select::Direct;
+        rig.selects[3] = Select::Direct;
         assert_feed(rig.shows(Screen::UpperA), [1.0, 0.0, 0.0], 0.0);
         assert_feed(rig.shows(Screen::LowerA), [0.0, 1.0, 0.0], 0.0);
         assert_feed(rig.shows(Screen::UpperB), [0.0; 3], 1.0);
@@ -343,10 +383,8 @@ mod tests {
                         for bits in 0..16u8 {
                             let rig = Rig {
                                 switchers: [a, b, c, d],
-                                upper_a: select(bits & 1 != 0),
-                                lower_a: select(bits & 2 != 0),
-                                upper_b: select(bits & 4 != 0),
-                                lower_b: select(bits & 8 != 0),
+                                selects: std::array::from_fn(|i| select(bits >> i & 1 != 0)),
+                                periods: [0; SWITCHERS],
                             };
                             for screen in Screen::ALL {
                                 let feed = rig.shows(screen);
@@ -363,9 +401,7 @@ mod tests {
     #[test]
     fn the_seed_is_the_one_physical_camera_keyed_on_its_way_in() {
         let params = Rig::PERFORMANCE.params();
-        let [plug] = &params.inputs[..] else {
-            panic!("the rig has one seed, not {}", params.inputs.len())
-        };
+        let plug = &params.input;
         assert_eq!(
             plug.source,
             Input::Capture {
@@ -405,12 +441,14 @@ mod tests {
         ];
         let seed = [0.0, 0.0, 0.0125, 0.0125, 0.0];
         for (m, (row, seed)) in rows.iter().zip(seed).enumerate() {
-            let have = &params.routing[m];
-            assert!(
-                have.iter().zip(row).all(|(have, want)| close(*have, *want)),
-                "monitor {m}: {have:?} is not {row:?}"
-            );
-            assert!(close(params.inputs[0].into[m], seed), "monitor {m}");
+            for (c, want) in row.iter().enumerate() {
+                let have = params.route(m, c);
+                assert!(
+                    close(have, *want),
+                    "monitor {m} camera {c}: {have} is not {want}"
+                );
+            }
+            assert!(close(params.send(m), seed), "monitor {m}");
         }
         assert_eq!(params.cameras[0].look, [0.5, 0.5, 0.0, 0.0, 0.0]);
         assert_eq!(params.cameras[1].look, [0.0, 0.0, 0.5, 0.5, 0.0]);

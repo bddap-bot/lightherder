@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn the_left_cluster_is_arranged_the_way_the_surface_is() {
-        let raster = rasterize(&Map::nano_kontrol2(&crate::config::widest()), Page::One);
+        let raster = rasterize(&Map::nano_kontrol2(&crate::config::instrument()), Page::One);
         // Every expectation below is in the strip's own texels, so the
         // strip's own place has to be claimed outright: it starts at the
         // panel's edge and its widest row stops short of the channel
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn the_factory_panel_is_drawn_and_captioned() {
-        let raster = rasterize(&Map::nano_kontrol2(&crate::config::widest()), Page::One);
+        let raster = rasterize(&Map::nano_kontrol2(&crate::config::instrument()), Page::One);
         assert_eq!(
             (raster.width, raster.height),
             (PANEL_W as u32, PANEL_H as u32)
@@ -632,8 +632,8 @@ mod tests {
         // The rule inherited from rl's controls display: a picture that
         // drifts from the map in force is disallowed. Move one knob in the
         // map and the picture must move with it.
-        let before = rasterize(&Map::nano_kontrol2(&crate::config::widest()), Page::One);
-        let mut moved = Map::nano_kontrol2(&crate::config::widest());
+        let before = rasterize(&Map::nano_kontrol2(&crate::config::instrument()), Page::One);
+        let mut moved = Map::nano_kontrol2(&crate::config::instrument());
         moved.fader[0].knob = crate::params::Knob::Noise;
         let moved = rasterize(&moved, Page::One);
         assert!(texels_differing(&before, &moved) > 100);
@@ -641,7 +641,7 @@ mod tests {
 
     #[test]
     fn a_binding_off_the_panel_gets_a_line_rather_than_vanishing() {
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(crate::midi::Button {
             cc: 100,
             command: "blank".into(),
@@ -652,9 +652,7 @@ mod tests {
 
     #[test]
     fn an_unknown_surface_is_listed_not_drawn() {
-        // A one-camera graph: the listing is the other way this help is
-        // drawn, and it narrows with the rig too.
-        let params = crate::config::single();
+        let params = crate::config::instrument();
         let mut map = Map::nano_kontrol2(&params);
         map.device = "Launchpad".into();
         let raster = rasterize(&map, Page::One);
@@ -664,10 +662,6 @@ mod tests {
             raster.height,
             ((labels(&map, Page::One).count() + 2) as i32 * LINE + 2 * PAD) as u32
         );
-        assert!(
-            labels(&map, Page::One).count()
-                < labels(&Map::nano_kontrol2(&crate::config::widest()), Page::One).count()
-        );
         assert!(lit_texels(&raster) > 100);
     }
 
@@ -676,7 +670,7 @@ mod tests {
         // The ceiling, on the half of the panel that is captioned by
         // a knob's name. The button half is every command's own name, held
         // to the same two words by `command::a_name_is_two_words_at_most`.
-        let map = Map::nano_kontrol2(&crate::config::widest());
+        let map = Map::nano_kontrol2(&crate::config::instrument());
         for f in &map.fader {
             assert!(
                 f.knob.name().split_whitespace().count() <= 2,
@@ -740,7 +734,7 @@ mod tests {
 
     #[test]
     fn the_picture_is_the_page_the_knobs_are_on() {
-        let widest = crate::config::widest();
+        let widest = crate::config::instrument();
         let factory = Map::nano_kontrol2(&widest);
         let mut map = factory.clone();
         map.fader.push(crate::midi::Fader {
@@ -777,13 +771,11 @@ mod tests {
 
     #[test]
     fn a_select_row_is_drawn_for_its_own_kind_and_stops_where_the_graph_does() {
-        // Lopsided shapes on purpose: every graph this crate ships has as
-        // many cameras as monitors, so a row drawn from another kind's count
-        // would read the same on all of them. Past the choice the strip is
-        // bare chrome, which is what a dead button looks like — and a kind
-        // the rig has one of is no choice, so its whole row is chrome.
-        for (cameras, monitors, inputs) in [(1, 1, 0), (4, 2, 1), (1, 8, 0), (5, 8, 4)] {
-            let params = crate::config::shaped(cameras, monitors, inputs);
+        // The rig's three counts differ, so a row drawn from another kind's
+        // would read wrong on at least one of them. Past the choice the strip
+        // is bare chrome, which is what a dead button looks like.
+        {
+            let params = crate::config::instrument();
             let raster = rasterize(&Map::nano_kontrol2(&params), Page::One);
             for node in Node::ALL {
                 let bound = match params.count(node) {
@@ -808,7 +800,7 @@ mod tests {
                     assert_eq!(
                         band(&raster.pixels, raster.width as i32, node, i),
                         want,
-                        "{cameras}/{monitors}/{inputs}: {} {}",
+                        "{} {}",
                         node.name(),
                         i + 1
                     );

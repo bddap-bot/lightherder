@@ -15,6 +15,7 @@ use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params, Plug, Seed};
 use lightherder::present::Present;
+use lightherder::rig::{Rig, Select};
 
 /// The bootstrap stage's one-camera-one-monitor params, kept as this suite's
 /// shorthand: most of what it checks — the colour stage, the framing, the
@@ -50,28 +51,37 @@ impl Default for Single {
     }
 }
 
+/// The rig with one clean loop on it: camera A watching monitor 1 and drawing
+/// to it, every other camera dark. The switchers are at their identity, so
+/// each monitor is on its own camera direct and nothing mixes — which is what
+/// makes this the least graph any of the stages below can be seen in.
 fn graph(s: &Single) -> Params {
-    Params {
-        cameras: vec![Camera {
-            framing: s.framing,
-            gain: s.loop_gain,
-            character: s.character,
-            key: Key::OFF,
-            look: vec![1.0],
-            delay: 0,
-            divider: 1,
-        }],
-        monitors: vec![Monitor {
-            colour: s.colour,
-            seed: s.seed,
-            headroom: s.headroom,
-            sharpness: 0.0,
-            period: 0,
-        }],
-        inputs: Vec::new(),
-        routing: vec![vec![1.0]],
-        delay: 0,
+    let mut p = lightherder::config::instrument();
+    p.rig = Rig::IDENTITY;
+    p.delay = 0;
+    for camera in &mut p.cameras {
+        camera.framing = Framing::identity();
+        camera.gain = [0.0; 3];
+        camera.character = Character::CLEAN;
+        camera.key = Key::OFF;
+        camera.look = vec![0.0; p.monitors.len()];
+        camera.delay = 0;
+        camera.divider = 1;
     }
+    p.cameras[0].framing = s.framing;
+    p.cameras[0].gain = s.loop_gain;
+    p.cameras[0].character = s.character;
+    p.cameras[0].look[0] = 1.0;
+    for monitor in &mut p.monitors {
+        *monitor = Monitor::default();
+    }
+    p.monitors[0] = Monitor {
+        colour: s.colour,
+        seed: s.seed,
+        headroom: s.headroom,
+        sharpness: 0.0,
+    };
+    p
 }
 
 const SIZE: u32 = 64;
@@ -166,12 +176,23 @@ impl Harness {
     }
 
     fn step(&mut self, params: &Single) {
-        self.step_graph(&graph(params));
+        let params = graph(params);
+        self.feedback.step(self.device, self.queue, &params);
+        // Soloed: the single loop is monitor 1 of five, and every test built
+        // on this shorthand reads the whole target as that monitor.
+        self.present(Some(0));
     }
 
     fn step_graph(&mut self, params: &Params) {
         self.feedback.step(self.device, self.queue, params);
         self.present(None);
+    }
+
+    /// A pass with one monitor of the bank on the whole target, for the
+    /// tests that read a single loop's own pixels rather than the grid.
+    fn step_solo(&mut self, params: &Params, monitor: usize) {
+        self.feedback.step(self.device, self.queue, params);
+        self.present(Some(monitor));
     }
 
     fn present(&self, solo: Option<usize>) {
@@ -995,7 +1016,7 @@ fn the_default_knobs_settle_without_clipping() {
     for _ in 0..400 {
         h.feedback.step(h.device, h.queue, &params);
     }
-    h.step_graph(&params);
+    h.step_solo(&params, 0);
 
     let img = h.read();
     let peak = img.brightest();
@@ -1180,15 +1201,40 @@ fn silent_monitor() -> Monitor {
         seed: Seed::Dark,
         headroom: Monitor::KNEE_AT_WHITE,
         sharpness: 0.0,
-        period: 0,
     }
 }
 
-fn bars(into: Vec<f32>) -> Plug {
+/// The rig with every camera blind and every monitor silent: the blank the
+/// wiring tests below build on. The switchers stand at their identity, so
+/// each structure monitor is on its own camera direct and the seed reaches
+/// none of them — what a test wants of the matrix it says with the switchers,
+/// and what it wants each camera to see it says with `look`.
+fn blank() -> Params {
+    let mut p = lightherder::config::instrument();
+    p.rig = Rig::IDENTITY;
+    p.delay = 0;
+    for camera in &mut p.cameras {
+        *camera = plain_camera(vec![0.0; MONITORS]);
+    }
+    for monitor in &mut p.monitors {
+        *monitor = silent_monitor();
+    }
+    p
+}
+
+/// The rig's monitor count, which every graph here has.
+const MONITORS: usize = 5;
+
+/// The whole target, as the grid the bank is tiled into.
+fn tiled() -> (u32, u32) {
+    let (cols, rows) = lightherder::present::grid(MONITORS);
+    (cols * SIZE, rows * SIZE)
+}
+
+fn bars(key: Key) -> Plug {
     Plug {
         source: Input::Pattern(Pattern::Bars),
-        into,
-        key: Key::OFF,
+        key,
     }
 }
 
@@ -1198,25 +1244,19 @@ fn the_routing_matrix_sends_each_camera_across() {
     // at monitor j but routed to the other monitor, so a seed lit on monitor
     // 0 must appear on monitor 1 one pass later, and bounce back the pass
     // after — and never sit still where it was.
-    let mut p = Params {
-        cameras: vec![plain_camera(one_hot(2, 0)), plain_camera(one_hot(2, 1))],
-        monitors: vec![
-            Monitor {
-                seed: Seed::WhiteBlob(1.0),
-                ..silent_monitor()
-            },
-            silent_monitor(),
-        ],
-        inputs: Vec::new(),
-        routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
-        delay: 0,
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+    // Structure A's upper monitor is monitor 1 and structure B's is monitor
+    // 3; each camera is aimed at the other's, and the selects keep each
+    // monitor on its own camera.
+    let mut p = blank();
+    p.cameras[0].look = one_hot(MONITORS, 2);
+    p.cameras[1].look = one_hot(MONITORS, 0);
+    p.monitors[0].seed = Seed::WhiteBlob(1.0);
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
     };
     let seed = h.feedback.blob_uv();
     let at = |img: &Image, m: usize| {
-        let (u, v) = tile(2, m, seed[0], seed[1]);
+        let (u, v) = tile(MONITORS, m, seed[0], seed[1]);
         img.at(u, v)
     };
 
@@ -1224,22 +1264,22 @@ fn the_routing_matrix_sends_each_camera_across() {
     let img = h.read();
     assert!(at(&img, 0) > 200.0, "the seed never lit: {}", at(&img, 0));
     assert!(
-        at(&img, 1) < 2.0,
-        "monitor 1 lit before anything crossed: {}",
-        at(&img, 1)
+        at(&img, 2) < 2.0,
+        "monitor 3 lit before anything crossed: {}",
+        at(&img, 2)
     );
 
     p.monitors[0].seed = Seed::Dark;
     h.step_graph(&p);
     let img = h.read();
     assert!(
-        at(&img, 1) > 200.0,
+        at(&img, 2) > 200.0,
         "the seed did not cross: {}",
-        at(&img, 1)
+        at(&img, 2)
     );
     assert!(
         at(&img, 0) < 2.0,
-        "monitor 0 kept light its routing row does not grant: {}",
+        "monitor 1 kept light no camera of its own hands it: {}",
         at(&img, 0)
     );
 
@@ -1251,9 +1291,9 @@ fn the_routing_matrix_sends_each_camera_across() {
         at(&img, 0)
     );
     assert!(
-        at(&img, 1) < 2.0,
+        at(&img, 2) < 2.0,
         "or it left a copy behind: {}",
-        at(&img, 1)
+        at(&img, 2)
     );
 }
 
@@ -1263,42 +1303,32 @@ fn mix_weights_scale_each_camera_s_contribution() {
     // holds still, one pans the image aside — so the two contributions land
     // in different places and each weight can be read off on its own.
     let Some(mut h) = square() else { return };
-    let mut p = Params {
-        cameras: vec![
-            plain_camera(vec![1.0]),
-            Camera {
-                framing: Framing {
-                    translate: [0.25, 0.0],
-                    ..Framing::identity()
-                },
-                ..plain_camera(vec![1.0])
-            },
-        ],
-        monitors: vec![Monitor {
-            seed: Seed::WhiteBlob(1.0),
-            ..silent_monitor()
-        }],
-        inputs: Vec::new(),
-        routing: vec![vec![0.0, 0.0]],
-        delay: 0,
-    };
-    h.step_graph(&p);
+    let mut p = blank();
+    p.cameras[0].look = one_hot(MONITORS, 0);
+    p.cameras[1].look = one_hot(MONITORS, 0);
+    p.cameras[1].framing.translate = [0.25, 0.0];
+    p.monitors[0].seed = Seed::WhiteBlob(1.0);
+    h.step_solo(&p, 0);
     let seed = h.feedback.blob_uv();
     let base = h.read().at(seed[0], seed[1]);
     assert!(base > 200.0, "the seed never lit: {base}");
 
+    // Switcher A a quarter of the way toward camera B, and structure A's
+    // upper monitor on its program: three quarters of the held image and a
+    // quarter of the panned one.
     p.monitors[0].seed = Seed::Dark;
-    p.routing[0] = vec![0.5, 0.25];
-    h.step_graph(&p);
+    p.rig.selects[0] = Select::Program;
+    p.rig.switchers[0] = 0.25;
+    h.step_solo(&p, 0);
     let img = h.read();
     let (held, panned) = (img.at(seed[0], seed[1]), img.at(seed[0] + 0.25, seed[1]));
     assert!(
-        (held / base - 0.5).abs() < 0.04,
-        "weight 0.5 delivered {held} of {base}"
+        (held / base - 0.75).abs() < 0.04,
+        "the crossfade delivered {held} of {base}, not three quarters"
     );
     assert!(
         (panned / base - 0.25).abs() < 0.04,
-        "weight 0.25 delivered {panned} of {base}"
+        "the crossfade delivered {panned} of {base}, not a quarter"
     );
 }
 
@@ -1308,32 +1338,23 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
     // feeding monitor 0. Light monitor 1 alone: half its light arrives on
     // monitor 0, which no routing row could do — the blend happens in front
     // of the lens.
-    let mut p = Params {
-        cameras: vec![plain_camera(vec![0.5, 0.5])],
-        monitors: vec![
-            silent_monitor(),
-            Monitor {
-                seed: Seed::WhiteBlob(1.0),
-                ..silent_monitor()
-            },
-        ],
-        inputs: Vec::new(),
-        routing: vec![vec![1.0], vec![0.0]],
-        delay: 0,
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+    let mut p = blank();
+    p.cameras[0].look[0] = 0.5;
+    p.cameras[0].look[1] = 0.5;
+    p.monitors[1].seed = Seed::WhiteBlob(1.0);
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
     };
     let seed = h.feedback.blob_uv();
     h.step_graph(&p);
-    let (u, v) = tile(2, 1, seed[0], seed[1]);
+    let (u, v) = tile(MONITORS, 1, seed[0], seed[1]);
     let bright = h.read().at(u, v);
     assert!(bright > 200.0, "the seed never lit: {bright}");
 
     p.monitors[1].seed = Seed::Dark;
     h.step_graph(&p);
     let img = h.read();
-    let (u, v) = tile(2, 0, seed[0], seed[1]);
+    let (u, v) = tile(MONITORS, 0, seed[0], seed[1]);
     assert!(
         (img.at(u, v) - bright / 2.0).abs() < 8.0,
         "the splitter delivered {} of {bright}",
@@ -1342,40 +1363,31 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
 }
 
 #[test]
-fn insanity_mode_composes_every_monitor_from_one_seed() {
-    // All-to-all: each of four monitors shows a quarter of every camera, so
-    // one seeded monitor puts a quarter of its light on all four — itself
-    // included — a pass later.
-    let mut p = Params {
-        cameras: (0..4).map(|c| plain_camera(one_hot(4, c))).collect(),
-        monitors: (0..4)
-            .map(|m| Monitor {
-                seed: if m == 0 {
-                    Seed::WhiteBlob(1.0)
-                } else {
-                    Seed::Dark
-                },
-                ..silent_monitor()
-            })
-            .collect(),
-        inputs: Vec::new(),
-        routing: vec![vec![0.25; 4]; 4],
-        delay: 0,
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
+fn a_structure_takes_half_of_the_other_through_the_cross_link() {
+    // Switcher A a quarter open puts a quarter of camera B on both of
+    // structure A's monitors. Camera B watches the seeded monitor and camera
+    // A is blind, so what lands on structure A is exactly the light the
+    // crossfade passed, and structure B keeps the whole of it.
+    let mut p = blank();
+    p.rig.selects = [Select::Program; 4];
+    p.rig.switchers = [0.25, 0.0, 0.0, 0.0];
+    p.cameras[1].look = one_hot(MONITORS, 2);
+    p.monitors[2].seed = Seed::WhiteBlob(1.0);
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
     };
     h.step_graph(&p);
-    p.monitors[0].seed = Seed::Dark;
+    p.monitors[2].seed = Seed::Dark;
     h.step_graph(&p);
 
     let seed = h.feedback.blob_uv();
     let img = h.read();
-    for m in 0..4 {
-        let (u, v) = tile(4, m, seed[0], seed[1]);
+    let want = [0.25, 0.25, 1.0, 1.0, 1.0];
+    for (m, want) in want.into_iter().enumerate() {
+        let (u, v) = tile(MONITORS, m, seed[0], seed[1]);
         assert!(
-            (img.at(u, v) - 255.0 / 4.0).abs() < 10.0,
-            "monitor {m} shows {}, not a quarter of the seed",
+            (img.at(u, v) - 255.0 * want).abs() < 10.0,
+            "monitor {m} shows {}, not {want} of the seed",
             img.at(u, v)
         );
     }
@@ -1389,36 +1401,27 @@ fn a_solo_puts_one_monitor_on_the_whole_target() {
     // soloed. Nothing is routed anywhere here — each monitor is its own seed
     // and nothing else, which is what lets the read say which monitor it is
     // looking at.
-    let p = Params {
-        cameras: (0..4).map(|c| plain_camera(one_hot(4, c))).collect(),
-        monitors: (0..4)
-            .map(|m| Monitor {
-                seed: if m == 2 {
-                    Seed::WhiteBlob(1.0)
-                } else {
-                    Seed::Dark
-                },
-                ..silent_monitor()
-            })
-            .collect(),
-        inputs: Vec::new(),
-        routing: vec![vec![0.0; 4]; 4],
-        delay: 0,
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
+    let mut p = blank();
+    p.monitors[2].seed = Seed::WhiteBlob(1.0);
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
     };
     h.step_graph(&p);
 
     let seed = h.feedback.blob_uv();
-    let (u, v) = tile(4, 2, seed[0], seed[1]);
+    let (u, v) = tile(MONITORS, 2, seed[0], seed[1]);
     let found = h.read().brightest_uv();
     assert!(
         (found[0] - u).abs() < 0.02 && (found[1] - v).abs() < 0.02,
         "tiled: the seed is at {found:?}, not [{u}, {v}]"
     );
 
-    h.present(Some(2));
+    // The same graph on a target the shape of one monitor, so a solo fills
+    // it edge to edge and the seed is where the monitor puts it.
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    h.step_solo(&p, 2);
     let found = h.read().brightest_uv();
     assert!(
         (found[0] - seed[0]).abs() < 0.02 && (found[1] - seed[1]).abs() < 0.02,
@@ -1437,13 +1440,14 @@ fn the_instrument_settles_without_clipping() {
     // Same bar the single default is held to, per monitor: left running,
     // every monitor of the instrument keeps an image — not flat white, not
     // black.
-    for (name, p) in [("instrument", lightherder::config::instrument())] {
+    {
+        let name = "instrument";
+        let p = lightherder::config::instrument();
         let n = p.monitors.len();
-        let (cols, rows) = lightherder::present::grid(n);
-        let Some(mut h) = graph_harness((SIZE, SIZE), (cols * SIZE, rows * SIZE), &p) else {
+        let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
             return;
         };
-        feed_inputs(&mut h, &p);
+        feed_seed(&mut h, &p);
         for _ in 0..399 {
             h.feedback.step(h.device, h.queue, &p);
         }
@@ -1708,32 +1712,24 @@ fn each_camera_carries_its_own_character() {
     // The reason it hangs on the camera rather than on the instrument: one
     // path in a graph glows while the one beside it stays sharp. Two
     // monitors, each its own loop, differing in nothing but their lens.
-    let mut p = Params {
-        cameras: vec![plain_camera(one_hot(2, 0)), plain_camera(one_hot(2, 1))],
-        monitors: vec![
-            Monitor {
-                seed: Seed::WhiteBlob(1.0),
-                ..silent_monitor()
-            },
-            Monitor {
-                seed: Seed::WhiteBlob(1.0),
-                ..silent_monitor()
-            },
-        ],
-        inputs: Vec::new(),
-        routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
-        delay: 0,
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+    // Structure A's upper monitor and structure B's, each its own loop.
+    let mut p = blank();
+    p.cameras[0].look = one_hot(MONITORS, 0);
+    p.cameras[1].look = one_hot(MONITORS, 2);
+    p.monitors[0].seed = Seed::WhiteBlob(1.0);
+    p.monitors[2].seed = Seed::WhiteBlob(1.0);
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
     };
     h.step_graph(&p);
     let lit = h.read();
     let tiles = |img: &Image| {
-        (
-            img.brightest_in(0.0, 0.0, 0.5, 1.0),
-            img.brightest_in(0.5, 0.0, 1.0, 1.0),
-        )
+        let cell = |m: usize| {
+            let (u0, v0) = tile(MONITORS, m, 0.0, 0.0);
+            let (u1, v1) = tile(MONITORS, m, 1.0, 1.0);
+            img.brightest_in(u0, v0, u1, v1)
+        };
+        (cell(0), cell(2))
     };
     let (left, right) = tiles(&lit);
     assert!((left - right).abs() < 1.0, "the two loops start apart");
@@ -1836,9 +1832,9 @@ fn the_grain_is_monochrome_and_signed() {
 /// Opens a graph's own inputs and puts a frame of each on its layer. The
 /// shipped patterns are still, so one delivery is the whole of it; a moving
 /// source would want this every step, as the app does.
-fn feed_inputs(h: &mut Harness, params: &Params) {
-    for (i, plug) in params.inputs.iter().enumerate() {
-        let frame = match &plug.source {
+fn feed_seed(h: &mut Harness, params: &Params) {
+    {
+        let frame = match &params.input.source {
             // A capture device is real hardware this suite cannot demand —
             // the webcam preset names /dev/video0. Its layer gets a
             // stand-in of the scene such a preset expects, a bright subject
@@ -1848,15 +1844,16 @@ fn feed_inputs(h: &mut Harness, params: &Params) {
                 quartered_frame(h.feedback.size(), [[200; 3], [30; 3], [200; 3], [30; 3]])
             }
             _ => {
-                let mut source = pollster::block_on(Source::open(&plug.source, h.feedback.size()))
-                    .unwrap_or_else(|e| panic!("input {i}: {e}"));
+                let mut source =
+                    pollster::block_on(Source::open(&params.input.source, h.feedback.size()))
+                        .unwrap_or_else(|e| panic!("the seed: {e}"));
                 source
                     .frame()
                     .expect("open() waits for the first frame")
                     .to_vec()
             }
         };
-        h.feedback.write_input(h.queue, i, &frame);
+        h.feedback.write_seed(h.queue, &frame);
     }
 }
 
@@ -1885,22 +1882,24 @@ fn quartered_frame(size: (u32, u32), quarters: [[u8; 3]; 4]) -> Vec<u8> {
     pixels
 }
 
-/// A graph of one monitor whose only light is one input, patched straight
-/// onto it at full send. The one camera is routed nowhere, so every step
-/// puts the input on the monitor and nothing else does.
-fn one_input_on_one_monitor() -> Params {
-    Params {
-        cameras: vec![plain_camera(vec![1.0])],
-        monitors: vec![silent_monitor()],
-        inputs: vec![bars(vec![1.0])],
-        routing: vec![vec![0.0]],
-        delay: 0,
-    }
+/// The rig with the whole seed on structure B's upper monitor and nothing
+/// else anywhere: the switcher chain wide open at In2 all the way down, so
+/// what monitor 3 shows every pass is the seed and only the seed. Every
+/// camera is blind, so nothing goes round.
+fn seed_on_a_monitor() -> Params {
+    let mut p = blank();
+    p.rig.selects[2] = Select::Program;
+    p.rig.switchers = [0.0, 1.0, 1.0, 1.0];
+    p.input = bars(Key::OFF);
+    p
 }
 
+/// The monitor [`seed_on_a_monitor`] lights.
+const SEEDED: usize = 2;
+
 #[test]
-fn an_input_shows_on_the_monitor_the_switcher_sends_it_to() {
-    let p = one_input_on_one_monitor();
+fn the_seed_shows_on_the_monitor_the_switcher_sends_it_to() {
+    let p = seed_on_a_monitor();
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1910,8 +1909,8 @@ fn an_input_shows_on_the_monitor_the_switcher_sends_it_to() {
     // cannot pass either.
     let quarters = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
     h.feedback
-        .write_input(h.queue, 0, &quartered_frame((SIZE, SIZE), quarters));
-    h.step_graph(&p);
+        .write_seed(h.queue, &quartered_frame((SIZE, SIZE), quarters));
+    h.step_solo(&p, SEEDED);
 
     let img = h.read();
     for (quarter, (u, v)) in [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)]
@@ -1928,69 +1927,55 @@ fn an_input_shows_on_the_monitor_the_switcher_sends_it_to() {
 }
 
 #[test]
-fn an_input_layer_is_current_however_the_ring_turns() {
-    // An input layer is written once and never rendered into, so a frame
+fn the_seed_layer_is_current_however_the_ring_turns() {
+    // The seed's layer is written once and never rendered into, so a frame
     // that reached only the view of one pass would show up on some frames
     // and be black on the rest. Six steps is three turns of a two-slab ring.
-    let p = one_input_on_one_monitor();
+    let p = seed_on_a_monitor();
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
     h.feedback
-        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [200; 3]));
+        .write_seed(h.queue, &flat_frame((SIZE, SIZE), [200; 3]));
     for step in 0..6 {
-        h.step_graph(&p);
+        h.step_solo(&p, SEEDED);
         let seen = h.read().at(0.5, 0.5);
         assert!((seen - 200.0).abs() < 3.0, "step {step}: {seen}");
     }
 }
 
 #[test]
-fn each_input_lands_on_its_own_layer() {
-    // Two monitors and two inputs, so the arithmetic that puts input i on
-    // its layer past the ring has four distinct answers to get wrong instead of
-    // the one a single monitor and a single input collapse it to.
-    let p = Params {
-        cameras: vec![plain_camera(vec![0.0; 2])],
-        monitors: vec![silent_monitor(), silent_monitor()],
-        inputs: vec![bars(one_hot(2, 0)), bars(one_hot(2, 1))],
-        routing: vec![vec![0.0], vec![0.0]],
-        delay: 0,
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
-        return;
-    };
-    h.feedback
-        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [200, 0, 0]));
-    h.feedback
-        .write_input(h.queue, 1, &flat_frame((SIZE, SIZE), [0, 0, 200]));
-    h.step_graph(&p);
-
-    let img = h.read();
-    for (m, channel) in [(0, 0), (1, 2)] {
-        let (u, v) = tile(2, m, 0.5, 0.5);
-        let seen = img.rgb_at(u, v);
-        assert!(seen[channel] > 190.0, "monitor {m}: {seen:?}");
-        assert!(
-            seen[2 - channel] < 5.0,
-            "monitor {m} has the other: {seen:?}"
-        );
-    }
-}
-
-#[test]
-fn blanking_the_monitors_leaves_the_inputs_alone() {
-    // Space is "restart the loops", not "unplug the video player" — and a
-    // still pattern that got blanked would never come back, because it is
-    // uploaded once.
-    let p = one_input_on_one_monitor();
+fn the_seed_layer_sits_past_the_whole_ring() {
+    // The arithmetic that puts the seed past every slab of every monitor: a
+    // layer index short by one lands it on a monitor of the newest slab, and
+    // a deep ring is where that shows.
+    let mut p = seed_on_a_monitor();
+    p.delay = 3;
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
     h.feedback
-        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [200; 3]));
+        .write_seed(h.queue, &flat_frame((SIZE, SIZE), [200, 0, 0]));
+    for step in 0..8 {
+        h.step_solo(&p, SEEDED);
+        let seen = h.read().rgb_at(0.5, 0.5);
+        assert!(seen[0] > 190.0 && seen[2] < 5.0, "step {step}: {seen:?}");
+    }
+}
+
+#[test]
+fn blanking_the_monitors_leaves_the_seed_alone() {
+    // Blank is "restart the loops", not "unplug the video player" — and a
+    // still pattern that got blanked would never come back, because it is
+    // uploaded once.
+    let p = seed_on_a_monitor();
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    h.feedback
+        .write_seed(h.queue, &flat_frame((SIZE, SIZE), [200; 3]));
     h.feedback.clear(h.device, h.queue);
-    h.step_graph(&p);
+    h.step_solo(&p, SEEDED);
     let seen = h.read().at(0.5, 0.5);
     assert!(
         (seen - 200.0).abs() < 3.0,
@@ -1999,33 +1984,34 @@ fn blanking_the_monitors_leaves_the_inputs_alone() {
 }
 
 #[test]
-fn the_switcher_mixes_an_input_with_a_camera_on_one_monitor() {
-    // The point of an input being a source on the mix side: one row of the
-    // switcher sums outside light and a camera's, and the monitor cannot
-    // tell them apart. Unequal weights, so a pair swapped anywhere between
-    // the config and the tap cannot come out the same.
-    let mut p = one_input_on_one_monitor();
-    p.routing = vec![vec![0.25]];
-    p.inputs[0].into = vec![0.75];
+fn the_switcher_mixes_the_seed_with_a_camera_on_one_monitor() {
+    // The point of the seed being a source on the mix side: one column of
+    // the switcher sums outside light and a camera's, and the monitor cannot
+    // tell them apart. Switcher D three quarters of the way toward the seed
+    // and the chain above it wide open, so monitor 3 shows three quarters
+    // seed and a quarter of camera 3 — which is watching that same monitor.
+    let mut p = seed_on_a_monitor();
+    p.rig.switchers = [0.0, 1.0, 1.0, 0.75];
+    p.cameras[2].look = one_hot(MONITORS, SEEDED);
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
     h.feedback
-        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [255; 3]));
+        .write_seed(h.queue, &flat_frame((SIZE, SIZE), [255; 3]));
 
-    // Nothing on the monitor yet, so this is three quarters of the input.
-    h.step_graph(&p);
+    // Nothing on the monitor yet, so this is three quarters of the seed.
+    h.step_solo(&p, SEEDED);
     let split = h.read().at(0.5, 0.5);
     assert!((split - 191.0).abs() < 4.0, "0.75 of white is {split}");
 
     // Now the monitor holds that, and the camera brings a quarter of it back.
-    h.step_graph(&p);
+    h.step_solo(&p, SEEDED);
     let both = h.read().at(0.5, 0.5);
     assert!((both - 239.0).abs() < 6.0, "0.75 + 0.25 x 0.75 is {both}");
 }
 
 #[test]
-fn an_input_arrives_whole_however_the_cameras_are_set() {
+fn the_seed_arrives_whole_however_the_cameras_are_set() {
     // There is no camera between the switcher and an input, so nothing a
     // camera does can reach one. The camera here is loaded with every stage
     // that could leak — pulled back by two, scattering, smearing, graining,
@@ -2035,17 +2021,21 @@ fn an_input_arrives_whole_however_the_cameras_are_set() {
     // are live rather than one where they were filtered out. The input must
     // arrive framed edge to edge, at full level, quarters still meeting at a
     // hard edge.
-    let mut p = one_input_on_one_monitor();
-    p.routing = vec![vec![0.02]];
-    p.cameras[0].framing.zoom = 0.5;
-    p.cameras[0].gain = [0.1; 3];
-    p.cameras[0].character = Character {
+    let mut p = seed_on_a_monitor();
+    // A fiftieth of camera 3 in the same pass, which is where every stage
+    // below is live.
+    const SEED_SHARE: f32 = 0.98;
+    p.rig.switchers = [0.0, 1.0, 1.0, SEED_SHARE];
+    p.cameras[2].look = one_hot(MONITORS, SEEDED);
+    p.cameras[2].framing.zoom = 0.5;
+    p.cameras[2].gain = [0.1; 3];
+    p.cameras[2].character = Character {
         bloom: 0.9,
         bloom_radius: 0.1,
         chroma_bleed: 0.2,
         noise: 0.2,
     };
-    p.cameras[0].key = Key {
+    p.cameras[2].key = Key {
         threshold: 0.9,
         softness: 0.1,
         ..Key::OFF
@@ -2055,8 +2045,8 @@ fn an_input_arrives_whole_however_the_cameras_are_set() {
     };
     let quarters = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
     h.feedback
-        .write_input(h.queue, 0, &quartered_frame((SIZE, SIZE), quarters));
-    h.step_graph(&p);
+        .write_seed(h.queue, &quartered_frame((SIZE, SIZE), quarters));
+    h.step_solo(&p, SEEDED);
 
     let img = h.read();
     // Corners a half zoom would have left unlit, and either side of the
@@ -2067,7 +2057,7 @@ fn an_input_arrives_whole_however_the_cameras_are_set() {
         .chain([(0, (0.47, 0.25)), (1, (0.53, 0.25))])
     {
         let seen = img.rgb_at(u, v);
-        let want = quarters[quarter].map(f32::from);
+        let want = quarters[quarter].map(|c| f32::from(c) * SEED_SHARE);
         assert!(
             seen.iter().zip(want).all(|(a, b)| (a - b).abs() < 3.0),
             "({u}, {v}): {seen:?}, wanted {want:?}"
@@ -2077,22 +2067,14 @@ fn an_input_arrives_whole_however_the_cameras_are_set() {
 
 // ---- The keyer: what a camera's path refuses to hand on ------------------
 
-/// A picture on one monitor and a keyed camera watching it, handing what
-/// survives to a second. Two steps: the switcher puts the input on monitor 0,
-/// then the camera carries it through its key onto monitor 1, which is where
-/// a key test reads. The picture is a still upload rather than a loop, so the
-/// second step's light is exactly one pass of the key on the frame written.
-fn keyed_camera_watching_a_picture(key: Key) -> Params {
-    Params {
-        cameras: vec![Camera {
-            key,
-            ..plain_camera(one_hot(2, 0))
-        }],
-        monitors: vec![silent_monitor(), silent_monitor()],
-        inputs: vec![bars(vec![1.0, 0.0])],
-        routing: vec![vec![0.0], vec![1.0]],
-        delay: 0,
-    }
+/// The seed on its monitor through a key: the switcher is where this rig
+/// keys, so this is the whole of the keyer. The picture is a still upload
+/// rather than a loop, so what the monitor holds after one step is exactly
+/// one pass of the key on the frame written.
+fn keyed_seed(key: Key) -> Params {
+    let mut p = seed_on_a_monitor();
+    p.input.key = key;
+    p
 }
 
 #[test]
@@ -2102,27 +2084,22 @@ fn the_luma_key_cuts_the_dark_passes_the_bright_and_blends_the_edge() {
     // — the soft edge asserted as an effect on the light, not as a shader
     // detail. The key passes at 0.5 and has finished cutting one softness
     // down at 0.3; the quarters' lumas are 0.16, 0.39 and 0.86.
-    let p = keyed_camera_watching_a_picture(Key {
+    let p = keyed_seed(Key {
         threshold: 0.5,
         softness: 0.2,
         ..Key::OFF
     });
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
-    h.feedback.write_input(
+    h.feedback.write_seed(
         h.queue,
-        0,
         &quartered_frame((SIZE, SIZE), [[40; 3], [100; 3], [220; 3], [220; 3]]),
     );
-    h.step_graph(&p);
-    h.step_graph(&p);
+    h.step_solo(&p, SEEDED);
 
     let img = h.read();
-    let keyed = |u, v| {
-        let (u, v) = tile(2, 1, u, v);
-        img.at(u, v)
-    };
+    let keyed = |u, v| img.at(u, v);
     let below = keyed(0.25, 0.25);
     assert!(below < 3.0, "below the key, {below} survives");
     let above = keyed(0.75, 0.75);
@@ -2144,38 +2121,33 @@ fn the_chroma_key_cuts_its_colour_and_spares_grey_and_the_far_hue() {
     // intact. The atan2 spells out green's chroma coordinates — transcribed
     // from the decode axes, so a change of axes fails this loudly rather
     // than following along.
-    let p = keyed_camera_watching_a_picture(Key {
+    let p = keyed_seed(Key {
         hue: (-0.5227f32).atan2(-0.2746),
         tolerance: 0.2,
         softness: 0.02,
         ..Key::OFF
     });
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
     let (green, grey, magenta) = ([0, 200, 0], [200; 3], [200, 0, 200]);
-    h.feedback.write_input(
+    h.feedback.write_seed(
         h.queue,
-        0,
         &quartered_frame((SIZE, SIZE), [green, grey, green, magenta]),
     );
-    h.step_graph(&p);
-    h.step_graph(&p);
+    h.step_solo(&p, SEEDED);
 
     let img = h.read();
     for (u, v) in [(0.25, 0.25), (0.75, 0.75)] {
-        let (u, v) = tile(2, 1, u, v);
         let seen = img.at(u, v);
         assert!(seen < 3.0, "the key colour at ({u}, {v}) survives: {seen}");
     }
-    let (u, v) = tile(2, 1, 0.75, 0.25);
-    let grey_seen = img.at(u, v);
+    let grey_seen = img.at(0.75, 0.25);
     assert!(
         (grey_seen - 200.0).abs() < 4.0,
         "grey was keyed: {grey_seen}"
     );
-    let (u, v) = tile(2, 1, 0.25, 0.75);
-    let magenta_seen = img.rgb_at(u, v);
+    let magenta_seen = img.rgb_at(0.25, 0.75);
     assert!(
         (magenta_seen[0] - 200.0).abs() < 4.0 && (magenta_seen[2] - 200.0).abs() < 4.0,
         "the far hue was keyed: {magenta_seen:?}"
@@ -2228,7 +2200,7 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
         ..frozen(seeded())
     });
     for _ in 0..4 {
-        h.step_graph(&params);
+        h.step_solo(&params, 0);
     }
 
     // 300 rather than a round 320: four bytes a texel is 1200 to the row,
@@ -2360,35 +2332,25 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
     // every ring is the deepest one: the short delays then read from its
     // middle, and the longest from the slab just after the one being
     // written.
-    let flash = |delay: u32| Params {
-        cameras: vec![Camera {
-            delay,
-            gain: [0.9; 3],
-            framing: Framing {
-                zoom: 0.9,
-                ..Framing::identity()
-            },
-            ..plain_camera(one_hot(2, 0))
-        }],
-        monitors: vec![
-            Monitor {
-                seed: Seed::WhiteBlob(1.0),
-                ..silent_monitor()
-            },
-            silent_monitor(),
-        ],
-        inputs: Vec::new(),
-        routing: vec![vec![0.0], vec![1.0]],
-        delay: Params::MAX_DELAY,
+    // Camera B carries the flash from structure A's monitor to its own.
+    let flash = |delay: u32| {
+        let mut p = blank();
+        p.cameras[1].delay = delay;
+        p.cameras[1].gain = [0.9; 3];
+        p.cameras[1].framing.zoom = 0.9;
+        p.cameras[1].look = one_hot(MONITORS, 0);
+        p.monitors[0].seed = Seed::WhiteBlob(1.0);
+        p.delay = Params::MAX_DELAY;
+        p
     };
     let mut undelayed: Option<Vec<u8>> = None;
     for delay in [0, 1, 2, Params::MAX_DELAY] {
         let mut p = flash(delay);
-        let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+        let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
             return;
         };
-        let (u0, v0) = tile(2, 1, 0.0, 0.0);
-        let (u1, v1) = tile(2, 1, 1.0, 1.0);
+        let (u0, v0) = tile(MONITORS, 2, 0.0, 0.0);
+        let (u1, v1) = tile(MONITORS, 2, 1.0, 1.0);
         for pass in 0..=delay + 2 {
             h.step_graph(&p);
             p.monitors[0].seed = Seed::Dark;
@@ -2409,7 +2371,7 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
             } else {
                 assert!(
                     lit < 2.0,
-                    "delay {delay}: monitor 1 lit on pass {pass}: {lit}"
+                    "delay {delay}: monitor 3 lit on pass {pass}: {lit}"
                 );
             }
         }
@@ -2417,34 +2379,27 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
 }
 
 #[test]
-fn an_input_lands_past_the_whole_ring() {
-    // On an undelayed graph the ring is one slab and an input's layer is
-    // where it always was, so only a delayed graph can tell the layer an
-    // input is written to from the one its tap reads. The camera is routed
-    // nowhere and is there only to deepen the ring.
-    let p = Params {
-        cameras: vec![Camera {
-            delay: 5,
-            ..plain_camera(one_hot(1, 0))
-        }],
-        monitors: vec![silent_monitor()],
-        inputs: vec![bars(vec![1.0])],
-        routing: vec![vec![0.0]],
-        delay: 5,
-    };
+fn the_seed_lands_past_the_whole_ring() {
+    // On an undelayed graph the ring is one slab and the seed's layer is
+    // where it always was, so only a delayed graph can tell the layer the
+    // seed is written to from the one its tap reads. The cameras are blind
+    // and the reach is there only to deepen the ring.
+    let mut p = seed_on_a_monitor();
+    p.cameras[0].delay = 5;
+    p.delay = 5;
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
     h.feedback
-        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), [200; 3]));
+        .write_seed(h.queue, &flat_frame((SIZE, SIZE), [200; 3]));
     // A whole turn of the ring, so the pass that draws the last slab — the
-    // one whose upper view is the input layers alone — is among them.
+    // one whose upper view is the seed layer alone — is among them.
     for pass in 0..p.history() {
-        h.step_graph(&p);
+        h.step_solo(&p, SEEDED);
         let shown = h.read().rgb_at(0.5, 0.5);
         assert!(
             shown.iter().all(|c| (c - 200.0).abs() <= 1.0),
-            "pass {pass}: the monitor shows {shown:?}, not the input's flat 200"
+            "pass {pass}: the monitor shows {shown:?}, not the seed's flat 200"
         );
     }
 }
@@ -2455,27 +2410,16 @@ fn blanking_the_monitors_empties_the_whole_ring() {
     // else, so a blank that left any slab alone would deliver it late: after
     // the blank, monitor 1 stays dark for longer than the delay.
     let delay = 4;
-    let mut p = Params {
-        cameras: vec![Camera {
-            delay,
-            ..plain_camera(one_hot(2, 0))
-        }],
-        monitors: vec![
-            Monitor {
-                seed: Seed::WhiteBlob(1.0),
-                ..silent_monitor()
-            },
-            silent_monitor(),
-        ],
-        inputs: Vec::new(),
-        routing: vec![vec![0.0], vec![1.0]],
-        delay,
-    };
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
+    let mut p = blank();
+    p.cameras[1].delay = delay;
+    p.cameras[1].look = one_hot(MONITORS, 0);
+    p.monitors[0].seed = Seed::WhiteBlob(1.0);
+    p.delay = delay;
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
     };
-    let (u0, v0) = tile(2, 1, 0.0, 0.0);
-    let (u1, v1) = tile(2, 1, 1.0, 1.0);
+    let (u0, v0) = tile(MONITORS, 2, 0.0, 0.0);
+    let (u1, v1) = tile(MONITORS, 2, 1.0, 1.0);
     // First the cable delivers, or the dark below proves nothing.
     h.step_graph(&p);
     p.monitors[0].seed = Seed::Dark;
@@ -2516,7 +2460,7 @@ fn resharpen(h: &mut Harness, sharpness: f32) -> Image {
         ..frozen(seeded())
     });
     params.monitors[0].sharpness = sharpness;
-    h.step_graph(&params);
+    h.step_solo(&params, 0);
     h.read()
 }
 
@@ -2562,17 +2506,17 @@ fn sharpness_is_exact_at_rest_and_steepens_the_seeds_rim_when_turned_up() {
     }
 }
 
-/// One pass of a graph whose only light is an input, at a sharpness.
-fn sharpened_input(h: &mut Harness, p: &Params, sharpness: f32) -> Image {
+/// One pass of a graph whose only light is the seed, at a sharpness.
+fn sharpened_seed(h: &mut Harness, p: &Params, sharpness: f32) -> Image {
     let mut p = p.clone();
-    p.monitors[0].sharpness = sharpness;
-    h.step_graph(&p);
+    p.monitors[SEEDED].sharpness = sharpness;
+    h.step_solo(&p, SEEDED);
     h.read()
 }
 
 #[test]
 fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
-    let p = one_input_on_one_monitor();
+    let p = seed_on_a_monitor();
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -2581,14 +2525,13 @@ fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
     // each — a step from black to white is already as steep as eight bits
     // can say.
     let (light, dark) = ([128; 3], [64; 3]);
-    h.feedback.write_input(
+    h.feedback.write_seed(
         h.queue,
-        0,
         &quartered_frame((SIZE, SIZE), [light, dark, light, dark]),
     );
     let sharpness = 2.0;
-    let rest = sharpened_input(&mut h, &p, 0.0);
-    let sharp = sharpened_input(&mut h, &p, sharpness);
+    let rest = sharpened_seed(&mut h, &p, 0.0);
+    let sharp = sharpened_seed(&mut h, &p, sharpness);
     // Probed a quarter of the way in, off the other step: on the centre
     // lines a mask with one arm missing still steepens both ways, since
     // every texel there straddles both steps. The number is exact — each
@@ -2627,9 +2570,9 @@ fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
         }
     }
     h.feedback
-        .write_input(h.queue, 0, &flat_frame((SIZE, SIZE), light));
-    let rest = sharpened_input(&mut h, &p, 0.0);
-    let sharp = sharpened_input(&mut h, &p, 2.0);
+        .write_seed(h.queue, &flat_frame((SIZE, SIZE), light));
+    let rest = sharpened_seed(&mut h, &p, 0.0);
+    let sharp = sharpened_seed(&mut h, &p, 2.0);
     assert_eq!(
         sharp.pixels, rest.pixels,
         "the mask found detail in a flat field"
@@ -2646,22 +2589,14 @@ fn a_divided_camera_holds_each_frame_for_that_many_passes() {
     // moves when a frame changes and never what it is. Once more with a
     // frame of delay on the cable, so the hold counts on from the delay
     // rather than over it.
-    let clock = |divider: u32, delay: u32| Params {
-        cameras: vec![Camera {
-            divider,
-            delay,
-            ..plain_camera(one_hot(2, 0))
-        }],
-        monitors: vec![
-            Monitor {
-                seed: Seed::WhiteBlob(1.0),
-                ..silent_monitor()
-            },
-            silent_monitor(),
-        ],
-        inputs: Vec::new(),
-        routing: vec![vec![0.0], vec![1.0]],
-        delay,
+    let clock = |divider: u32, delay: u32| {
+        let mut p = blank();
+        p.cameras[1].divider = divider;
+        p.cameras[1].delay = delay;
+        p.cameras[1].look = one_hot(MONITORS, 0);
+        p.monitors[0].seed = Seed::WhiteBlob(1.0);
+        p.delay = delay;
+        p
     };
     let mut undelayed: Vec<Vec<u8>> = Vec::new();
     for delay in [0, 1] {
@@ -2675,8 +2610,7 @@ fn a_divided_camera_holds_each_frame_for_that_many_passes() {
             let frames: Vec<Vec<u8>> = (0..passes)
                 .map(|pass| {
                     p.monitors[0].seed = Seed::WhiteBlob(1.0 - 0.05 * pass as f32);
-                    h.step_graph(&p);
-                    h.present(Some(1));
+                    h.step_solo(&p, 2);
                     h.read().pixels
                 })
                 .collect();

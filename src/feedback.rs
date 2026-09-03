@@ -70,11 +70,10 @@ pub fn bank_bytes(params: &Params, size: (u32, u32)) -> u64 {
 pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
     let shape = Shape::of(params);
     let what = format!(
-        "{} bank layers ({} frames of {} monitors, and {} inputs)",
+        "{} bank layers ({} frames of {} monitors, and the seed)",
         shape.layers(),
         shape.history,
-        shape.monitors,
-        shape.inputs
+        shape.monitors
     );
     // The limit every WebGPU implementation grants, since the browser build
     // asks for no more than that.
@@ -98,15 +97,14 @@ pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
 }
 
 /// How the bank's layers are laid out: [`Params::history`] slabs of the
-/// monitors as a ring, then the inputs. The one place a layer index comes
-/// from, whether a tap reads it, an input's frame is written to it or a pass
-/// draws on it — three formulas for one layout would be three ways to read
-/// the wrong frame.
+/// monitors as a ring, then the seed's own layer. The one place a layer
+/// index comes from, whether a tap reads it, the seed's frame is written to
+/// it or a pass draws on it — three formulas for one layout would be three
+/// ways to read the wrong frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Shape {
     history: usize,
     monitors: usize,
-    inputs: usize,
 }
 
 impl Shape {
@@ -114,12 +112,11 @@ impl Shape {
         Shape {
             history: params.history(),
             monitors: params.monitors.len(),
-            inputs: params.inputs.len(),
         }
     }
 
     pub(crate) fn layers(self) -> usize {
-        self.history * self.monitors + self.inputs
+        self.history * self.monitors + 1
     }
 
     fn monitor(self, slab: usize, m: usize) -> usize {
@@ -127,12 +124,10 @@ impl Shape {
         slab * self.monitors + m
     }
 
-    /// Input `i`: past the whole ring, since an input is never delayed —
-    /// nothing stands between the switcher and the outside light it was
-    /// handed.
-    fn input(self, i: usize) -> usize {
-        debug_assert!(i < self.inputs);
-        self.history * self.monitors + i
+    /// The seed: past the whole ring, since it is never delayed — nothing
+    /// stands between the switcher and the outside light it was handed.
+    fn seed(self) -> usize {
+        self.history * self.monitors
     }
 
     /// The slab holding the frame `back` passes before the newest, which
@@ -179,12 +174,13 @@ pub(crate) fn taps_of(
     pass: u64,
 ) -> impl Iterator<Item = (Through, usize, f32)> + '_ {
     let shape = Shape::of(params);
-    let through_cameras = params.routing[m]
+    let feed = params.rig.feed(m);
+    let through_cameras = params
+        .cameras
         .iter()
-        .zip(&params.cameras)
         .enumerate()
-        .filter(|(_, (route, _))| **route > 0.0)
-        .flat_map(move |(c, (route, camera))| {
+        .filter(move |(c, _)| feed.cameras[*c] > 0.0)
+        .flat_map(move |(c, camera)| {
             camera
                 .look
                 .iter()
@@ -192,38 +188,31 @@ pub(crate) fn taps_of(
                 .filter(|(_, look)| **look > 0.0)
                 .map(move |(src, look)| {
                     let layer = shape.monitor(shape.read(newest, camera, pass), src);
-                    (Through::Camera(c), layer, route * look)
+                    (Through::Camera(c), layer, feed.cameras[c] * look)
                 })
         });
-    let straight_in = params
-        .inputs
-        .iter()
-        .enumerate()
-        .map(move |(i, plug)| (i, plug.into[m]))
-        .filter(|(_, route)| *route > 0.0)
-        .map(move |(i, route)| (Through::Input(i), shape.input(i), route));
+    let straight_in = (feed.seed > 0.0)
+        .then(move || (Through::Seed, shape.seed(), feed.seed))
+        .into_iter();
     through_cameras.chain(straight_in)
 }
 
 /// The most taps any one monitor's pass can ever be given.
 ///
-/// [`taps_of`] drops a column whose routing weight is zero, and a crosspoint
-/// can be raised mid-performance — so the count a file loads with is not a
-/// bound on the count the shader will be handed. This is that count with
-/// every crosspoint treated as live, which is what [`config::validate`] holds
-/// against [`MAX_TAPS`]: each camera contributes the monitors its splitter
-/// can see, and each input the one tap it is. Every input, not the ones sent
-/// somewhere on disk — a send is a crosspoint the panel turns, so a row of
-/// zeroes at load is no promise about the tap count a second later. The look
-/// weights are the other way about: no knob turns one, so a monitor a camera
-/// cannot see stays uncounted.
+/// [`taps_of`] drops a feed whose weight is zero, and a crossfade can be swept
+/// mid-performance — so the count the rig runs at is not a bound on the count
+/// the shader will be handed. This is that count with every feed treated as
+/// live, which is what [`crate::config::validate`] holds against [`MAX_TAPS`]:
+/// each camera contributes the monitors its splitter can see, and the seed
+/// the one tap it is. The look weights are the other way about: no knob turns
+/// one, so a monitor a camera cannot see stays uncounted.
 pub(crate) fn reachable_taps(params: &Params) -> usize {
     let through_cameras: usize = params
         .cameras
         .iter()
         .map(|camera| camera.look.iter().filter(|look| **look > 0.0).count())
         .sum();
-    through_cameras + params.inputs.len()
+    through_cameras + 1
 }
 
 /// What a tap came through: one of the graph's cameras, or an input on its
@@ -232,7 +221,7 @@ pub(crate) fn reachable_taps(params: &Params) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Through {
     Camera(usize),
-    Input(usize),
+    Seed,
 }
 
 /// One flattened edge of the graph, flipped in `shaders/feedback.wgsl`.
@@ -558,20 +547,19 @@ impl Feedback {
         self.shape.monitors
     }
 
-    /// The size of every layer of the bank, and so the size an input's frames
+    /// The size of every layer of the bank, and so the size the seed's frames
     /// have to arrive at.
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
 
-    /// Puts one external frame — tightly packed RGBA8 — on input `i`'s source
-    /// layer, where the cameras looking at it will find it.
-    pub fn write_input(&mut self, queue: &wgpu::Queue, i: usize, rgba8: &[u8]) {
-        assert!(i < self.shape.inputs, "input {i} of {}", self.shape.inputs);
+    /// Puts one external frame — tightly packed RGBA8 — on the seed's layer,
+    /// where the switcher will find it.
+    pub fn write_seed(&mut self, queue: &wgpu::Queue, rgba8: &[u8]) {
         assert_eq!(
             rgba8.len(),
             crate::input::frame_bytes(self.size()),
-            "input {i} handed over a short frame"
+            "the seed handed over a short frame"
         );
         to_half(rgba8, &mut self.scratch);
         queue.write_texture(
@@ -581,7 +569,7 @@ impl Feedback {
                 origin: wgpu::Origin3d {
                     x: 0,
                     y: 0,
-                    z: self.shape.input(i) as u32,
+                    z: self.shape.seed() as u32,
                 },
                 aspect: wgpu::TextureAspect::All,
             },
@@ -701,9 +689,7 @@ impl Feedback {
                         let camera = &params.cameras[c];
                         (&framings[c], camera.gain, camera.character, camera.key)
                     }
-                    Through::Input(i) => {
-                        (&square_on, [1.0; 3], Character::CLEAN, params.inputs[i].key)
-                    }
+                    Through::Seed => (&square_on, [1.0; 3], Character::CLEAN, params.input.key),
                 };
                 // A step of `r` screen units across and up the camera's
                 // image, carried through the tap's affine into the source
@@ -753,10 +739,11 @@ impl Feedback {
             // adding their amplitudes would overstate the pair by 40%. The
             // sends are not in the sum: an input arrives already a signal,
             // down no cable of this graph's, and grains nothing.
-            let grain: f32 = params.routing[m]
+            let grain: f32 = params
+                .cameras
                 .iter()
-                .zip(&params.cameras)
-                .map(|(route, camera)| (route * camera.character.noise).powi(2))
+                .enumerate()
+                .map(|(c, camera)| (params.route(m, c) * camera.character.noise).powi(2))
                 .sum::<f32>()
                 .sqrt();
 
@@ -875,80 +862,56 @@ mod tests {
     #[test]
     fn a_bank_is_a_ring_of_every_monitor_and_the_inputs() {
         // Worked out from the format rather than from `bank_bytes`: one
-        // 1920x1080 layer of Rgba16Float is 8 bytes a texel, and an
-        // undelayed graph is two copies of every monitor, so a pass can read
-        // every layer while writing one.
+        // 1920x1080 layer of Rgba16Float is 8 bytes a texel, and the rig is
+        // five monitors two frames deep — a pass reads every layer while
+        // writing one — plus one layer for the seed.
         let layers = |p: &Params| Shape::of(p).layers();
-        let mut single = crate::config::single();
-        assert_eq!(layers(&single), 2);
-        assert_eq!(bank_bytes(&single, (1920, 1080)), 2 * 1920 * 1080 * 8);
-        // Four monitors, and the layers are what multiply.
-        let insanity = crate::config::insanity();
-        assert_eq!(layers(&insanity), 8);
-        assert_eq!(bank_bytes(&insanity, (3840, 2160)), 4 * 2 * 3840 * 2160 * 8);
+        let mut rig = crate::config::instrument();
+        rig.delay = 0;
+        assert_eq!(rig.history(), 2);
+        assert_eq!(layers(&rig), 2 * 5 + 1);
+        assert_eq!(bank_bytes(&rig, (1920, 1080)), 11 * 1920 * 1080 * 8);
         // A frame of delay is another slab of every monitor in the ring, and
         // an input is one layer past the ring, delayed or not.
-        single.delay = 3;
-        assert_eq!(single.history(), 5);
-        single.cameras[0].divider = 3;
-        assert_eq!(single.history(), 7);
-        assert_eq!(layers(&single), 7);
-        single.cameras[0].divider = 1;
-        assert_eq!(layers(&single), 5);
-        assert_eq!(bank_bytes(&single, (1920, 1080)), 5 * 1920 * 1080 * 8);
-        single.inputs = vec![crate::params::Plug {
-            source: crate::input::Input::Pattern(crate::input::Pattern::Bars),
-            key: Key::OFF,
-            into: vec![0.0],
-        }];
-        assert_eq!(layers(&single), 6);
-        assert_eq!(bank_bytes(&single, (1920, 1080)), 6 * 1920 * 1080 * 8);
+        rig.delay = 3;
+        assert_eq!(rig.history(), 5);
+        rig.cameras[0].divider = 3;
+        assert_eq!(rig.history(), 7);
+        assert_eq!(layers(&rig), 7 * 5 + 1);
+        rig.cameras[0].divider = 1;
+        assert_eq!(layers(&rig), 5 * 5 + 1);
+        assert_eq!(bank_bytes(&rig, (1920, 1080)), 26 * 1920 * 1080 * 8);
     }
 
     #[test]
     fn a_bank_past_the_cap_is_refused_and_the_4k_deployment_is_not() {
-        // The resolution this instrument is deployed at, on the largest
-        // graph that ships: it fits, or the cap would be refusing the thing
-        // it was written to allow.
-        let insanity = crate::config::insanity();
-        assert!(bank_fits(&insanity, (3840, 2160)).is_ok());
-        // And the largest graph `config::validate` permits at all.
-        let mut most = insanity.clone();
-        most.monitors = vec![most.monitors[0].clone(); crate::config::MAX_MONITORS];
-        most.inputs = vec![
-            crate::params::Plug {
-                source: crate::input::Input::Pattern(crate::input::Pattern::Bars),
-                key: Key::OFF,
-                into: vec![0.0; crate::config::MAX_MONITORS],
-            };
-            crate::config::MAX_INPUTS
-        ];
-        assert_eq!(Shape::of(&most).layers(), 20);
-        assert!(bank_fits(&most, (3840, 2160)).is_ok());
-        // Four times the texels each, on twenty of them, is past it — and the
-        // refusal says both halves of why, since neither the graph nor the
-        // resolution alone is what went wrong.
-        let why = bank_fits(&most, (7680, 4320)).unwrap_err();
+        // The resolution this instrument is deployed at: it fits, or the cap
+        // would be refusing the thing it was written to allow.
+        let rig = crate::config::instrument();
+        assert!(bank_fits(&rig, (3840, 2160)).is_ok());
+        // And the deepest ring the delay units can buy, which is past the cap
+        // even at 1080 — the refusal says both halves of why, since neither
+        // the graph nor the resolution alone is what went wrong.
+        let mut most = rig.clone();
+        most.delay = crate::params::Params::MAX_DELAY;
+        most.cameras[0].divider = crate::params::Camera::MAX_DIVIDER;
+        assert_eq!(Shape::of(&most).layers(), 171);
+        let why = bank_fits(&most, (1920, 1080)).unwrap_err();
         assert!(
-            why.contains("20 bank layers") && why.contains("7680x4320"),
+            why.contains("171 bank layers") && why.contains("1920x1080"),
             "{why}"
         );
-        // The ring counts: ten frames deep, eighty-four layers: past the cap by bytes, and the
-        // refusal says how deep the ring is, which is what the file can
-        // change.
+        // Eight frames of reach fit at 1080.
         most.delay = 8;
+        most.cameras[0].divider = 1;
+        assert_eq!(Shape::of(&most).layers(), 51);
+        assert!(bank_fits(&most, (1920, 1080)).is_ok());
+        // At 4K the same ring is past the cap by bytes, and the refusal says
+        // how deep the ring is, which is what the delay can change.
         let why = bank_fits(&most, (3840, 2160)).unwrap_err();
         assert!(
-            why.contains("84 bank layers (10 frames of 8 monitors, and 4 inputs)")
+            why.contains("51 bank layers (10 frames of 5 monitors, and the seed)")
                 && why.contains("2.0 GiB"),
-            "{why}"
-        );
-        // The full delay is 260 layers, more than a texture array holds
-        // however small the monitors — refused by depth, not by bytes.
-        most.delay = crate::params::Params::MAX_DELAY;
-        let why = bank_fits(&most, (640, 480)).unwrap_err();
-        assert!(
-            why.contains("260 bank layers") && why.contains("256 layers"),
             "{why}"
         );
     }

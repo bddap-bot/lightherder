@@ -1,333 +1,24 @@
-//! The graphs the instrument ships with, and loading arbitrary ones from
-//! disk. A preset is nothing but a [`Params`] value; a config file is the
-//! same struct in TOML, so anything a preset can express a file can too.
+//! The instrument's graph, and everything the GPU side assumes about it.
 
 use crate::feedback::MAX_TAPS;
 use crate::midi::ROW_BUTTONS;
 use crate::params::{Camera, Focus, Knob, Node, Params, Seed, Side};
-use crate::rig::Rig;
+use crate::rig::{self, Rig};
 
-/// More monitors than this and the uniform buffer, the present grid and the
-/// texture array all need a second look; fewer keeps every one of them dumb.
-pub const MAX_MONITORS: usize = 8;
-
-/// Cameras cost nothing but a select button each, and the Solo row has
-/// three to spare for the clutch and the precision pair.
-pub const MAX_CAMERAS: usize = 5;
-
-/// Inputs cost what [`MAX_TAPS`] does not bound: one bank layer each, plus —
-/// for a file or a device — a process and a thread of its own. Four is what
-/// a switcher has spare inputs for.
-pub const MAX_INPUTS: usize = 4;
-
-/// The most of `node` a legal graph may hold — what [`validate`] refuses past,
-/// and so how far the surface's vocabulary of selects runs. A kind that costs
-/// something is held to its own cap; a camera costs nothing but a button.
+/// The most of `node` there is — the rig's own counts, which is how far the
+/// surface's vocabulary of selects runs.
 pub const fn cap(node: Node) -> usize {
     match node {
-        Node::Camera => MAX_CAMERAS,
-        Node::Monitor => MAX_MONITORS,
-        Node::Input => MAX_INPUTS,
+        Node::Camera => rig::CAMERAS,
+        Node::Monitor => rig::MONITORS,
+        Node::Switcher => rig::SWITCHERS,
     }
 }
 
 const _: () = assert!(
-    MAX_CAMERAS <= ROW_BUTTONS && MAX_MONITORS <= ROW_BUTTONS && MAX_INPUTS <= ROW_BUTTONS,
-    "a cap past the select row would name selects no button can carry"
+    rig::CAMERAS <= ROW_BUTTONS && rig::MONITORS <= ROW_BUTTONS && rig::SWITCHERS <= ROW_BUTTONS,
+    "a count past the select row would name selects no button can carry"
 );
-
-/// The widest graph the board reaches, which is the map a test about the
-/// *surface* rather than about any rig means by "the factory layout".
-#[cfg(test)]
-use crate::affine::Framing;
-#[cfg(test)]
-use crate::input::{Input, Pattern};
-#[cfg(test)]
-use crate::params::{Character, Key, Monitor, Plug};
-
-#[cfg(test)]
-pub(crate) fn widest() -> Params {
-    shaped(MAX_CAMERAS, MAX_MONITORS, MAX_INPUTS)
-}
-
-/// A graph of a named shape, for the tests that are about the *surface* a
-/// graph builds rather than about any light it makes. One-hot looks and a
-/// switcher left off, so even the widest rig stays inside the tap bound.
-#[cfg(test)]
-pub(crate) fn shaped(cameras: usize, monitors: usize, inputs: usize) -> Params {
-    Params {
-        cameras: (0..cameras)
-            .map(|c| Camera {
-                framing: Framing::identity(),
-                gain: [0.9; 3],
-                character: Character::CLEAN,
-                key: Key::OFF,
-                look: (0..monitors).map(|m| f32::from(m == c)).collect(),
-                delay: 0,
-                divider: 1,
-            })
-            .collect(),
-        monitors: (0..monitors).map(|_| Monitor::default()).collect(),
-        inputs: vec![
-            Plug {
-                source: Input::Pattern(Pattern::Bars),
-                key: Key::OFF,
-                into: vec![0.0; monitors],
-            };
-            inputs
-        ],
-        routing: (0..monitors).map(|_| vec![0.0; cameras]).collect(),
-        delay: 0,
-    }
-}
-
-/// The classic rig: one camera aimed straight at the one monitor it draws to.
-/// The values are the bootstrap stage's defaults — the camera pulls back a
-/// little and turns a little each pass, at a gain just under unity spread
-/// across the channels, so the seed leaves a spiral that cools from white to
-/// blue as it winds in.
-#[cfg(test)]
-pub(crate) fn single() -> Params {
-    Params {
-        cameras: vec![Camera {
-            framing: Framing {
-                zoom: 0.994,
-                rotation: 0.05,
-                ..Framing::identity()
-            },
-            gain: [0.980, 0.986, 0.992],
-            character: Character::CLEAN,
-            key: Key::OFF,
-            look: vec![1.0],
-            delay: 0,
-            divider: 1,
-        }],
-        monitors: vec![Monitor {
-            seed: Seed::BLOB,
-            ..Default::default()
-        }],
-        inputs: Vec::new(),
-        routing: vec![vec![1.0]],
-        delay: 0,
-    }
-}
-
-/// The same single loop with the signal path turned on: a lens that scatters
-/// a third of the light into a halo, chroma smeared along the scanline, a
-/// little grain, and an amplifier whose rail sits below white so the trail
-/// compresses into the spiral instead of burning out the middle of it.
-/// Everything else is [`single`]'s, so the difference between the two presets
-/// is the analog character and nothing else — the chroma the bleed smears is
-/// the same age-to-hue gradient the per-channel loop gain already makes.
-#[cfg(test)]
-pub(crate) fn analog() -> Params {
-    let mut params = single();
-    params.cameras[0].character = Character {
-        bloom: 0.35,
-        bloom_radius: 0.05,
-        chroma_bleed: 0.02,
-        noise: 0.02,
-    };
-    params.monitors[0].headroom = 0.9;
-    params
-}
-
-/// The Light Herder's crossed two-structure setup: each camera looks at its
-/// own monitor through beam-splitter glass that lets a quarter of the other
-/// one bleed in, and the switcher routes each camera to the *opposite*
-/// monitor, so every image is made of its twin's past. Both framings turn
-/// the same way on purpose: opposite spins would cancel over a round trip,
-/// and a trail that never winds away from the seed piles up on it until the
-/// display clips. The unequal rates keep the two structures distinct.
-#[cfg(test)]
-pub(crate) fn crossed() -> Params {
-    let camera = |looks_at: usize, rotation: f32, gain: [f32; 3]| {
-        let mut look = vec![0.25; 2];
-        look[looks_at] = 0.75;
-        Camera {
-            framing: Framing {
-                zoom: 0.994,
-                rotation,
-                ..Framing::identity()
-            },
-            gain,
-            character: Character::CLEAN,
-            key: Key::OFF,
-            look,
-            delay: 0,
-            divider: 1,
-        }
-    };
-    Params {
-        cameras: vec![
-            camera(0, 0.05, [0.980, 0.986, 0.992]),
-            camera(1, 0.08, [0.992, 0.986, 0.980]),
-        ],
-        monitors: vec![
-            Monitor {
-                seed: Seed::BLOB,
-                ..Default::default()
-            },
-            Monitor {
-                seed: Seed::BLOB,
-                ..Default::default()
-            },
-        ],
-        inputs: Vec::new(),
-        routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
-        delay: 0,
-    }
-}
-
-/// Insanity mode: every monitor is composed of every other. Four cameras,
-/// one per monitor, and an all-to-all routing matrix whose rows sum to one.
-/// The framings differ per camera — staggered spin and zoom — so the four
-/// contributions to any one monitor never line up. All the spins go the same
-/// way for the same reason as [`crossed`]: mixed-sign rotations hand the mix
-/// closed paths that never wind away from the seed, and those clip.
-#[cfg(test)]
-pub(crate) fn insanity() -> Params {
-    const N: usize = 4;
-    let cameras = (0..N)
-        .map(|c| {
-            let mut look = vec![0.0; N];
-            look[c] = 1.0;
-            Camera {
-                framing: Framing {
-                    zoom: 0.990 + 0.004 * c as f32,
-                    rotation: 0.04 + 0.02 * c as f32,
-                    ..Framing::identity()
-                },
-                // Each camera favours a different channel, so the mix on any
-                // monitor carries chroma for the hue knobs to turn.
-                gain: std::array::from_fn(|ch| if ch == c % 3 { 0.992 } else { 0.976 }),
-                character: Character::CLEAN,
-                key: Key::OFF,
-                look,
-                delay: 0,
-                divider: 1,
-            }
-        })
-        .collect();
-    Params {
-        cameras,
-        monitors: (0..N)
-            .map(|_| Monitor {
-                seed: Seed::BLOB,
-                ..Default::default()
-            })
-            .collect(),
-        inputs: Vec::new(),
-        routing: vec![vec![1.0 / N as f32; N]; N],
-        delay: 0,
-    }
-}
-
-/// A test pattern driving the loop instead of the seed spot. One camera, the
-/// classic rig turning and pulling back on its own monitor, and the bars
-/// plugged into the switcher beside it on a crosspoint that hands over
-/// almost nothing — a seventieth of the picture, 0.014. That is the whole
-/// point of a loop this close to unity: what settles is the trickle divided
-/// by how far the gain is from 1, so 0.014 of the bars over a loop 0.015
-/// short of unity settles at almost the bars' own brightness. The glass is
-/// dark, so every photon here came in from outside, and the gain is flat
-/// across the channels because an input supplies its own colour — there is
-/// nothing for a per-channel decay to add.
-#[cfg(test)]
-pub(crate) fn external() -> Params {
-    Params {
-        cameras: vec![Camera {
-            framing: Framing {
-                zoom: 0.994,
-                rotation: 0.05,
-                ..Framing::identity()
-            },
-            gain: [0.985; 3],
-            character: Character::CLEAN,
-            key: Key::OFF,
-            look: vec![1.0],
-            delay: 0,
-            divider: 1,
-        }],
-        monitors: vec![Monitor::default()],
-        // The bars at a trickle. The pattern arrives square on and whole,
-        // since nothing frames what the switcher hands over — everything
-        // that happens to it afterwards is the loop's doing.
-        inputs: vec![Plug {
-            source: Input::Pattern(Pattern::Bars),
-            key: Key::OFF,
-            into: vec![0.014],
-        }],
-        // The loop camera at a full send.
-        routing: vec![vec![1.0]],
-        delay: 0,
-    }
-}
-
-///
-/// Two monitors, because a key belongs to a camera and a camera watches
-/// monitors. The switcher puts the device whole on the first — a monitor
-/// used as the room's window, with nothing routed to it and no loop of its
-/// own — and a camera watches *that* through its luma key, handing on the
-/// subject and refusing the dark room behind it. What it hands on drives the
-/// second monitor's loop, which is [`external`]'s: the injection divided by
-/// the loop's distance from unity, and at 0.015 into a loop 0.015 short of
-/// unity a subject settles at its own brightness — full scale in, white
-/// trail out, with the amplifier's rail above it for the moments a light
-/// swings past.
-///
-/// The key is where the two-monitor shape buys something a one-monitor rig
-/// cannot have: a key on the loop's own camera would gate the trail it is
-/// building, so it would never build one.
-///
-/// The window costs the room one frame on its way in, since a camera reads
-/// the frame a monitor held rather than the one it is being handed. A
-/// sixtieth of a second behind a live subject is under the hand's own
-/// latency, and the loop's own delay is a whole pass anyway.
-#[cfg(test)]
-pub(crate) fn webcam() -> Params {
-    let window = 0;
-    let loop_monitor = 1;
-    let looking_at_the_room = Camera {
-        // Square on, so what the key passes is the picture the device sent.
-        framing: Framing::identity(),
-        gain: [0.015; 3],
-        character: Character::CLEAN,
-        // Passing from mid-grey up and cutting to nothing a little below it:
-        // a subject lit against an unlit room, which is what a bare webcam
-        // faces. The luma half only — a dark room, not a coloured sheet.
-        key: Key {
-            threshold: 0.35,
-            softness: 0.08,
-            ..Key::OFF
-        },
-        look: one_hot(2, window),
-        delay: 0,
-        divider: 1,
-    };
-    let mut looking_at_the_loop = external().cameras.remove(0);
-    looking_at_the_loop.look = one_hot(2, loop_monitor);
-    Params {
-        cameras: vec![looking_at_the_room, looking_at_the_loop],
-        monitors: vec![Monitor::default(); 2],
-        // The device onto the window, whole. Its level is the keyed camera's
-        // gain, one stage further on, so this end of it stays at full.
-        inputs: vec![Plug {
-            source: Input::Capture {
-                format: "v4l2".into(),
-                device: "/dev/video0".into(),
-            },
-
-            key: Key::OFF,
-            into: vec![1.0, 0.0],
-        }],
-        // The keyed camera and the loop camera both onto the loop's monitor,
-        // and nothing onto the window: a camera routed there would put the
-        // loop back in front of the lens that is watching the room.
-        routing: vec![vec![0.0, 0.0], vec![1.0, 1.0]],
-        delay: 0,
-    }
-}
 
 /// The instrument: Blair's rig at its performance setting — see [`Rig`].
 /// There is one, and nothing chooses it.
@@ -335,141 +26,52 @@ pub fn instrument() -> Params {
     Rig::PERFORMANCE.params()
 }
 
-/// A weight per monitor with one of them full — a camera aimed straight at
-/// the one it watches.
-#[cfg(test)]
-fn one_hot(monitors: usize, at: usize) -> Vec<f32> {
-    let mut look = vec![0.0; monitors];
-    look[at] = 1.0;
-    look
-}
-
 /// Every focus at which a knob on `side` names a value of its own.
 ///
 /// Only the indices the side reads: a camera knob is one value per camera
 /// however many monitors there are, so walking whole focuses and dropping
-/// the ones a knob does not distinguish would be the same checks and eight
-/// times the loop, once a frame, on a camera count nothing caps. The rest
-/// stay at zero — including the input index on a graph with no inputs, since
-/// a knob on any other side never reads it.
-///
-/// This is what lets `validate` check the switcher's two halves in one walk
-/// over one rail each: they are different pairs of indices, not a matrix and
-/// an exception to it.
+/// the ones a knob does not distinguish would be the same checks and five
+/// times the loop, once a frame. The rest stay at zero, since a knob on any
+/// other side never reads them.
 fn focuses(side: Side, params: &Params) -> impl Iterator<Item = Focus> {
     let count = |node| match side.reads(node) {
         true => params.count(node),
         false => 1,
     };
-    let (cameras, monitors, inputs) = (
+    let (cameras, monitors, switchers) = (
         count(Node::Camera),
         count(Node::Monitor),
-        count(Node::Input),
+        count(Node::Switcher),
     );
     (0..cameras).flat_map(move |camera| {
         (0..monitors).flat_map(move |monitor| {
-            (0..inputs).map(move |input| Focus {
+            (0..switchers).map(move |switcher| Focus {
                 camera,
                 monitor,
-                input,
+                switcher,
             })
         })
     })
 }
 
-/// Everything the GPU side assumes about a graph, checked at load — and
-/// re-asserted by `Feedback::step`, so the success path must stay
+/// Everything the GPU side assumes about the graph, re-asserted by
+/// `Feedback::step` every frame — so the success path must stay
 /// allocation-free.
 ///
 /// Every value a knob turns is checked against that knob's own [`Knob::limit`]
-/// and nowhere else. A file outside one is *refused* rather than loaded and
-/// silently snapped by the first fader that turns it: a `headroom = 1e6` that validates
-/// is a state the instrument shows, cannot return to, and hands a fader a
-/// travel it is standing off the end of.
-///
-/// A phase is refused outside its turn for a weaker reason, since `rotation =
-/// 6.5` is an angle the instrument can perfectly well hold — it is one turn
-/// and a third, and a file that says so is far likelier to be counting in
-/// degrees than to mean it. Refusing says which; wrapping it silently would
-/// not, and would put the value somewhere the file did not name.
-///
-/// A range check is also the finiteness check, since neither a NaN nor an
-/// infinity is inside any range — and finiteness is not optional here: a NaN
-/// written into a loop that feeds itself never leaves, because `clamp` passes
-/// it through and Reset restores the same poisoned initial.
+/// and nowhere else. A range check is also the finiteness check, since
+/// neither a NaN nor an infinity is inside any range — and finiteness is not
+/// optional here: a NaN written into a loop that feeds itself never leaves,
+/// because `clamp` passes it through and Reset restores the same poisoned
+/// initial.
 pub fn validate(params: &Params) -> Result<(), String> {
-    let (m, c, n) = (
-        params.monitors.len(),
-        params.cameras.len(),
-        params.inputs.len(),
-    );
-    // What the two kinds that cost something are held to, first, because a
-    // rig over one of these cannot be had at all: a refusal naming the board
-    // would send a performer to rebind buttons over a bank the GPU will not
-    // hold. Cameras cost nothing of their own and appear here not at all.
-    if m > MAX_MONITORS {
+    let (m, c) = (params.monitors.len(), params.cameras.len());
+    if (m, c) != (rig::MONITORS, rig::CAMERAS) {
         return Err(format!(
-            "{m} monitors; at most {MAX_MONITORS} — the uniform buffer, the \
-             present grid and the texture array are all sized for that many"
+            "{c} cameras and {m} monitors; the rig is {} on {}",
+            rig::CAMERAS,
+            rig::MONITORS
         ));
-    }
-    if n > MAX_INPUTS {
-        return Err(format!(
-            "{n} inputs; at most {MAX_INPUTS} — each one is a bank layer of its \
-             own, and a file or a device is a process and a thread besides"
-        ));
-    }
-    // Then the reach, which every kind answers to: a node past the select
-    // rows would play forever at whatever the file left its knobs on, since
-    // nothing could bring the focus to it.
-    for node in Node::ALL {
-        let have = params.count(node);
-        if have > cap(node) {
-            return Err(format!(
-                "{have} {}s; at most {} — one button per node, and \
-                 a {} past those could never be turned live",
-                node.name(),
-                cap(node),
-                node.name()
-            ));
-        }
-    }
-    if m == 0 {
-        return Err("no monitors; a rig with none has no glass to draw to".into());
-    }
-    if c == 0 {
-        return Err(
-            "no cameras; a rig with none has no loop to be a feedback rig, and the \
-             panel's camera knobs would have nothing to point at"
-                .into(),
-        );
-    }
-    // The switcher's shape, before anything reads a crosspoint out of it:
-    // `Params::knob` indexes `routing[monitor][camera]` directly, so a short
-    // row would panic rather than fail. An input's sends ride on the input,
-    // so their count is the input count by construction; their length is
-    // not.
-    if params.routing.len() != m {
-        return Err(format!(
-            "routing has {} rows; needs one per monitor, {m}",
-            params.routing.len()
-        ));
-    }
-    for (i, row) in params.routing.iter().enumerate() {
-        if row.len() != c {
-            return Err(format!(
-                "routing row {i} has {} entries; needs one per camera, {c}",
-                row.len()
-            ));
-        }
-    }
-    for (i, plug) in params.inputs.iter().enumerate() {
-        if plug.into.len() != m {
-            return Err(format!(
-                "input {i} has {} sends; needs one per monitor, {m}",
-                plug.into.len()
-            ));
-        }
     }
     // A splitter is not a knob — nothing on the panel turns one — so this is
     // the only place its weights are decided, and they are checked as
@@ -488,11 +90,10 @@ pub fn validate(params: &Params) -> Result<(), String> {
             ));
         }
     }
-    // A blob's brightness is not a knob either — nothing on the panel turns
-    // one — so this is the only place its level is decided. Zero is refused
-    // rather than loaded: a blob putting no light on the glass is what
-    // `dark` says, and two spellings of one rig is the ambiguity the union
-    // exists to delete — one the surface's lamp would then get wrong.
+    // A blob's brightness is not a knob either, so this is the only place its
+    // level is decided. Zero is refused rather than loaded: a blob putting no
+    // light on the glass is what `dark` says, and two spellings of one rig is
+    // the ambiguity the union exists to delete.
     for (i, monitor) in params.monitors.iter().enumerate() {
         if let Seed::WhiteBlob(brightness) = monitor.seed {
             if !(brightness > 0.0 && brightness <= Seed::BRIGHTEST) {
@@ -507,8 +108,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // Every knob, at every focus that names a value of its own, against the
     // one definition of its travel. This is the whole of the per-value
     // checking: a rail spelled a second time here is a rail the two could
-    // differ on, which is how a config used to load a bloom the bloom knob
-    // could not reach.
+    // differ on.
     for knob in Knob::ALL.into_iter().filter(|knob| knob.owns_a_field()) {
         let (low, high) = knob.limit(params).ends();
         for focus in focuses(knob.side(), params) {
@@ -520,15 +120,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
                 let what = match knob.side() {
                     Side::Camera => format!("camera {}'s {name}", node.camera),
                     Side::Monitor => format!("monitor {}'s {name}", node.monitor),
-                    Side::Edge => {
-                        format!(
-                            "camera {}'s {name} to monitor {}",
-                            node.camera, node.monitor
-                        )
-                    }
-                    Side::InputEdge => {
-                        format!("input {}'s {name} to monitor {}", node.input, node.monitor)
-                    }
+                    Side::Switcher => format!("switcher {}'s {name}", node.switcher),
                 };
                 return Err(format!("{what} is {value}; it runs {low} to {high}"));
             }
@@ -558,16 +150,15 @@ pub fn validate(params: &Params) -> Result<(), String> {
         }
     }
     // The flattened routing-times-look products are what the shader iterates,
-    // and its uniform array is a fixed size. Bounded against every crosspoint
-    // turned up, not against what the file happens to say: `Knob::Route`
-    // sweeps one mid-performance, so a row of zeroes at load is no promise
-    // about the tap count a second later. The look weights are not a
-    // crosspoint, so they still count as written.
+    // and its uniform array is a fixed size. Bounded against every crossfade
+    // wherever it can stand, not against where it happens to be: a switcher
+    // sweeps mid-performance, so a feed of zeroes now is no promise about the
+    // tap count a second later.
     let reachable = crate::feedback::reachable_taps(params);
     if reachable > MAX_TAPS {
         return Err(format!(
-            "a monitor here could be fed by {reachable} taps once the switcher \
-             is turned up; at most {MAX_TAPS}"
+            "a monitor here could be fed by {reachable} taps once the switchers \
+             are turned up; at most {MAX_TAPS}"
         ));
     }
     Ok(())
@@ -576,159 +167,90 @@ pub fn validate(params: &Params) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::Knob;
 
-    /// The instrument, and the fixtures the surface tests are built on.
-    fn graphs() -> Vec<(&'static str, Params)> {
-        vec![
-            ("instrument", instrument()),
-            ("single", single()),
-            ("analog", analog()),
-            ("crossed", crossed()),
-            ("insanity", insanity()),
-            ("external", external()),
-            ("webcam", webcam()),
-        ]
+    #[test]
+    fn the_instrument_validates() {
+        validate(&instrument()).unwrap();
     }
 
     #[test]
-    fn every_graph_validates() {
-        for (name, params) in graphs() {
-            validate(&params).unwrap_or_else(|e| panic!("{name}: {e}"));
+    fn the_instrument_is_contracting() {
+        // At the setting it plays, every loop is near unity: a trail that
+        // decays in a few passes is not worth seeing.
+        let played = instrument();
+        for m in 0..played.monitors.len() {
+            let sum: f32 = (0..played.cameras.len())
+                .map(|c| {
+                    let cam = &played.cameras[c];
+                    played.route(m, c) * cam.gain[1] * cam.look.iter().sum::<f32>()
+                })
+                .sum();
+            assert!(sum > 0.9, "monitor {m}: gain sum {sum} dies fast");
         }
-    }
-
-    #[test]
-    fn every_graph_is_contracting() {
         // The light monitor `i` shows next frame is at most `sum` times the
-        // brightest thing on any monitor this frame, so `sum < 1` means every
-        // preset settles instead of blooming to white. Near 1, or the trail
-        // is not worth seeing.
+        // brightest thing on any monitor this frame, so `sum < 1` means it
+        // settles instead of blooming to white. Near 1, or the trail is not
+        // worth seeing. The seed is left out: it is light entering the graph,
+        // so it belongs to what the loop is driven *by*, not to what it
+        // multiplies.
         //
-        // `routing` and not the inputs' sends: an input is light entering the
-        // graph, so it belongs to what the loop is driven *by*, not to what
-        // it multiplies — the seed is left out of this sum for exactly the
-        // same reason. Reading the loop's own gain is naming one of the two
-        // halves of the switcher, which is the whole of the argument for
-        // their being two.
-        for (name, params) in graphs() {
-            // A monitor no camera is routed to is a window and not a loop:
-            // its light arrives from outside every frame at the size it
-            // arrived last frame. So a camera watching one is carrying light
-            // *in*, and its weight on that monitor is injection rather than
-            // gain — `webcam` keys a room off such a window into a loop, and
-            // counting the two together would read its loop as exactly unity
-            // when the part that goes round is 0.985.
-            let is_loop: Vec<bool> = params
-                .routing
-                .iter()
-                .map(|row| row.iter().any(|route| *route > 0.0))
-                .collect();
-            for (i, row) in params.routing.iter().enumerate() {
-                let sum: f32 = (0..3)
-                    .map(|ch| {
-                        row.iter()
-                            .zip(&params.cameras)
-                            .map(|(route, cam)| {
-                                let round: f32 = cam
-                                    .look
-                                    .iter()
-                                    .zip(&is_loop)
-                                    .filter(|(_, feeds_back)| **feeds_back)
-                                    .map(|(look, _)| look)
-                                    .sum();
-                                route * cam.gain[ch] * round
+        // At every setting of the switchers, not only the one it starts on:
+        // a crossfade is a fader, and a rig that blooms at the top of one is
+        // a rig that blooms.
+        let positions = [0.0, 0.25, 0.5, 0.9, 1.0];
+        for &a in &positions {
+            for &b in &positions {
+                for bits in 0..16u8 {
+                    let mut params = instrument();
+                    params.rig.switchers = [a, b, a, b];
+                    params.rig.selects = std::array::from_fn(|i| match bits >> i & 1 {
+                        0 => crate::rig::Select::Direct,
+                        _ => crate::rig::Select::Program,
+                    });
+                    for m in 0..params.monitors.len() {
+                        let sum = (0..3)
+                            .map(|ch| {
+                                (0..params.cameras.len())
+                                    .map(|c| {
+                                        let cam = &params.cameras[c];
+                                        let round: f32 = cam.look.iter().sum();
+                                        params.route(m, c) * cam.gain[ch] * round
+                                    })
+                                    .sum::<f32>()
                             })
-                            .sum()
-                    })
-                    .fold(0.0, f32::max);
-                assert!(sum < 1.0, "{name} monitor {i}: gain sum {sum} blooms");
-                // The lower rail is asked only where there is a loop to ask
-                // it of: a window has no gain to be near unity.
-                if is_loop[i] {
-                    assert!(sum > 0.9, "{name} monitor {i}: gain sum {sum} dies fast");
+                            .fold(0.0, f32::max);
+                        assert!(sum < 1.0, "monitor {m}: gain sum {sum} blooms");
+                    }
                 }
             }
         }
     }
 
     #[test]
-    fn the_crossed_preset_really_crosses() {
-        let p = crossed();
-        // Each monitor shows only the other's camera…
-        assert_eq!(p.routing[0][0], 0.0);
-        assert_eq!(p.routing[1][1], 0.0);
-        assert!(p.routing[0][1] > 0.0 && p.routing[1][0] > 0.0);
-        // …and each camera sees both monitors through the splitter.
-        for camera in &p.cameras {
-            assert!(camera.look.iter().all(|w| *w > 0.0));
-        }
-    }
-
-    #[test]
-    fn insanity_composes_every_monitor_of_every_camera() {
-        let p = insanity();
-        for row in &p.routing {
-            assert!(
-                row.iter().all(|w| *w > 0.0),
-                "a camera is left out: {row:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn only_the_analog_fixture_has_any_character() {
-        // The stage is additive: it must not have quietly changed the look of
-        // the presets that were here before it.
-        for (name, params) in graphs() {
-            let clean = params
-                .cameras
-                .iter()
-                .all(|c| c.character == Character::CLEAN);
-            assert_eq!(clean, name != "analog", "{name}");
-            let open_rail = params
-                .monitors
-                .iter()
-                .all(|m| m.headroom == Monitor::KNEE_AT_WHITE);
-            assert_eq!(open_rail, name != "analog", "{name}'s rail");
-        }
-        // And the one that does have it turns on all four of the things this
-        // stage is named for.
-        let a = analog();
-        let ch = a.cameras[0].character;
-        assert!(ch.bloom > 0.0 && ch.bloom_radius > 0.0);
-        assert!(ch.chroma_bleed > 0.0 && ch.noise > 0.0);
-        assert!(a.monitors[0].headroom < 1.0, "the rail never bites");
-    }
-
-    #[test]
     fn a_misshapen_graph_is_refused() {
-        let mut wrong_look = crossed();
+        let mut wrong_look = instrument();
         wrong_look.cameras[0].look.pop();
         assert!(validate(&wrong_look).is_err());
 
-        let mut wrong_row = crossed();
-        wrong_row.routing[1].push(0.5);
-        assert!(validate(&wrong_row).is_err());
+        let mut short = instrument();
+        short.cameras.pop();
+        assert!(validate(&short).is_err());
 
-        let mut empty = crossed();
+        let mut empty = instrument();
         empty.monitors.clear();
         assert!(validate(&empty).is_err());
     }
 
     #[test]
     fn a_graph_with_a_poisoned_number_is_refused() {
-        // TOML accepts `nan` and `inf` literals, and a NaN inside a loop
-        // that feeds itself never leaves: the knobs clamp with `clamp`,
-        // which passes NaN through, and Reset restores the same initial.
-        // Refusing at load is the only door.
-        //
-        // One of each kind of number a file carries — a knob on a camera, on
-        // a monitor and on a crosspoint, and a splitter weight, which is the
-        // one that is not a knob and so is the one case the rail walk in
+        // A NaN inside a loop that feeds itself never leaves: the knobs clamp
+        // with `clamp`, which passes NaN through, and Reset restores the same
+        // initial. One of each kind of number the graph holds — a knob on a
+        // camera, on a monitor, on a switcher, and a splitter weight, which
+        // is the one that is not a knob and so the one case the rail walk in
         // `params::a_knob_past_its_rail_is_refused_rather_than_snapped_later`
-        // does not reach. The out-of-range poisons that used to be listed
-        // here are that walk's, over every knob rather than the few that
-        // happened to be written down.
+        // does not reach.
         let poison: &[fn(&mut Params)] = &[
             |p| p.cameras[0].gain[0] = f32::NAN,
             |p| p.cameras[0].framing.rotation = f32::INFINITY,
@@ -736,197 +258,35 @@ mod tests {
             |p| p.cameras[0].key.hue = f32::INFINITY,
             |p| p.monitors[0].colour.gamma = f32::NAN,
             |p| p.monitors[0].headroom = f32::NAN,
-            |p| p.routing[0][1] = f32::INFINITY,
+            |p| p.rig.switchers[2] = f32::INFINITY,
             |p| p.cameras[0].look[0] = f32::NAN,
         ];
         for (i, poison) in poison.iter().enumerate() {
-            let mut params = crossed();
+            let mut params = instrument();
             poison(&mut params);
             assert!(validate(&params).is_err(), "poison {i} passed");
         }
     }
 
     #[test]
-    fn a_weight_is_counted_against_its_own_kind_of_thing() {
-        // A camera added to a working graph, and nothing else touched. Were
-        // the inputs columns of `routing` past the cameras', a hand that
-        // then made the row the length it is asked for would have the new
-        // camera holding the bars' 0.014 while the bars went dark — the
-        // silent shift two index spaces exist to make impossible. Counted
-        // against their own kinds there is no length that spells it: this
-        // is a routing row short of a camera, which is a refusal.
-        let mut params = external();
-        params.cameras.push(params.cameras[0].clone());
-        let why = validate(&params).unwrap_err();
-        assert!(
-            why.contains("routing row 0") && why.contains("per camera"),
-            "refused for the wrong reason: {why}"
-        );
-
-        // And a monitor added, which is the same story on the other axis: an
-        // input's sends are one per monitor, so they come out one short
-        // rather than sending the new monitor whatever the old one had.
-        let mut params = external();
-        params.monitors.push(params.monitors[0].clone());
-        params.routing = vec![vec![1.0]; 2];
-        params.cameras[0].look = vec![1.0, 0.0];
-        let why = validate(&params).unwrap_err();
-        assert!(
-            why.contains("input 0 has") && why.contains("per monitor"),
-            "refused for the wrong reason: {why}"
-        );
-        // And a send left behind by a monitor taken away, which is not short
-        // but long: a level nothing reads is a level the loader must not
-        // quietly drop either.
-        let mut params = external();
-        params.inputs[0].into.push(0.0);
-        let why = validate(&params).unwrap_err();
-        assert!(
-            why.contains("input 0 has") && why.contains("per monitor"),
-            "refused for the wrong reason: {why}"
-        );
-
-        // And a splitter short of a monitor, the check the two above are the
-        // switcher's half of.
-        let mut params = external();
-        params.cameras[0].look.clear();
-        let why = validate(&params).unwrap_err();
-        assert!(
-            why.contains("look has") && why.contains("monitor"),
-            "refused for the wrong reason: {why}"
-        );
-    }
-
-    #[test]
-    fn more_inputs_than_the_switcher_has_are_refused() {
-        let mut params = external();
-        params.inputs = vec![params.inputs[0].clone(); MAX_INPUTS + 1];
-        let why = validate(&params).unwrap_err();
-        assert!(
-            why.contains("at most"),
-            "refused for the wrong reason: {why}"
-        );
-    }
-
-    #[test]
-    fn an_input_patched_past_the_crosspoint_rail_is_refused() {
-        // The send's own rail, which the walk over the knobs reads for it
-        // like every other: a graph the panel could not put in this state is
-        // a graph the loader refuses.
-        let (_, high) = Knob::Send.limit(&external()).ends();
-        for level in [high + 0.1, -0.1, f32::NAN] {
-            let mut params = external();
-            params.inputs[0].into[0] = level;
-            let why = validate(&params).unwrap_err();
-            assert!(
-                why.contains("input 0's send to monitor 0"),
-                "refused for the wrong reason: {why}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_external_preset_is_lit_by_its_input_and_nothing_else() {
-        let p = external();
-        assert_eq!(p.inputs.len(), 1);
-        assert_eq!(p.monitors[0].seed, Seed::Dark, "a blob is still lit");
-        // One camera, and it is in the loop: the bars reach the monitor over
-        // the switcher, not down a lens, which is the whole shape of the
-        // rig. The injection level is the crosspoint the bars are patched on.
-        assert_eq!(p.cameras.len(), 1);
-        assert_eq!(p.cameras[0].look, [1.0]);
-        // The send is the injection level, and what it is *for* is where the
-        // loop settles: the trickle divided by the loop's distance from
-        // unity, which the doc claims lands just under the bars' own
-        // brightness. A number asserted as a number would pass at ten times
-        // this and paint a monitor the bars could not.
-        let settled = p.inputs[0].into[0] / (1.0 - p.cameras[0].gain[0]);
-        assert!((0.9..1.0).contains(&settled), "settles at {settled}");
-    }
-
-    #[test]
-    fn the_webcam_preset_keys_a_room_off_a_monitor_and_into_a_loop() {
-        let p = webcam();
-        assert_eq!(
-            p.inputs,
-            vec![Plug {
-                source: Input::Capture {
-                    format: "v4l2".into(),
-                    device: "/dev/video0".into(),
-                },
-
-                key: Key::OFF,
-                into: vec![1.0, 0.0],
-            }]
-        );
-        // The device lands whole on the window monitor, which is a window
-        // and not a loop: nothing is routed to it, so what the keyed camera
-        // watches is one frame of the room and not a frame of the room plus
-        // whatever came back.
-        assert_eq!(p.routing[0], vec![0.0, 0.0]);
-
-        // The key is on the camera watching the window — a camera watching a
-        // monitor, which is the only kind there is — and the loop's own
-        // camera hands on everything, or the trail would gate itself.
-        let (room, loop_camera) = (&p.cameras[0], &p.cameras[1]);
-        assert_eq!(room.look, [1.0, 0.0], "the keyed camera is off the window");
-        assert_eq!(loop_camera.look, [0.0, 1.0], "the loop camera is its own");
-        assert!(room.key.threshold > 0.0 && room.key.softness > 0.0);
-        assert_eq!(room.key.tolerance, Key::TOLERANT, "the chroma half is off");
-        assert_eq!(loop_camera.key, Key::OFF);
-
-        // A subject settles at its own brightness: what the keyed camera
-        // hands over, divided by the loop's distance from unity.
-        let settled = room.gain[0] / (1.0 - loop_camera.gain[0]);
-        assert!((settled - 1.0).abs() < 0.02, "settles at {settled}");
-        // No blob anywhere: every photon on either monitor came in from the
-        // room.
-        assert!(p.monitors.iter().all(|m| m.seed == Seed::Dark));
-        // And it is the only preset that keys anything, so the stage is
-        // additive — every other graph hands its light on whole.
-        for (name, params) in graphs() {
-            let keyed = params.cameras.iter().any(|c| c.key != Key::OFF);
-            assert_eq!(keyed, name == "webcam", "{name}");
-        }
-    }
-
-    #[test]
     fn a_white_blob_is_refused_outside_the_light_it_can_be() {
-        // No knob turns this, so the load is the only place it is checked at
-        // all. On the *second* monitor, because a walk that stops at the
-        // first is a check every one-monitor preset passes for free.
-        let mut params = crossed();
-        assert_eq!(params.monitors.len(), 2);
-        let blob = |params: &mut Params, brightness| {
-            params.monitors[1].seed = Seed::WhiteBlob(brightness);
+        let with = |seed| {
+            let mut p = instrument();
+            p.monitors[0].seed = seed;
+            p
         };
-        blob(&mut params, 2.0);
-        let why = validate(&params).unwrap_err();
-        assert!(
-            why.contains("monitor 1") && why.contains("white blob"),
-            "{why}"
-        );
-        // A range check is the finiteness check, here as everywhere else: a
-        // NaN written into a loop that feeds itself never leaves.
-        blob(&mut params, f32::NAN);
-        assert!(validate(&params).is_err());
-        // The other end, and the whole point of the union: a blob of no
-        // light is dark glass, and a file gets one spelling of it — the
-        // magic zero a level could not do without.
-        blob(&mut params, 0.0);
-        let why = validate(&params).unwrap_err();
-        assert!(why.contains("dark"), "{why}");
-        // And both rigs, said properly, load.
-        blob(&mut params, Seed::BRIGHTEST);
-        validate(&params).unwrap();
-        params.monitors[1].seed = Seed::Dark;
-        validate(&params).unwrap();
+        validate(&with(Seed::BLOB)).unwrap();
+        validate(&with(Seed::Dark)).unwrap();
+        for bad in [0.0, -0.1, Seed::BRIGHTEST + 0.1, f32::NAN] {
+            let why = validate(&with(Seed::WhiteBlob(bad))).unwrap_err();
+            assert!(why.contains("white blob"), "{bad}: {why}");
+        }
     }
 
     #[test]
     fn a_delay_past_the_units_reach_is_refused() {
         let with = |reach: u32, delay: u32| {
-            let mut p = single();
+            let mut p = instrument();
             p.delay = reach;
             p.cameras[0].delay = delay;
             p
@@ -938,17 +298,16 @@ mod tests {
             validate(&with(3, 4)).unwrap_err(),
             "camera 0's delay is 4; it runs 0 to 3"
         );
+        // The ring the reach and a divided path's hold buy between them.
         let mut p = with(4, 4);
-        p.cameras.push(p.cameras[0].clone());
-        p.cameras[1].delay = 0;
-        p.routing[0].push(0.0);
-        assert_eq!(p.history(), 6);
+        p.cameras[1].divider = 2;
+        assert_eq!(p.history(), 7);
     }
 
     #[test]
     fn a_divider_outside_one_to_the_slowest_is_refused() {
         let with = |divider: u32| {
-            let mut p = single();
+            let mut p = instrument();
             p.cameras[0].divider = divider;
             p
         };
@@ -961,152 +320,34 @@ mod tests {
             validate(&with(Camera::MAX_DIVIDER + 1)).unwrap_err(),
             "camera 0's divider is 4; it runs 1 to 3"
         );
-        // The hold a divided path puts on the ring, on top of the reach.
-        let mut p = with(3);
-        p.delay = 4;
-        p.cameras[0].delay = 4;
-        p.cameras.push(p.cameras[0].clone());
-        p.cameras[1].divider = 2;
-        p.cameras[1].delay = 0;
-        p.routing[0].push(0.0);
-        assert!(validate(&p).is_ok());
-        assert_eq!(p.history(), 8);
-        assert_eq!(single().history(), 2);
-    }
-    #[test]
-    fn the_tap_bound_holds_for_every_setting_of_the_switcher_and_not_just_the_one_on_disk() {
-        // `taps_of` drops a crosspoint at zero and `Knob::Route` can raise
-        // one, so the count validate holds against has to be the reachable
-        // one. Every preset: what the file loads with is at or under it, and
-        // turning every crosspoint up reaches exactly it.
-        for (name, params) in graphs() {
-            let reachable = crate::feedback::reachable_taps(&params);
-            for m in 0..params.monitors.len() {
-                let now = crate::feedback::taps_of(&params, m, 0, 0).count();
-                assert!(
-                    now <= reachable,
-                    "{name}: monitor {m} has {now} of {reachable}"
-                );
-            }
-            let mut all_on = params.clone();
-            for weight in all_on
-                .routing
-                .iter_mut()
-                .chain(all_on.inputs.iter_mut().map(|plug| &mut plug.into))
-                .flatten()
-            {
-                *weight = 1.0;
-            }
-            for m in 0..all_on.monitors.len() {
-                assert_eq!(
-                    crate::feedback::taps_of(&all_on, m, 0, 0).count(),
-                    reachable,
-                    "{name}: monitor {m} with the whole switcher up"
-                );
-            }
-        }
-        // And `crossed` is a graph where the two differ, so none of the above
-        // is comparing a number with itself.
-        let crossed = crossed();
-        assert_eq!(crate::feedback::taps_of(&crossed, 0, 0, 0).count(), 2);
-        assert_eq!(crate::feedback::reachable_taps(&crossed), 4);
-
-        // The zero-weight rule on the switcher's input half, which the sweep
-        // above cannot show: an input sent nowhere is no tap, while the bound
-        // counts it all the same — the send is a knob, so a zero on disk is
-        // no promise about a second later.
-        let mut sent_nowhere = external();
-        sent_nowhere.inputs[0].into[0] = 0.0;
-        assert_eq!(crate::feedback::taps_of(&sent_nowhere, 0, 0, 0).count(), 1);
-        assert_eq!(crate::feedback::reachable_taps(&sent_nowhere), 2);
-        // And per monitor, on the one preset whose sends differ between
-        // monitors: the device is a tap on the window and none on the loop.
-        let webcam = webcam();
-        assert_eq!(crate::feedback::taps_of(&webcam, 0, 0, 0).count(), 1);
-        assert_eq!(crate::feedback::taps_of(&webcam, 1, 0, 0).count(), 2);
+        assert_eq!(instrument().history(), 4);
     }
 
     #[test]
-    fn a_node_past_its_row_is_refused_at_load() {
-        // Every kind, not the cameras alone: the law is that the surface
-        // reaches every node, and a kind exempted from it is a kind that
-        // could play at whatever the file left its knobs on.
-        // One of every other kind, so only the count under test can be what
-        // the refusal is about.
-        let with = |node, n| match node {
-            Node::Camera => shaped(n, 1, 1),
-            Node::Monitor => shaped(1, n, 1),
-            Node::Input => shaped(1, 1, n),
-        };
-        // The reach is the camera's whole bound, so it is the kind that
-        // shows the reach's own words.
-        let why = validate(&with(Node::Camera, MAX_CAMERAS + 1)).unwrap_err();
-        assert!(
-            why.contains("one button per node")
-                && why.contains(&format!("{} cameras", MAX_CAMERAS + 1)),
-            "refused for the wrong reason: {why}"
-        );
-        // The two kinds that cost something are refused past their own cap
-        // for their own reason, whether or not the reach would also have
-        // caught them — a refusal naming the board would send a performer to
-        // rebind buttons over a bank the GPU cannot hold.
-        for (node, says) in [
-            (Node::Monitor, "texture array"),
-            (Node::Input, "bank layer"),
-        ] {
-            let why = validate(&with(node, cap(node) + 1)).unwrap_err();
-            assert!(why.contains(says), "{}: {why}", node.name());
-            assert!(
-                !why.contains("one button"),
-                "{}: sent to the board over a cost: {why}",
-                node.name()
-            );
-        }
-        // And exactly at each cap, well-shaped, a graph loads: every bound
-        // is the node past the last legal one, not the last legal one. Off
-        // `cap` rather than a second copy of the three numbers, so the bound
-        // the vocabulary is cut to is the bound a graph is refused past.
-        for node in Node::ALL {
-            validate(&with(node, cap(node))).unwrap_or_else(|why| panic!("{}: {why}", node.name()));
+    fn the_tap_bound_holds_at_every_setting_of_the_switchers() {
+        // `taps_of` drops a feed at zero and a crossfade can be swept, so the
+        // count validate holds against has to be the reachable one: what the
+        // rig runs is at or under it, and every switcher turned up reaches
+        // exactly it.
+        let params = instrument();
+        let reachable = crate::feedback::reachable_taps(&params);
+        for m in 0..params.monitors.len() {
+            let now = crate::feedback::taps_of(&params, m, 0, 0).count();
+            assert!(now <= reachable, "monitor {m} has {now} of {reachable}");
+            assert!(reachable <= MAX_TAPS, "{reachable} past {MAX_TAPS}");
         }
     }
 
     #[test]
-    fn a_graph_the_switcher_could_overrun_is_refused_at_load() {
-        // Sparse on disk and legal under a count of what is switched on, but
-        // one fader from handing the shader more taps than its array holds.
-        let cameras = MAX_TAPS / MAX_MONITORS + 1;
-        let mut params = Params {
-            cameras: (0..cameras)
-                .map(|_| Camera {
-                    framing: Framing::identity(),
-                    gain: [0.9; 3],
-                    character: Character::CLEAN,
-                    key: Key::OFF,
-                    look: vec![1.0; MAX_MONITORS],
-                    delay: 0,
-                    divider: 1,
-                })
-                .collect(),
-            monitors: (0..MAX_MONITORS).map(|_| Monitor::default()).collect(),
-            inputs: Vec::new(),
-            delay: 0,
-            // One camera per monitor switched on: well under the bound as it
-            // stands, and over it the moment a crosspoint is swept.
-            routing: (0..MAX_MONITORS)
-                .map(|m| (0..cameras).map(|c| f32::from(c == m)).collect())
-                .collect(),
-        };
-        for m in 0..MAX_MONITORS {
-            assert!(crate::feedback::taps_of(&params, m, 0, 0).count() <= MAX_TAPS);
+    fn a_knob_the_rig_has_no_field_for_is_refused_a_reading() {
+        // The delay is the one knob the graph can be without, and the map
+        // refuses a binding of one that is off.
+        let mut none = instrument();
+        none.delay = 0;
+        assert!(!Knob::Delay.is_on(&none));
+        assert!(Knob::Delay.is_on(&instrument()));
+        for knob in Knob::ALL.into_iter().filter(|k| *k != Knob::Delay) {
+            assert!(knob.is_on(&none), "{knob:?}");
         }
-        let why = validate(&params).unwrap_err();
-        assert!(why.contains("switcher is turned up"), "{why}");
-        // One camera fewer and it fits however the switcher is set.
-        params.cameras.pop();
-        params.routing.iter_mut().for_each(|row| {
-            row.pop();
-        });
-        validate(&params).unwrap();
     }
 }

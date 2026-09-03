@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn the_grid_holds_every_monitor_and_stays_square() {
-        for monitors in 1..=crate::config::MAX_MONITORS {
+        for monitors in 1..=crate::rig::MONITORS {
             let (cols, rows) = grid(monitors);
             assert!(cols * rows >= monitors as u32, "{monitors} monitors");
             assert!(cols.abs_diff(rows) <= 1, "{monitors}: {cols}x{rows}");

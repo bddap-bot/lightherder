@@ -198,44 +198,37 @@ impl Map {
     pub(crate) fn nano_kontrol2(params: &Params) -> Map {
         Map {
             device: "nanoKONTROL".into(),
-            fader: Knob::Send
-                .is_on(params)
-                .then(|| fader(0, Knob::Send))
-                .into_iter()
-                .chain([
-                    fader(1, Knob::Hue),
-                    fader(2, Knob::Saturation),
-                    fader(3, Knob::Brightness),
-                    fader(4, Knob::Contrast),
-                    fader(5, Knob::Gamma),
-                    fader(6, Knob::Headroom),
-                    fader(7, Knob::Route),
-                    fader(16, Knob::Zoom),
-                    fader(17, Knob::Rotation),
-                    fader(18, Knob::TranslateX),
-                    fader(19, Knob::TranslateY),
-                    fader(20, Knob::Gain),
-                    fader(21, Knob::Bloom),
-                    fader(22, Knob::ChromaBleed),
-                    fader(23, Knob::Noise),
-                    page_two(1, Knob::Temperature),
-                    page_two(2, Knob::Sharpness),
-                    page_two(16, Knob::GainR),
-                    page_two(17, Knob::GainG),
-                    page_two(18, Knob::GainB),
-                    page_two(19, Knob::BloomRadius),
-                    page_two(20, Knob::KeyThreshold),
-                    page_two(21, Knob::KeySoftness),
-                    page_two(22, Knob::KeyHue),
-                    page_two(23, Knob::KeyTolerance),
-                ])
-                .chain(
-                    Knob::Period
-                        .is_on(params)
-                        .then(|| page_two(6, Knob::Period)),
-                )
-                .chain(Knob::Delay.is_on(params).then(|| page_two(7, Knob::Delay)))
-                .collect(),
+            fader: [
+                fader(1, Knob::Hue),
+                fader(2, Knob::Saturation),
+                fader(3, Knob::Brightness),
+                fader(4, Knob::Contrast),
+                fader(5, Knob::Gamma),
+                fader(6, Knob::Headroom),
+                fader(7, Knob::Switcher),
+                fader(16, Knob::Zoom),
+                fader(17, Knob::Rotation),
+                fader(18, Knob::TranslateX),
+                fader(19, Knob::TranslateY),
+                fader(20, Knob::Gain),
+                fader(21, Knob::Bloom),
+                fader(22, Knob::ChromaBleed),
+                fader(23, Knob::Noise),
+                page_two(1, Knob::Temperature),
+                page_two(2, Knob::Sharpness),
+                page_two(16, Knob::GainR),
+                page_two(17, Knob::GainG),
+                page_two(18, Knob::GainB),
+                page_two(19, Knob::BloomRadius),
+                page_two(20, Knob::KeyThreshold),
+                page_two(21, Knob::KeySoftness),
+                page_two(22, Knob::KeyHue),
+                page_two(23, Knob::KeyTolerance),
+                page_two(6, Knob::Period),
+            ]
+            .into_iter()
+            .chain(Knob::Delay.is_on(params).then(|| page_two(7, Knob::Delay)))
+            .collect(),
             button: nano_buttons(params),
         }
     }
@@ -338,7 +331,7 @@ impl Map {
             }
         }
         for b in &self.button {
-            let Some(action) = action_for_name(&b.command) else {
+            if action_for_name(&b.command).is_none() {
                 let known: Vec<String> = names().collect();
                 return Err(format!(
                     "cc {}: no command called {:?}; there are {}",
@@ -346,23 +339,6 @@ impl Map {
                     b.command,
                     known.join(", ")
                 ));
-            };
-            // A button on equipment this rig has not got. The factory rows
-            // are built from the graph and cannot do it; a hand-written map
-            // can, and a lit button that selects a camera nobody owns is the
-            // lie the whole row law exists to refuse — so it is refused here
-            // rather than drawn dim and pressed once mid-piece.
-            if let Action::Focus(node, index) = action {
-                let have = params.count(node);
-                if index >= have {
-                    return Err(format!(
-                        "cc {}: {:?} focuses {} {}, and this graph has {have}",
-                        b.cc,
-                        b.command,
-                        node.name(),
-                        index + 1
-                    ));
-                }
             }
         }
         Ok(())
@@ -454,7 +430,7 @@ pub(crate) const PAGE: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
 pub(crate) const FLIP_X: u8 = PAGE - 2;
 pub(crate) const FLIP_Y: u8 = PAGE - 1;
 pub(crate) const REVERSE: u8 = FLIP_X - 1;
-const _: () = assert!(crate::config::cap(Node::Input) as u8 + R_ROW <= REVERSE);
+const _: () = assert!(crate::config::cap(Node::Switcher) as u8 + R_ROW <= REVERSE);
 pub(crate) const CLUTCH: u8 = S_ROW + ROW_BUTTONS as u8 - 1;
 pub(crate) const COARSER: u8 = CLUTCH - 1;
 pub(crate) const FINER: u8 = COARSER - 1;
@@ -526,20 +502,15 @@ pub(crate) const fn row_of(node: Node) -> u8 {
     match node {
         Node::Camera => S_ROW,
         Node::Monitor => M_ROW,
-        Node::Input => R_ROW,
+        Node::Switcher => R_ROW,
     }
 }
 
 /// The nanoKONTROL2's buttons for the graph it is about to play: the three
 /// select rows, and the transport strip.
 ///
-/// **A row is the choice its kind of node offers, and nothing else.** One of
-/// a kind is no choice — a button selecting the only camera there is selects
-/// what is already selected — so that row is not built at all, and neither
-/// are the buttons past a kind's count. Everything unbuilt is a dead button:
-/// dark, silent, and free for a `midi.toml` to claim. A graph deeper than a
-/// row is the loud case instead, refused at load
-/// ([`crate::config::validate`]).
+/// **A row is exactly as wide as its kind of node.** The buttons past a
+/// kind's count are dead: dark, silent, and free for a `midi.toml` to claim.
 ///
 /// Off [`crate::command`]'s own names rather than a second copy of them, so a
 /// row cannot run past the buttons and a renamed command takes its button
@@ -547,11 +518,10 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 fn nano_buttons(params: &Params) -> Vec<Button> {
     let mut out = Vec::new();
     for node in Node::ALL {
-        let choices = match params.count(node) {
-            0 | 1 => 0,
-            have => have,
-        };
-        for (index, name) in crate::command::select_names(node).take(choices).enumerate() {
+        for (index, name) in crate::command::select_names(node)
+            .take(params.count(node))
+            .enumerate()
+        {
             out.push(button(row_of(node) + index as u8, name));
         }
     }
@@ -1300,7 +1270,7 @@ mod tests {
 
     #[test]
     fn the_card_names_every_binding_in_the_map() {
-        let map = Map::nano_kontrol2(&crate::config::widest());
+        let map = Map::nano_kontrol2(&crate::config::instrument());
         let card = map.card();
         // A line for the device and one for each control, no more and no
         // fewer: a card that quietly leaves a fader off is a fader the
@@ -1453,7 +1423,7 @@ mod tests {
         Focus {
             camera,
             monitor,
-            input: 0,
+            switcher: 0,
         }
     }
 
@@ -1463,15 +1433,15 @@ mod tests {
         // both light the button a hand actually reaches for. One row per
         // kind, so a focus lights one lamp on each of the three.
         let midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::widest()),
-            &crate::config::widest(),
+            Map::nano_kontrol2(&crate::config::instrument()),
+            &crate::config::instrument(),
         )
         .unwrap();
-        for index in 0..crate::config::MAX_INPUTS {
+        for index in 0..crate::config::cap(Node::Camera) {
             let focus = Focus {
                 camera: index,
                 monitor: index,
-                input: index,
+                switcher: index,
             };
             assert_eq!(
                 midi.wanted(focus, Shown::default()),
@@ -1484,12 +1454,12 @@ mod tests {
 
         // A map that moves the select rows takes the lights with it, and one
         // that binds only some of them lights only those.
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button
             .retain(|b| !matches!(action_for_name(&b.command), Some(Action::Focus(..))));
         map.button.push(button(90, "cam 2"));
         map.button.push(button(91, "mon 3"));
-        let midi = Midi::new(map, &crate::config::widest()).unwrap();
+        let midi = Midi::new(map, &crate::config::instrument()).unwrap();
         assert_eq!(
             midi.wanted(at(1, 2), Shown::default()),
             crate::lamps::lamp(90) | crate::lamps::lamp(91)
@@ -1508,9 +1478,9 @@ mod tests {
         assert_eq!(midi.wanted(at(7, 7), Shown::default()), 0);
 
         // The first button that names a node wins, rather than the last.
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(90, "cam 1"));
-        let midi = Midi::new(map, &crate::config::widest()).unwrap();
+        let midi = Midi::new(map, &crate::config::instrument()).unwrap();
         assert_eq!(
             midi.wanted(at(0, 0), Shown::default()),
             crate::lamps::lamp(S_ROW) | crate::lamps::lamp(M_ROW) | crate::lamps::lamp(R_ROW)
@@ -1543,20 +1513,20 @@ mod tests {
         assert_eq!(midi.wanted(focus, Shown::default()), pair);
         // A node no row reaches lights nothing of its own, one kind at a
         // time so none can cover for another.
-        let input = crate::lamps::lamp(R_ROW);
+        let switcher = crate::lamps::lamp(R_ROW);
         assert_eq!(
             midi.wanted(at(99, 1), Shown::default()),
-            crate::lamps::lamp(M_ROW + 1) | input
+            crate::lamps::lamp(M_ROW + 1) | switcher
         );
         assert_eq!(
             midi.wanted(at(2, 99), Shown::default()),
-            crate::lamps::lamp(S_ROW + 2) | input
+            crate::lamps::lamp(S_ROW + 2) | switcher
         );
-        assert_eq!(midi.wanted(at(99, 99), Shown::default()), input);
+        assert_eq!(midi.wanted(at(99, 99), Shown::default()), switcher);
         let lost = Focus {
             camera: 99,
             monitor: 99,
-            input: 99,
+            switcher: 99,
         };
         assert_eq!(midi.wanted(lost, Shown::default()), 0);
     }
@@ -1567,8 +1537,8 @@ mod tests {
         // fullscreen display. Off the button's *action*, so a `midi.toml`
         // that moves a mode moves its lamp with it.
         let midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::widest()),
-            &crate::config::widest(),
+            Map::nano_kontrol2(&crate::config::instrument()),
+            &crate::config::instrument(),
         )
         .unwrap();
         let focus = at(0, 0);
@@ -1598,9 +1568,9 @@ mod tests {
 
         // A map that binds the mode's key nowhere lights nothing extra,
         // rather than the button that number used to be.
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.retain(|b| b.cc != 46);
-        let midi = Midi::new(map, &crate::config::widest()).unwrap();
+        let midi = Midi::new(map, &crate::config::instrument()).unwrap();
         let base = midi.wanted(focus, Shown::default());
         assert_eq!(
             midi.wanted(
@@ -1621,8 +1591,8 @@ mod tests {
         // question a hand asks before it presses, and a toggle that answers
         // it only by changing the picture answers it too late.
         let midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::widest()),
-            &crate::config::widest(),
+            Map::nano_kontrol2(&crate::config::instrument()),
+            &crate::config::instrument(),
         )
         .unwrap();
         let focus = at(0, 0);
@@ -1671,9 +1641,9 @@ mod tests {
             )
         );
         // And a map that binds the seed nowhere lights nothing extra.
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.retain(|b| b.cc != 41);
-        let midi = Midi::new(map, &crate::config::widest()).unwrap();
+        let midi = Midi::new(map, &crate::config::instrument()).unwrap();
         let base = midi.wanted(focus, Shown::default());
         assert_eq!(
             midi.wanted(
@@ -1798,18 +1768,17 @@ mod tests {
         // Every pair, literally. Coverage alone let Hue and Brightness swap
         // CCs, and "blank" and "reset" swap buttons — a surface whose
         // silkscreen lies, and every behaviour test still green.
-        let map = Map::nano_kontrol2(&crate::config::widest());
+        let map = Map::nano_kontrol2(&crate::config::instrument());
         assert_eq!(
             map.fader,
             [
-                fader(0, Knob::Send),
                 fader(1, Knob::Hue),
                 fader(2, Knob::Saturation),
                 fader(3, Knob::Brightness),
                 fader(4, Knob::Contrast),
                 fader(5, Knob::Gamma),
                 fader(6, Knob::Headroom),
-                fader(7, Knob::Route),
+                fader(7, Knob::Switcher),
                 fader(16, Knob::Zoom),
                 fader(17, Knob::Rotation),
                 fader(18, Knob::TranslateX),
@@ -1829,6 +1798,7 @@ mod tests {
                 page_two(22, Knob::KeyHue),
                 page_two(23, Knob::KeyTolerance),
                 page_two(6, Knob::Period),
+                page_two(7, Knob::Delay),
             ]
         );
         // The three select rows, one kind of node each and each as wide as
@@ -1837,29 +1807,24 @@ mod tests {
         // under a hand mid-piece. This map is built for [`full`], so every
         // row runs its whole width.
         assert_eq!(
-            map.button[..17],
+            map.button[..12],
             [
                 button(32, "cam 1"),
                 button(33, "cam 2"),
                 button(34, "cam 3"),
-                button(35, "cam 4"),
-                button(36, "cam 5"),
                 button(48, "mon 1"),
                 button(49, "mon 2"),
                 button(50, "mon 3"),
                 button(51, "mon 4"),
                 button(52, "mon 5"),
-                button(53, "mon 6"),
-                button(54, "mon 7"),
-                button(55, "mon 8"),
-                button(64, "in 1"),
-                button(65, "in 2"),
-                button(66, "in 3"),
-                button(67, "in 4"),
+                button(64, "sw 1"),
+                button(65, "sw 2"),
+                button(66, "sw 3"),
+                button(67, "sw 4"),
             ]
         );
         assert_eq!(
-            map.button[17..],
+            map.button[12..],
             [
                 button(62, "blank"),
                 button(43, "reset 1"),
@@ -1881,21 +1846,19 @@ mod tests {
                 button(39, "clutch"),
             ]
         );
-        // And fader 1 is dead on a rig with nothing to send into: a fader
-        // holding a knob that moves nothing is the lie the row law refuses,
-        // one control to the left of the rows.
-        let no_inputs = Map::nano_kontrol2(&crate::config::shaped(2, 2, 0));
-        assert!(!no_inputs.fader.iter().any(|f| f.cc == 0));
+        // Fader 1 is dead: the rig has no handle for it.
+        assert!(!map.fader.iter().any(|f| f.cc == 0));
     }
 
     #[test]
     fn the_delay_is_page_two_s_last_fader_where_the_graph_has_reach() {
-        let none = crate::config::widest();
+        let mut none = crate::config::instrument();
+        none.delay = 0;
         assert!(!Map::nano_kontrol2(&none)
             .fader
             .iter()
             .any(|f| f.knob == Knob::Delay));
-        let mut reach = crate::config::widest();
+        let mut reach = crate::config::instrument();
         reach.delay = 4;
         let map = Map::nano_kontrol2(&reach);
         assert_eq!(map.fader.last(), Some(&page_two(7, Knob::Delay)));
@@ -1910,11 +1873,9 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_the_rig_has_one_of_gets_no_row_at_all() {
-        // The ruling: a button is owed to equipment, and a button
-        // that selects the only camera there is selects what is already
-        // selected. So the row is not built — one camera and one input here,
-        // four monitors, and only the monitors are a choice to make.
+    fn every_select_row_is_exactly_as_wide_as_its_kind() {
+        // A button is owed to equipment: the rig has three cameras, five
+        // monitors and four switchers, and the buttons past each are dead.
         let selects = |map: &Map| -> Vec<(u8, String)> {
             map.button
                 .iter()
@@ -1923,90 +1884,38 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            selects(&Map::nano_kontrol2(&crate::config::shaped(1, 4, 1))),
+            selects(&Map::nano_kontrol2(&crate::config::instrument())),
             [
+                (32, "cam 1".to_string()),
+                (33, "cam 2".to_string()),
+                (34, "cam 3".to_string()),
                 (48, "mon 1".to_string()),
                 (49, "mon 2".to_string()),
                 (50, "mon 3".to_string()),
                 (51, "mon 4".to_string()),
+                (52, "mon 5".to_string()),
+                (64, "sw 1".to_string()),
+                (65, "sw 2".to_string()),
+                (66, "sw 3".to_string()),
+                (67, "sw 4".to_string()),
             ]
         );
-        // Two is a choice and gets a row, which is the boundary: a rule that
-        // read "a handful is no choice either" would pass on four alone.
-        assert_eq!(
-            selects(&Map::nano_kontrol2(&crate::config::shaped(2, 1, 2))),
-            [
-                (32, "cam 1".to_string()),
-                (33, "cam 2".to_string()),
-                (64, "in 1".to_string()),
-                (65, "in 2".to_string()),
-            ]
-        );
-        // And a rig with nothing to choose anywhere has three dead rows,
-        // which is the rig's own: one camera, one monitor, one input.
-        let nothing_to_choose = Map::nano_kontrol2(&crate::config::shaped(1, 1, 1));
-        assert_eq!(selects(&nothing_to_choose), []);
-        // The transport strip is not the graph's business, so it is whole on
-        // that rig too — a row rule that swallowed it would take the blank,
-        // the resets and the overlay toggle with it.
+        // The transport strip is not a select row, so it is whole beside
+        // them — a row rule that swallowed it would take the blank, the
+        // resets and the overlay toggle with it.
+        let map = Map::nano_kontrol2(&crate::config::instrument());
         for name in crate::command::command_names() {
             assert!(
-                nothing_to_choose.button.iter().any(|b| b.command == name),
+                map.button.iter().any(|b| b.command == name),
                 "{name} left the board with the select rows"
             );
         }
     }
 
     #[test]
-    fn a_map_binding_a_node_the_graph_has_not_got_is_refused() {
-        // The factory rows cannot do this — they are built from the graph —
-        // but a hand-written map can, and a lit button that selects a camera
-        // nobody owns is the lie the row law exists to refuse.
-        let rig = crate::config::shaped(2, 2, 0);
-        for (name, says) in [
-            ("cam 3", "focuses camera 3, and this graph has 2"),
-            ("mon 3", "focuses monitor 3, and this graph has 2"),
-            ("in 1", "focuses input 1, and this graph has 0"),
-        ] {
-            let mut map = Map::nano_kontrol2(&rig);
-            map.button.push(button(90, name));
-            let why = Midi::new(map, &rig)
-                .err()
-                .expect("a map the instrument would refuse");
-            // Both numbers whole: the one the command names, counted from
-            // one like the button is, and the one the graph has.
-            assert!(why.contains(says), "{why}");
-        }
-        // A node the graph does have is not refused, so the check is the
-        // count and not the mere presence of a select binding.
-        let mut map = Map::nano_kontrol2(&rig);
-        map.button.push(button(90, "cam 2"));
-        assert!(Midi::new(map, &rig).is_ok());
-
-        // The faders answer to it too: the send is the one knob a graph can
-        // be without, and the factory row leaves it out on this rig.
-        let mut map = Map::nano_kontrol2(&rig);
-        assert!(!map.fader.iter().any(|f| f.knob == Knob::Send));
-        map.fader.push(fader(24, Knob::Send));
-        let why = Midi::new(map, &rig)
-            .err()
-            .expect("a map the instrument would refuse");
-        assert!(
-            why.contains(r#""send" is a level on an input, and this graph has none"#),
-            "{why}"
-        );
-
-        // And the same map plays the moment the rig has an input to send.
-        let plugged = crate::config::shaped(2, 2, 1);
-        let mut map = Map::nano_kontrol2(&rig);
-        map.fader.push(fader(24, Knob::Send));
-        assert!(Midi::new(map, &plugged).is_ok());
-    }
-
-    #[test]
     fn the_factory_map_covers_the_surface_it_names() {
         // With a reach, so the delay is a knob this graph has.
-        let mut params = crate::config::widest();
+        let mut params = crate::config::instrument();
         params.delay = 1;
         let map = Map::nano_kontrol2(&params);
         // Naming the ones that are missing is what makes a knob added later
@@ -2037,7 +1946,7 @@ mod tests {
         // The board is the whole instrument, so a command with no button on
         // it is one nobody can play — there is no keyboard to carve one out
         // onto.
-        let map = Map::nano_kontrol2(&crate::config::widest());
+        let map = Map::nano_kontrol2(&crate::config::instrument());
         let missing: Vec<&str> = crate::command::command_names()
             .filter(|name| !map.button.iter().any(|b| b.command == *name))
             .collect();
@@ -2047,45 +1956,45 @@ mod tests {
     #[test]
     fn a_map_that_would_play_the_wrong_thing_is_refused() {
         // Within one list...
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(S_ROW, "reset"));
         assert!(map
-            .validate(&crate::config::widest())
+            .validate(&crate::config::instrument())
             .unwrap_err()
             .contains("bound twice"));
 
         // ...and across the two, which matters more: `action_for` looks at
         // the faders first, so a button sharing a fader's number is silently
         // dead rather than ambiguous.
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(1, "reset"));
         assert!(map
-            .validate(&crate::config::widest())
+            .validate(&crate::config::instrument())
             .unwrap_err()
             .contains("bound twice"));
 
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.fader.push(fader(200, Knob::Hue));
-        let why = map.validate(&crate::config::widest()).unwrap_err();
+        let why = map.validate(&crate::config::instrument()).unwrap_err();
         assert!(why.contains("200") && why.contains("127"), "{why}");
 
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(90, "wiggle"));
-        let why = map.validate(&crate::config::widest()).unwrap_err();
+        let why = map.validate(&crate::config::instrument()).unwrap_err();
         assert!(why.contains("wiggle"), "{why}");
         // The error lists what a command may be, because a config file is
         // written by hand and there are thirty-odd of them.
         assert!(why.contains("blank") && why.contains("cam 1"), "{why}");
 
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.device = String::new();
-        assert!(map.validate(&crate::config::widest()).is_err());
+        assert!(map.validate(&crate::config::instrument()).is_err());
 
         // And the one door refuses all of it, so a `Midi` over a bad map is
         // unconstructable rather than quietly inert.
-        let mut map = Map::nano_kontrol2(&crate::config::widest());
+        let mut map = Map::nano_kontrol2(&crate::config::instrument());
         map.button.push(button(90, "wiggle"));
-        assert!(Midi::new(map, &crate::config::widest()).is_err());
+        assert!(Midi::new(map, &crate::config::instrument()).is_err());
     }
 
     #[test]
@@ -2102,7 +2011,7 @@ mod tests {
              [[button]]\ncc = 41\ncommand = \"mon 2\"\n",
         )
         .unwrap();
-        let map = Map::load(&dir.join("midi.toml"), &crate::config::widest()).unwrap();
+        let map = Map::load(&dir.join("midi.toml"), &crate::config::instrument()).unwrap();
         assert_eq!(map.fader, [fader(0, Knob::Hue)]);
         assert_eq!(map.button, [button(41, "mon 2")]);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -2118,7 +2027,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(map.fader, [fader(0, Knob::Hue), page_two(0, Knob::Noise)]);
-        map.validate(&crate::config::widest()).unwrap();
+        map.validate(&crate::config::instrument()).unwrap();
         // The button has one lamp, so there are two pages and no third.
         let why = toml::from_str::<Map>(
             "device = \"nanoKONTROL\"\n[[fader]]\ncc = 0\nknob = \"hue\"\npage = 3\n",
@@ -2146,7 +2055,7 @@ mod tests {
 
     #[test]
     fn a_control_may_carry_one_knob_a_page_and_a_button_is_on_every_page() {
-        let widest = crate::config::widest();
+        let widest = crate::config::instrument();
         let mut map = Map::nano_kontrol2(&widest);
         map.fader.push(page_two(4, Knob::Noise));
         map.validate(&widest).unwrap();
@@ -2211,15 +2120,15 @@ mod tests {
         let dir = scratch("map-absent");
         let path = dir.join("midi.toml");
         assert_eq!(
-            Map::load(&path, &crate::config::widest()).unwrap(),
-            Map::nano_kontrol2(&crate::config::widest())
+            Map::load(&path, &crate::config::instrument()).unwrap(),
+            Map::nano_kontrol2(&crate::config::instrument())
         );
         std::fs::write(
             dir.join("midi.toml"),
             "device = \"x\"\n[[fader]]\ncc = 0\nknob = \"wobble\"\n",
         )
         .unwrap();
-        let why = Map::load(&path, &crate::config::widest()).unwrap_err();
+        let why = Map::load(&path, &crate::config::instrument()).unwrap_err();
         assert!(why.contains("wobble"), "{why}");
         // A file that parses but would misplay is caught by the same door.
         std::fs::write(
@@ -2227,7 +2136,7 @@ mod tests {
             "device = \"x\"\n[[button]]\ncc = 1\ncommand = \"nope\"\n",
         )
         .unwrap();
-        assert!(Map::load(&path, &crate::config::widest())
+        assert!(Map::load(&path, &crate::config::instrument())
             .unwrap_err()
             .contains("nope"));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -2236,11 +2145,11 @@ mod tests {
     fn surface() -> (Midi, Params) {
         (
             Midi::new(
-                Map::nano_kontrol2(&crate::config::widest()),
-                &crate::config::widest(),
+                Map::nano_kontrol2(&crate::config::instrument()),
+                &crate::config::instrument(),
             )
             .unwrap(),
-            crate::config::widest(),
+            crate::config::instrument(),
         )
     }
 
@@ -2354,7 +2263,7 @@ mod tests {
         // The delay counts frames, and at a quarter a full throw over a
         // reach of four is one frame: the knob ticks over at the half, like
         // a detent, and the fader is never more than half a frame in credit.
-        let mut params = crate::config::widest();
+        let mut params = crate::config::instrument();
         params.delay = 4;
         let mut midi = Midi::new(Map::nano_kontrol2(&params), &params).unwrap();
         midi.turn_page();
@@ -2414,7 +2323,7 @@ mod tests {
                     fader: Vec::new(),
                     button: vec![button(90, name)],
                 },
-                &crate::config::widest(),
+                &crate::config::instrument(),
             )
             .err()
             .expect("a map the instrument would refuse")
@@ -2510,9 +2419,9 @@ mod tests {
         // control numbers, and a block written from the wrong first number
         // lands whole on the wrong row.
         for (row, node, width) in [
-            (S_ROW, Node::Camera, crate::config::MAX_CAMERAS),
-            (M_ROW, Node::Monitor, crate::config::MAX_MONITORS),
-            (R_ROW, Node::Input, crate::config::MAX_INPUTS),
+            (S_ROW, Node::Camera, crate::config::cap(Node::Camera)),
+            (M_ROW, Node::Monitor, crate::config::cap(Node::Monitor)),
+            (R_ROW, Node::Switcher, crate::config::cap(Node::Switcher)),
         ] {
             for index in [0, width - 1] {
                 assert_eq!(
@@ -2588,8 +2497,8 @@ mod tests {
         let cards = dir.join("cards");
         std::fs::write(&cards, SAMPLE_CARDS).unwrap();
         let mut midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::widest()),
-            &crate::config::widest(),
+            Map::nano_kontrol2(&crate::config::instrument()),
+            &crate::config::instrument(),
         )
         .unwrap()
         .looking_in(dir.clone(), cards);
@@ -2666,8 +2575,8 @@ mod tests {
         // a machine with no display still fails a lamp that never leaves the
         // instrument.
         let mut midi = Midi::new(
-            Map::nano_kontrol2(&crate::config::widest()),
-            &crate::config::widest(),
+            Map::nano_kontrol2(&crate::config::instrument()),
+            &crate::config::instrument(),
         )
         .unwrap();
         let mut surface = midi.plug_in_a_test_surface();

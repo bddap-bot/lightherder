@@ -17,7 +17,7 @@ use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::midi::{Map, Midi, Page, Shown};
 use crate::overlay::Overlay;
-use crate::params::{Crosspoints, Focus, Knob, Node, Params};
+use crate::params::{Focus, Knob, Node, Params};
 use crate::present::Present;
 use crate::tempo::Tempo;
 
@@ -54,11 +54,10 @@ pub struct App {
     /// What Reset restores: the graph as it was loaded, not the single
     /// preset's knobs.
     initial: Params,
-    /// The camera, the monitor and the input the knobs act on.
+    /// The camera, the monitor and the switcher the knobs act on.
     focus: Focus,
-    /// The running external inputs, in `params.inputs` order, which is the
-    /// order `Feedback::write_input` indexes them by.
-    sources: Vec<Source>,
+    /// The seed, running.
+    source: Source,
     /// The control surface, connected or not — it is looked for while the
     /// instrument runs rather than at startup, so plugging one in mid-piece
     /// is the whole of setting it up.
@@ -78,10 +77,10 @@ pub struct App {
     /// tiled bank. Which monitor is not kept here — that is the focus, and
     /// two indices for one question is one of them going stale.
     solo: bool,
-    /// The column the held cut took, for as long as the hand is on the
-    /// button. It names its own monitor, so a select pressed mid-hold cannot
-    /// send the release to another one.
-    cut: Option<Crosspoints>,
+    /// The switcher the held cut is standing on, for as long as the hand is
+    /// on the button. Named rather than taken from the focus at release, so
+    /// a select pressed mid-hold cannot hand the release to another one.
+    cut: Option<usize>,
     /// Passes since the run began, or the last reset: the grid the period
     /// mode beats on.
     played: u64,
@@ -171,11 +170,8 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     #[cfg(not(target_arch = "wasm32"))]
     crate::halt::on_signal(event_loop.create_proxy())?;
     crate::feedback::bank_fits(&params, cli.resolution)?;
-    let mut sources = Vec::with_capacity(params.inputs.len());
-    for plug in &params.inputs {
-        log::info!("input: {}", plug.source);
-        sources.push(Source::open(&plug.source, cli.resolution).await?);
-    }
+    log::info!("seed: {}", params.input.source);
+    let source = Source::open(&params.input.source, cli.resolution).await?;
     // Read before the window opens, like the inputs and for the same reason:
     // a map that will not load is a terminal error, not a surface that turns
     // out to be playing the wrong knobs once there is light on the glass.
@@ -200,7 +196,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             initial: params.clone(),
             params,
             focus: Focus::default(),
-            sources,
+            source,
             midi,
             last_knob: None,
             resolution: cli.resolution,
@@ -328,15 +324,13 @@ impl Live {
     /// It touches no surface, which is what lets several run to one present
     /// — the display's grid is not the tempo — and is also why the bench can
     /// time exactly this work with no window at all.
-    fn pass(&mut self, gpu: &Gpu, params: &Params, sources: &mut [Source]) {
+    fn pass(&mut self, gpu: &Gpu, params: &Params, source: &mut Source) {
         // Before the cameras read the bank, not after. Once a pass rather than
         // once a present, because a generator that keeps no time of its own —
         // `lavfi` — runs at the rate its frames are collected: light entering
         // the graph follows the piece's clock rather than the display's.
-        for (i, source) in sources.iter_mut().enumerate() {
-            if let Some(frame) = source.frame() {
-                self.feedback.write_input(&gpu.queue, i, frame);
-            }
+        if let Some(frame) = source.frame() {
+            self.feedback.write_seed(&gpu.queue, frame);
         }
         self.feedback.step(&gpu.device, &gpu.queue, params);
     }
@@ -552,11 +546,12 @@ impl App {
             Action::Cut(edge) => {
                 let moved = match (edge, self.cut.take()) {
                     (Edge::Down, None) => {
-                        self.cut = Some(self.params.cut(self.focus));
+                        self.params.reverse(self.focus.switcher);
+                        self.cut = Some(self.focus.switcher);
                         true
                     }
-                    (Edge::Up, Some(prior)) => {
-                        self.params.restore(&prior);
+                    (Edge::Up, Some(held)) => {
+                        self.params.reverse(held);
                         true
                     }
                     (_, held) => {
@@ -569,14 +564,8 @@ impl App {
                 }
             }
             Action::Reverse => {
-                if self.params.reverse(self.focus.monitor) {
-                    log::info!("{}", self.params.describe(self.focus));
-                } else {
-                    log::info!(
-                        "monitor {} has no two sources to reverse",
-                        self.focus.monitor + 1
-                    );
-                }
+                self.params.reverse(self.focus.switcher);
+                log::info!("{}", self.params.describe(self.focus));
             }
             Action::Page => {
                 self.midi.turn_page();
@@ -766,12 +755,11 @@ impl ApplicationHandler for App {
             Err(why) => return self.give_up(event_loop, why),
         };
         log::info!(
-            "{} monitors of {}x{}, {} cameras, {} inputs",
+            "{} monitors of {}x{}, {} cameras, one seed",
             self.params.monitors.len(),
             self.resolution.0,
             self.resolution.1,
             self.params.cameras.len(),
-            self.params.inputs.len(),
         );
         log::info!("{}", self.params.describe(self.focus));
         live.window.request_redraw();
@@ -830,7 +818,7 @@ impl ApplicationHandler for App {
                 let passes = self.tempo.take_due(Instant::now());
                 for _ in 0..passes {
                     beat(&mut self.played, &mut self.params, self.focus);
-                    live.pass(&self.gpu, &self.params, &mut self.sources);
+                    live.pass(&self.gpu, &self.params, &mut self.source);
                 }
                 // Nothing is drawn to a window nothing can see. The
                 // compositor either hands out frames that wait on no blank at
@@ -887,17 +875,17 @@ mod tests {
             })
             .clone()?;
         let resolution = (64, 64);
-        let sources = params
-            .inputs
-            .iter()
-            .map(|plug| pollster::block_on(Source::open(&plug.source, resolution)))
-            .collect::<Result<Vec<Source>, String>>()
-            .unwrap();
+        // A drawn pattern, not the rig's seed: a suite that demanded
+        // /dev/video0 would be testing the machine it runs on. Nothing here
+        // reads a pixel of it.
+        let mut params = params;
+        params.input.source = crate::input::Input::Pattern(crate::input::Pattern::Bars);
+        let source = pollster::block_on(Source::open(&params.input.source, resolution)).unwrap();
         Some(App {
             gpu,
             initial: params.clone(),
             focus: Focus::default(),
-            sources,
+            source,
             midi: Midi::new(Map::nano_kontrol2(&params), &params).unwrap(),
             params,
             last_knob: None,
@@ -921,7 +909,7 @@ mod tests {
 
     #[test]
     fn a_flip_mirrors_the_focused_camera_and_again_puts_it_back() {
-        let Some(mut app) = playing(config::shaped(2, 2, 0)) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let started = app.params.clone();
@@ -940,7 +928,7 @@ mod tests {
 
     #[test]
     fn a_reset_puts_the_panel_back_on_the_graph_the_instrument_started_on() {
-        let Some(mut app) = playing(config::external()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let started = app.params.clone();
@@ -950,12 +938,12 @@ mod tests {
         assert_ne!(app.params, started);
         // The bars are handed over exactly once, so a rig rebuilt or replayed
         // under the reset would have them pending again.
-        assert!(app.sources[0].frame().is_some(), "nothing to upload");
+        assert!(app.source.frame().is_some(), "nothing to upload");
 
         app.act(Action::Reset);
         assert_eq!(app.params, started);
         assert!(
-            app.sources[0].frame().is_none(),
+            app.source.frame().is_none(),
             "the rig was rebuilt under the reset"
         );
     }
@@ -964,20 +952,20 @@ mod tests {
     fn the_seed_button_swaps_one_monitor_s_rig_and_leaves_the_rest() {
         // Two monitors, both lamp-lit, so "it toggled" and "it toggled the
         // one under the faders" are different observations.
-        let Some(mut app) = playing(config::crossed()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         app.act(Action::Focus(Node::Monitor, 1));
-        assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
+        assert_eq!(app.params.monitors[1].seed, Seed::Dark);
 
         app.act(Action::Seed);
-        assert_eq!(app.params.monitors[1].seed, Seed::Dark);
-        assert_eq!(app.params.monitors[0].seed, Seed::BLOB, "both went");
+        assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
+        assert_eq!(app.params.monitors[0].seed, Seed::Dark, "both went");
         // What the panel reads, which is the focused monitor's and follows
         // the focus rather than the press.
-        assert_eq!(app.shown().seed, Seed::Dark);
-        app.act(Action::Focus(Node::Monitor, 0));
         assert_eq!(app.shown().seed, Seed::BLOB);
+        app.act(Action::Focus(Node::Monitor, 0));
+        assert_eq!(app.shown().seed, Seed::Dark);
 
         // And back, through the name a `midi.toml` binds a button to.
         app.act(Action::Focus(Node::Monitor, 1));
@@ -985,35 +973,7 @@ mod tests {
             panic!("the seed should be a command")
         };
         app.act(action);
-        assert_eq!(app.params.monitors[1].seed, Seed::BLOB);
-    }
-
-    #[test]
-    fn the_send_is_a_knob_like_any_other() {
-        // Only ever on a graph that has an input to send. Fader 1 is the
-        // send's control number and it is bound to nothing on a rig with
-        // none, so the message the panel would have logged 127 times a
-        // sweep never reaches a knob at all.
-        let Some(mut app) = playing(config::single()) else {
-            return;
-        };
-        let board = plugged(&mut app);
-        assert!(app.params.inputs.is_empty());
-        surface(&mut app, &board, 0, 100);
-        assert_eq!(app.last_knob, None);
-
-        let Some(mut app) = playing(config::external()) else {
-            return;
-        };
-        let sent = app.params.knob(Knob::Send, app.focus);
-        turn(&mut app, Knob::Send, 0.005);
-        assert!(app.params.knob(Knob::Send, app.focus) > sent);
-        assert_eq!(app.last_knob, Some(Knob::Send));
-        app.act(Action::ResetLastKnob);
-        assert_eq!(
-            app.params.knob(Knob::Send, app.focus),
-            Knob::Send.identity()
-        );
+        assert_eq!(app.params.monitors[1].seed, Seed::Dark);
     }
 
     #[test]
@@ -1021,13 +981,13 @@ mod tests {
         // The whole point of the button: Stop already puts everything back,
         // and what a hand mid-piece wants is the one knob it just pushed too
         // far.
-        let Some(mut app) = playing(config::crossed()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         app.focus = Focus {
             camera: 1,
             monitor: 1,
-            input: 0,
+            switcher: 0,
         };
         let before = app.params.clone();
         // Zoom, because the preset loads it at 0.994 rather than at 1.0: a
@@ -1084,7 +1044,7 @@ mod tests {
         // apart. Real lamps on a real file descriptor; the device node is
         // the only thing stood in for.
         use crate::lamps::lamp;
-        let Some(mut app) = playing(config::crossed()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         // The seed carries a lamp of its own, and which monitors are seeded
@@ -1093,12 +1053,11 @@ mod tests {
         app.params.monitors[0].seed = Seed::Dark;
         let mut surface = plugged(&mut app);
 
-        // One row per kind, each as wide as this graph: camera 1 is S1 and
-        // monitor 1 is M1, which are controls 32 and 48. The graph has no
-        // input, so the Record row is dark and owed nothing.
+        // One row per kind: camera 1 is S1, monitor 1 is M1 and switcher 1 is
+        // R1, which are controls 32, 48 and 64.
         app.surface_frame();
         assert!(
-            surface.wire.panel_becomes(lamp(32) | lamp(48)),
+            surface.wire.panel_becomes(lamp(32) | lamp(48) | lamp(64)),
             "the focus the instrument started on never reached the surface"
         );
         // Solo 2 selects camera 2 — pressed on the surface rather than acted
@@ -1107,7 +1066,7 @@ mod tests {
         app.surface_frame();
         assert_eq!(app.focus.camera, 1, "the press was never played");
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48)),
+            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(64)),
             "the lamp did not follow the focus its own frame moved"
         );
         // Record is held rather than pressed, and its lamp is lit for as
@@ -1115,13 +1074,15 @@ mod tests {
         surface.press(45);
         app.surface_frame();
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(45)),
+            surface
+                .wire
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(45)),
             "the record button never lit under the finger"
         );
         surface.release(45);
         app.surface_frame();
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48)),
+            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(64)),
             "the record button stayed lit after the finger left"
         );
         // The cut is the other held button, on marker prev.
@@ -1129,14 +1090,16 @@ mod tests {
         app.surface_frame();
         assert!(app.cut.is_some(), "the press was never played");
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(61)),
+            surface
+                .wire
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(61)),
             "the cut button never lit under the finger"
         );
         surface.release(61);
         app.surface_frame();
         assert!(app.cut.is_none(), "the release was never played");
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48)),
+            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(64)),
             "the cut button stayed lit after the finger left"
         );
         // Help and solo are the two lamps whose state lives in the instrument
@@ -1146,7 +1109,9 @@ mod tests {
         app.surface_frame();
         assert!(app.overlay_shown, "the press was never played");
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(46)),
+            surface
+                .wire
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(46)),
             "the help lamp never lit for the overlay"
         );
         surface.press(44);
@@ -1156,7 +1121,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(46) | lamp(44)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(46) | lamp(44)),
             "the solo lamp never lit"
         );
         surface.press(46);
@@ -1165,7 +1130,7 @@ mod tests {
         surface.release(44);
         app.surface_frame();
         assert!(
-            surface.wire.panel_becomes(lamp(33) | lamp(48)),
+            surface.wire.panel_becomes(lamp(33) | lamp(48) | lamp(64)),
             "a latch let go kept its lamp"
         );
     }
@@ -1191,7 +1156,7 @@ mod tests {
         // panel moves without the hands. A focus change lands the knobs on
         // another node and a reset puts the whole panel back, so a rewind
         // after either would reset a knob nobody has touched.
-        let Some(mut app) = playing(config::crossed()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
 
@@ -1219,24 +1184,24 @@ mod tests {
 
     #[test]
     fn a_select_on_a_node_the_last_knob_does_not_read_leaves_it_named() {
-        let Some(mut app) = playing(config::shaped(2, 2, 1)) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
-        turn(&mut app, Knob::Send, 0.005);
+        turn(&mut app, Knob::Switcher, 0.005);
         app.act(Action::Focus(Node::Camera, 1));
         assert_eq!(
             app.last_knob,
-            Some(Knob::Send),
-            "the send is not the camera's"
+            Some(Knob::Switcher),
+            "the crossfade is not the camera's"
         );
-        app.act(Action::Focus(Node::Input, 0));
-        assert_eq!(app.last_knob, Some(Knob::Send), "the input under the knobs");
         app.act(Action::Focus(Node::Monitor, 1));
-        assert_eq!(app.last_knob, None, "the send is the monitor's too");
+        assert_eq!(app.last_knob, Some(Knob::Switcher), "nor the monitor's");
+        app.act(Action::Focus(Node::Switcher, 1));
+        assert_eq!(app.last_knob, None, "the switcher moved out from under it");
 
         turn(&mut app, Knob::Zoom, 0.5);
-        app.act(Action::Focus(Node::Input, 0));
         app.act(Action::Focus(Node::Monitor, 0));
+        app.act(Action::Focus(Node::Switcher, 0));
         assert_eq!(app.last_knob, Some(Knob::Zoom), "zoom reads neither");
         app.act(Action::Focus(Node::Camera, 0));
         assert_eq!(app.last_knob, None);
@@ -1247,7 +1212,7 @@ mod tests {
         // The select row moves the knobs to another node; the faders stay
         // where the hands left them, and turn that node's knobs on from
         // there by how far they move — nothing on either node jumps.
-        let Some(mut app) = playing(config::crossed()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let board = plugged(&mut app);
@@ -1265,39 +1230,32 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_moves_the_crosspoint_and_the_fader_turns_it_on_from_there() {
-        // Route is fader 8, control 7. A cut throws it to 1 and the release
-        // puts it back; the fader, wherever it stands, turns it by how far
-        // it moves — and at the rail the rest of a step is dropped, not owed.
-        let Some(mut app) = playing(config::crossed()) else {
+    fn a_cut_throws_the_switcher_and_the_release_puts_it_back() {
+        // The crossfade is fader 8, control 7. A cut runs it to the other end
+        // of its travel and the release runs it back; the fader, wherever it
+        // stands, turns it by how far it moves.
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let board = plugged(&mut app);
-        let start = app.params.knob(Knob::Route, app.focus);
-        assert_eq!(start, 0.0);
         surface(&mut app, &board, 7, 0);
         surface(&mut app, &board, 7, 64);
-        let held = app.params.knob(Knob::Route, app.focus);
-        assert!((held - 64.0 / 127.0 / 4.0).abs() < 1e-6, "{held}");
+        let held = app.params.knob(Knob::Switcher, app.focus);
         app.act(Action::Cut(Edge::Down));
-        assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
-        surface(&mut app, &board, 7, 65);
-        surface(&mut app, &board, 7, 66);
-        assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
+        let thrown = app.params.knob(Knob::Switcher, app.focus);
+        assert!((thrown - (1.0 - held)).abs() < 1e-6, "{thrown} of {held}");
+        // A second press with the pedal already down is not a second cut.
+        app.act(Action::Cut(Edge::Down));
+        assert_eq!(app.params.knob(Knob::Switcher, app.focus), thrown);
         app.act(Action::Cut(Edge::Up));
-        assert!((app.params.knob(Knob::Route, app.focus) - held).abs() < 1e-6);
-        surface(&mut app, &board, 7, 67);
-        assert!(
-            (app.params.knob(Knob::Route, app.focus) - (held + 1.0 / 127.0 / 4.0)).abs() < 1e-6,
-            "the steps past the rail were banked"
-        );
+        assert!((app.params.knob(Knob::Switcher, app.focus) - held).abs() < 1e-6);
     }
 
     #[test]
     fn a_reset_before_any_knob_has_turned_does_nothing() {
         // There is no "that one" to mean yet, and the panel must not take a
         // guess at which knob was meant.
-        let Some(mut app) = playing(config::single()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let before = app.params.clone();
@@ -1307,71 +1265,35 @@ mod tests {
 
     #[test]
     fn a_monitor_select_moves_the_monitor_and_not_the_camera() {
-        // A square graph cannot tell the two sides of the focus apart, so
-        // this runs on one with more monitors than cameras: monitor 3 exists
-        // and camera 3 does not, so a select that wrote the wrong side of the
-        // focus could not land at all.
-        let mut wider = config::crossed();
-        wider.monitors.push(wider.monitors[0].clone());
-        wider.routing = vec![vec![1.0, 0.0]; 3];
-        for camera in &mut wider.cameras {
-            camera.look.push(0.0);
-        }
-        let Some(mut app) = playing(wider) else {
+        // The rig has more monitors than cameras, so a select that wrote the
+        // wrong side of the focus could not land at all: monitor 5 exists and
+        // camera 5 does not.
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
-        assert_eq!(app.params.cameras.len(), 2);
-        assert_eq!(app.params.monitors.len(), 3);
-        app.act(Action::Focus(Node::Monitor, 2));
-        assert_eq!(
-            app.focus.monitor, 2,
-            "monitor 3 is a monitor this graph has"
-        );
+        app.act(Action::Focus(Node::Monitor, 4));
+        assert_eq!(app.focus.monitor, 4);
         assert_eq!(app.focus.camera, 0, "the other hand moved");
     }
 
     #[test]
-    fn a_solo_shows_whichever_monitor_the_focus_is_on() {
-        // The solo carries no monitor of its own, so the buttons that move
-        // the focus move what is on the glass — and a bank that is not
-        // soloed shows the lot however far the focus moves.
-        let Some(mut app) = playing(config::crossed()) else {
+    fn a_held_cut_belongs_to_the_switcher_it_was_taken_from() {
+        // The whole graph is compared before and after: a cut that leaked
+        // into another switcher, or a release that put back the wrong one,
+        // would both show here.
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
-        assert_eq!(app.soloed(), None);
-        app.act(Action::Focus(Node::Monitor, 1));
-        assert_eq!(app.soloed(), None);
-        app.act(Action::Solo);
-        assert_eq!(app.soloed(), Some(1));
-        app.act(Action::Focus(Node::Monitor, 0));
-        assert_eq!(app.soloed(), Some(0));
-        app.act(Action::Solo);
-        assert_eq!(app.soloed(), None);
-    }
-
-    #[test]
-    fn a_cut_shows_the_focused_camera_alone_and_letting_go_puts_the_column_back() {
-        // No inputs on this graph, so the cut is to the focused camera. The
-        // whole graph is compared before and after: a cut that leaked into
-        // another monitor's column, or a release that put back one value
-        // short, would both show here.
-        let Some(mut app) = playing(config::crossed()) else {
-            return;
-        };
-        app.act(Action::Focus(Node::Monitor, 1));
-        app.act(Action::Focus(Node::Camera, 1));
+        app.act(Action::Focus(Node::Switcher, 1));
         let before = app.params.clone();
-        assert_eq!(before.routing[1], vec![1.0, 0.0]);
         app.act(Action::Cut(Edge::Down));
-        assert_eq!(app.params.routing[1], vec![0.0, 1.0]);
-        assert_eq!(app.params.routing[0], before.routing[0]);
-        // A second down with the first still held takes nothing: the column
-        // it would save is the cut's own, and a release must not put that
-        // back.
+        assert_ne!(app.params.rig.switchers[1], before.rig.switchers[1]);
+        assert_eq!(app.params.rig.switchers[0], before.rig.switchers[0]);
+        // A second down with the first still held takes nothing.
         app.act(Action::Cut(Edge::Down));
         // The focus moving under a held cut moves nothing: the release owes
-        // the column to the monitor it was taken from.
-        app.act(Action::Focus(Node::Monitor, 0));
+        // the throw to the switcher it was taken from.
+        app.act(Action::Focus(Node::Switcher, 0));
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, before);
         // Letting go of nothing is nothing.
@@ -1380,94 +1302,65 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_on_a_rig_with_inputs_shows_the_focused_input_alone() {
-        // Two inputs, the second focused, and a camera on the monitor: the
-        // cut takes the camera off and shows that input and not the first.
-        let mut params = config::shaped(1, 2, 2);
-        params.routing = vec![vec![1.0], vec![1.0]];
-        params.inputs[0].into = vec![0.25, 0.5];
-        params.inputs[1].into = vec![0.0, 0.75];
-        let Some(mut app) = playing(params) else {
+    fn a_reversal_runs_the_switcher_to_the_other_end_of_its_travel() {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
-        app.act(Action::Focus(Node::Monitor, 1));
-        app.act(Action::Focus(Node::Input, 1));
-        let before = app.params.clone();
-        app.act(Action::Cut(Edge::Down));
-        assert_eq!(app.params.routing, vec![vec![1.0], vec![0.0]]);
-        assert_eq!(app.params.inputs[0].into, [0.25, 0.0]);
-        assert_eq!(app.params.inputs[1].into, [0.0, 1.0]);
-        app.act(Action::Cut(Edge::Up));
-        assert_eq!(app.params, before);
-    }
-
-    #[test]
-    fn a_reversal_trades_the_two_strongest_sources_and_leaves_the_rest() {
-        // The reversal crosses the camera/input line; the weaker camera and
-        // the other monitor stay put.
-        let mut params = config::shaped(2, 2, 1);
-        params.routing = vec![vec![1.0, 0.0], vec![0.6, 0.1]];
-        params.inputs[0].into = vec![0.0, 0.3];
-        let Some(mut app) = playing(params) else {
-            return;
-        };
-        app.act(Action::Focus(Node::Monitor, 1));
+        app.act(Action::Focus(Node::Switcher, 2));
         let before = app.params.clone();
         app.act(Action::Reverse);
-        assert_eq!(app.params.routing, vec![vec![1.0, 0.0], vec![0.3, 0.1]]);
-        assert_eq!(app.params.inputs[0].into, [0.0, 0.6]);
+        assert_eq!(
+            app.params.rig.switchers[2],
+            1.0 - before.rig.switchers[2],
+            "In1 and In2 did not trade"
+        );
+        assert_eq!(
+            app.params.rig.switchers[0], before.rig.switchers[0],
+            "the other switchers are their own"
+        );
         // Pressed again, it is the reverse of the reverse.
         app.act(Action::Reverse);
         assert_eq!(app.params, before);
     }
 
     #[test]
-    fn the_period_beats_the_focused_monitor_and_a_reset_stops_it() {
-        let mut params = config::shaped(2, 2, 0);
-        params.routing = vec![vec![1.0, 0.0], vec![0.6, 0.1]];
-        let Some(mut app) = playing(params) else {
+    fn the_period_beats_the_focused_switcher_and_a_reset_stops_it() {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let board = plugged(&mut app);
         let started = app.params.clone();
-        app.act(Action::Focus(Node::Monitor, 1));
+        app.act(Action::Focus(Node::Switcher, 1));
         app.act(Action::Page);
         // A quarter of sixty passes a throw: seventeen steps of it owe two.
         surface(&mut app, &board, 6, 0);
         surface(&mut app, &board, 6, 17);
-        assert_eq!(app.params.monitors[1].period, 2);
+        assert_eq!(app.params.rig.periods[1], 2);
         app.act(Action::Page);
         surface(&mut app, &board, 7, 127);
         surface(&mut app, &board, 7, 76);
-        let row = app.params.routing[1].clone();
-        assert!(
-            (row[0] - (0.6 - 51.0 / 127.0 / 4.0)).abs() < 1e-3,
-            "the route fader moved {} and not a quarter of its throw",
-            row[0]
-        );
-        let swapped = vec![row[1], row[0]];
+        let stood = app.params.knob(Knob::Switcher, app.focus);
         app.beat();
         assert_eq!(
-            app.params.routing[1], row,
+            app.params.rig.switchers[1], stood,
             "the first pass is not a beat of two"
         );
         app.beat();
-        assert_eq!(app.params.routing[1], swapped);
+        assert_eq!(app.params.rig.switchers[1], 1.0 - stood);
         assert_eq!(
-            app.params.routing[0],
-            [1.0, 0.0],
-            "the other monitor is its own"
+            app.params.rig.switchers[0], started.rig.switchers[0],
+            "the other switcher is its own"
         );
         app.beat();
         app.beat();
-        assert_eq!(app.params.routing[1], row);
-        // The beats moved the crosspoint under the fader and back; the fader
+        assert!((app.params.rig.switchers[1] - stood).abs() < 1e-6);
+        // The beats moved the crossfade under the fader and back; the fader
         // turns it on from there, by how far it moved and nothing more.
         surface(&mut app, &board, 7, 90);
         assert!(
-            (app.params.routing[1][0] - (row[0] + 14.0 / 127.0 / 4.0)).abs() < 1e-3,
+            (app.params.rig.switchers[1] - (stood + 14.0 / 127.0 / 4.0)).abs() < 1e-3,
             "{}",
-            app.params.routing[1][0]
+            app.params.rig.switchers[1]
         );
 
         app.act(Action::Reset);
@@ -1476,44 +1369,29 @@ mod tests {
             app.beat();
         }
         assert_eq!(app.params, started, "a reset panel went on beating");
-        // And the grid restarted with the panel: ten passes in, a period of
-        // three dialled now beats on the third pass from here.
-        app.params.monitors[1].period = 3;
-        let row = app.params.routing[1].clone();
+        // And the grid restarted with the panel: a period of three dialled
+        // now beats on the third pass from here.
+        app.params.rig.periods[1] = 3;
+        let stood = app.params.rig.switchers[1];
         app.beat();
         app.beat();
         assert_eq!(
-            app.params.routing[1], row,
+            app.params.rig.switchers[1], stood,
             "the grid ran on through the reset"
         );
         app.beat();
-        assert_ne!(app.params.routing[1], row);
-    }
-
-    #[test]
-    fn a_reversal_on_a_monitor_with_one_source_moves_nothing() {
-        // Crossed: each monitor shows one camera whole, which is nothing to
-        // reverse it with. Nor are two sources at one level.
-        let Some(mut app) = playing(config::crossed()) else {
-            return;
-        };
-        for monitor in 0..2 {
-            app.act(Action::Focus(Node::Monitor, monitor));
-            let before = app.params.clone();
-            app.act(Action::Reverse);
-            assert_eq!(app.params, before);
-        }
+        assert_ne!(app.params.rig.switchers[1], stood);
     }
 
     #[test]
     fn a_reset_under_a_held_cut_wins_over_the_release() {
-        // The column the cut saved was a column of a panel the reset has
-        // replaced, so putting it back would undo the reset one monitor at
+        // The throw the cut owes back is a throw of a panel the reset has
+        // replaced, so putting it back would undo the reset one switcher at
         // a time.
-        let Some(mut app) = playing(config::crossed()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
-        turn(&mut app, Knob::Route, 0.5);
+        turn(&mut app, Knob::Switcher, 0.5);
         assert_ne!(app.params, app.initial);
         app.act(Action::Cut(Edge::Down));
         app.act(Action::Reset);
@@ -1527,7 +1405,7 @@ mod tests {
         // The half the tempo tests cannot reach: which button carries which
         // step. A table that hands the faster ratio to track-prev is a wiring
         // mistake no arithmetic test would see.
-        let Some(mut app) = playing(config::single()) else {
+        let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let board = plugged(&mut app);

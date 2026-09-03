@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::affine::Framing;
 use crate::input::Input;
+use crate::rig::Rig;
 
 /// The colour controls on one monitor's front panel, in the order an analog
 /// signal meets them: chroma decode, video amplifier, phosphor.
@@ -347,38 +348,25 @@ fn unity_gain() -> [f32; 3] {
 /// value by: a knob that later moves to another field cannot be neutral here
 /// and live there.
 fn identity_graph() -> Params {
-    Params {
-        cameras: vec![Camera {
-            framing: Framing::identity(),
-            gain: unity_gain(),
-            character: Character::CLEAN,
-            key: Key::OFF,
-            look: vec![1.0],
-            delay: 0,
-            divider: 1,
-        }],
-        monitors: vec![Monitor::default()],
-        // An input, so the send has a crosspoint to read its identity out of
-        // rather than agreeing with the absent-crosspoint reading by
-        // coincidence. Its kind does not matter — nothing opens this graph.
-        inputs: vec![Plug {
-            source: Input::Pattern(crate::input::Pattern::Bars),
-            key: Key::OFF,
-            into: vec![0.0],
-        }],
-        // Zero, where every other identity here is the value that leaves
-        // the light alone. A crosspoint has no such value: it is not a stage
-        // the light passes through but a weight in a sum, and its row is the
-        // monitor's loop gain. Unity would have been the reading by analogy
-        // with the loop gain — and on `crossed`, whose focused crosspoint
-        // loads at 0, it puts a second camera on that monitor at full and
-        // takes the row to 2.0, straight into the rail. So: the connection
-        // not made. The monitor visibly loses that camera and the fader puts
-        // it back, which is the error that corrects itself. The send is the
-        // same weight and gets the same reading.
-        routing: vec![vec![0.0]],
-        delay: 0,
+    let mut params = crate::config::instrument();
+    for camera in &mut params.cameras {
+        camera.framing = Framing::identity();
+        camera.gain = unity_gain();
+        camera.character = Character::CLEAN;
+        camera.key = Key::OFF;
+        camera.delay = 0;
+        camera.divider = 1;
     }
+    for monitor in &mut params.monitors {
+        *monitor = Monitor::default();
+    }
+    // Every switcher on its In1 and every monitor on its own camera. A
+    // crossfade has no value that leaves the light alone — it is not a stage
+    // the light passes through but where a sum stands — so the reading is the
+    // end of its travel it started at. The picture visibly loses the mix and
+    // the fader puts it back, which is the error that corrects itself.
+    params.rig = Rig::IDENTITY;
+    params
 }
 
 /// What lights one monitor from outside the loop it is already in.
@@ -475,9 +463,6 @@ pub struct Monitor {
     /// Zero is the stage skipped outright, so a rested knob is exactly
     /// inert inside a loop that would compound a residual.
     pub sharpness: f32,
-    /// Passes between reversals of this monitor's column. Zero is the mode
-    /// off, and the only latch it has: the knob at its floor.
-    pub period: u32,
 }
 
 impl Default for Monitor {
@@ -487,17 +472,11 @@ impl Default for Monitor {
             seed: Seed::Dark,
             headroom: Monitor::KNEE_AT_WHITE,
             sharpness: 0.0,
-            period: 0,
         }
     }
 }
 
 impl Monitor {
-    /// The longest period, in passes: a second at the default tempo. The
-    /// original's rates are unverified; a beat slower than that is a hand on
-    /// the reversal, not a rhythm.
-    pub const MAX_PERIOD: u32 = 60;
-
     /// Twice display white. The knee is at half the headroom, so it lands
     /// exactly on 1.0: nothing a monitor can actually show is touched, and
     /// the reserve above white — which the half-float bank exists to keep —
@@ -515,16 +494,17 @@ impl Monitor {
 pub struct Params {
     pub cameras: Vec<Camera>,
     pub monitors: Vec<Monitor>,
-    /// The light the switcher has that the graph did not make: test
-    /// patterns, video files, capture devices. Plugged into the switcher and
-    /// nothing else — nothing draws to one and no camera may watch one — so
-    /// it is light entering the graph, like the seed spot, rather than light
-    /// going round it. Each carries its own weight onto every monitor.
-    pub inputs: Vec<Plug>,
-    /// The routing matrix: `routing[m][c]` is how much of camera `c`'s output
-    /// monitor `m` displays. A permutation matrix is a plain switcher; rows
-    /// with several non-zero entries mix cameras on one monitor.
-    pub routing: Vec<Vec<f32>>,
+    /// The switchers and the router selects: the whole of the routing, and
+    /// the one place it lives. What each monitor shows is worked out from
+    /// this every time it is asked for, so there is no matrix to keep in
+    /// step with the levers that set it.
+    pub rig: Rig,
+    /// The one light the switcher has that the graph did not make. Plugged
+    /// into the switcher and nothing else — nothing draws to it and no
+    /// camera may watch it — so it is light entering the graph rather than
+    /// light going round it. How much of it each monitor shows is the
+    /// switchers' business, [`Params::send`].
+    pub input: Plug,
     /// The frame delay units' reach: how many frames a camera's `delay` may
     /// be dialled up to, and so how deep a ring of the monitors the bank
     /// keeps. Bought at load, since a frame of it is another copy of every
@@ -533,18 +513,12 @@ pub struct Params {
     pub delay: u32,
 }
 
-/// One input plugged into the switcher: the source, and the switcher's other
-/// half for it — `into[m]` is how much of it monitor `m` shows, the whole of
-/// how outside light reaches the graph and the level it enters at. On the
-/// input rather than as columns of [`Params::routing`], for the reason a
-/// camera's `look` is: one shared index space would let a camera added to
-/// a graph quietly take over an input's weight.
+/// The light plugged into the switcher: what it is, and what the switcher
+/// refuses of it on the way in. How much of it each monitor shows is the
+/// switchers' business — see [`Params::send`] — and not written here.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plug {
     pub source: Input,
-    pub into: Vec<f32>,
-    /// What the switcher refuses of this input on its way in. The rig keys
-    /// on the switcher, so this is where a key lives at all.
     pub key: Key,
 }
 
@@ -554,35 +528,25 @@ impl Default for Params {
     }
 }
 
-/// One monitor's column of the switcher: what it shows of every camera and
-/// of every input, and which monitor, so it can only ever go back where it
-/// came from. Both halves together, because a cut takes the whole column
-/// and a release owes the whole column back.
-pub struct Crosspoints {
-    monitor: usize,
-    cameras: Vec<f32>,
-    inputs: Vec<f32>,
-}
-
 /// A kind of node the focus points at, and so one of the surface's three
 /// rows of select buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Node {
     Camera,
     Monitor,
-    Input,
+    Switcher,
 }
 
 impl Node {
     /// Every `for node in ALL` walk is silently vacuous for a kind missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Node; 3] = [Node::Camera, Node::Monitor, Node::Input];
+    pub const ALL: [Node; 3] = [Node::Camera, Node::Monitor, Node::Switcher];
 
     pub const fn name(self) -> &'static str {
         match self {
             Node::Camera => "camera",
             Node::Monitor => "monitor",
-            Node::Input => "input",
+            Node::Switcher => "switcher",
         }
     }
 
@@ -591,19 +555,19 @@ impl Node {
         match self {
             Node::Camera => "cam",
             Node::Monitor => "mon",
-            Node::Input => "in",
+            Node::Switcher => "sw",
         }
     }
 }
 
-/// Which camera, which monitor and which input the knobs act on. Named
+/// Which camera, which monitor and which switcher the knobs act on. Named
 /// fields on purpose: bare `usize`s in a row would let a swapped pair compile
 /// and silently edit the wrong node.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Focus {
     pub camera: usize,
     pub monitor: usize,
-    pub input: usize,
+    pub switcher: usize,
 }
 
 impl Focus {
@@ -611,7 +575,7 @@ impl Focus {
         match node {
             Node::Camera => self.camera,
             Node::Monitor => self.monitor,
-            Node::Input => self.input,
+            Node::Switcher => self.switcher,
         }
     }
 
@@ -619,7 +583,7 @@ impl Focus {
         match node {
             Node::Camera => self.camera = index,
             Node::Monitor => self.monitor = index,
-            Node::Input => self.input = index,
+            Node::Switcher => self.switcher = index,
         }
         self
     }
@@ -657,15 +621,13 @@ pub enum Knob {
     Temperature,
     Sharpness,
     Headroom,
+    /// How far the focused switcher stands toward its In2: 0 is In1 whole, 1
+    /// is In2 whole. The routing is these four and the four selects, and
+    /// nothing else.
+    Switcher,
+    /// Passes between reversals of the focused switcher, the original's
+    /// period mode. Zero is the mode off.
     Period,
-    /// The switcher crosspoint the focus's camera and monitor name between
-    /// them: how much of the focused camera the focused monitor shows.
-    Route,
-    /// The same, on the switcher's other kind of column: how much of the
-    /// first input the focused monitor shows. This is the level outside
-    /// light enters the graph at, and the only knob that is not there on
-    /// every graph — a rig with no inputs has no send to turn.
-    Send,
 }
 
 impl Limit {
@@ -713,12 +675,7 @@ impl Limit {
 pub enum Side {
     Camera,
     Monitor,
-    /// A crosspoint between a camera and a monitor.
-    Edge,
-    /// A crosspoint between an input and a monitor. Its own side and not
-    /// `Edge`'s second reading, because the pair it names is a different
-    /// pair: a walk over the focuses would otherwise index cameras for it.
-    InputEdge,
+    Switcher,
 }
 
 impl Side {
@@ -728,9 +685,9 @@ impl Side {
     pub const fn reads(self, node: Node) -> bool {
         matches!(
             (self, node),
-            (Side::Camera | Side::Edge, Node::Camera)
-                | (Side::Monitor | Side::Edge | Side::InputEdge, Node::Monitor)
-                | (Side::InputEdge, Node::Input)
+            (Side::Camera, Node::Camera)
+                | (Side::Monitor, Node::Monitor)
+                | (Side::Switcher, Node::Switcher)
         )
     }
 }
@@ -751,7 +708,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 28] = [
+    pub const ALL: [Knob; 27] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::TranslateX,
@@ -777,9 +734,8 @@ impl Knob {
         Knob::Temperature,
         Knob::Sharpness,
         Knob::Headroom,
+        Knob::Switcher,
         Knob::Period,
-        Knob::Route,
-        Knob::Send,
     ];
 
     /// The one name a knob has: in the printed help, in an error, and in a
@@ -812,9 +768,8 @@ impl Knob {
             Knob::Temperature => "temperature",
             Knob::Sharpness => "sharpness",
             Knob::Headroom => "headroom",
+            Knob::Switcher => "switcher",
             Knob::Period => "period",
-            Knob::Route => "route",
-            Knob::Send => "send",
         }
     }
 
@@ -881,10 +836,8 @@ impl Knob {
             | Knob::Gamma
             | Knob::Temperature
             | Knob::Sharpness
-            | Knob::Headroom
-            | Knob::Period => Side::Monitor,
-            Knob::Route => Side::Edge,
-            Knob::Send => Side::InputEdge,
+            | Knob::Headroom => Side::Monitor,
+            Knob::Switcher | Knob::Period => Side::Switcher,
         }
     }
 
@@ -901,14 +854,8 @@ impl Knob {
     /// Why the graph has nothing for this knob to act on, for the refusal.
     pub fn off_because(self, params: &Params) -> Option<String> {
         match self {
-            Knob::Send if params.count(Node::Input) == 0 => {
-                Some("a level on an input, and this graph has none".to_string())
-            }
             Knob::Delay if params.delay == 0 => {
                 Some("a frame delay unit, and this graph's reach is 0".to_string())
-            }
-            Knob::Period if params.count(Node::Camera) + params.count(Node::Input) < 2 => {
-                Some("a column with two sources to trade, and this graph has one".to_string())
             }
             _ => None,
         }
@@ -978,11 +925,9 @@ impl Knob {
             // whole picture into the darkest eighth, which is a sound worth
             // having; the top is well clear of anything a monitor displays.
             Knob::Headroom => Limit::Ratio(0.125, 8.0),
-            Knob::Period => Limit::Whole(Monitor::MAX_PERIOD),
-            // A crosspoint is a fraction of what it is switching. Above 1.0
-            // it would be an amplifier, which is what the loop gain already
-            // is — and on a send it would be an input brighter than itself.
-            Knob::Route | Knob::Send => Limit::Clamp(0.0, 1.0),
+            Knob::Period => Limit::Whole(crate::rig::MAX_PERIOD),
+            // A crossfade stands between its two inputs and nowhere else.
+            Knob::Switcher => Limit::Clamp(0.0, 1.0),
         }
     }
 }
@@ -1007,7 +952,7 @@ impl Params {
         match node {
             Node::Camera => self.cameras.len(),
             Node::Monitor => self.monitors.len(),
-            Node::Input => self.inputs.len(),
+            Node::Switcher => self.rig.switchers.len(),
         }
     }
 
@@ -1025,89 +970,29 @@ impl Params {
         2 + self.delay as usize + hold as usize
     }
 
-    /// The switcher's cut: the focused monitor shows the focused input whole
-    /// — or, on a graph with no inputs, the focused camera — and nothing
-    /// else. Returns the column as it stood, for [`Params::restore`].
-    pub fn cut(&mut self, focus: Focus) -> Crosspoints {
-        let prior = self.column(focus.monitor);
-        let mut whole = Crosspoints {
-            monitor: focus.monitor,
-            cameras: vec![0.0; prior.cameras.len()],
-            inputs: vec![0.0; prior.inputs.len()],
-        };
-        match self.inputs.is_empty() {
-            false => whole.inputs[focus.input] = 1.0,
-            true => whole.cameras[focus.camera] = 1.0,
-        }
-        self.restore(&whole);
-        prior
+    /// How much of camera `c` monitor `m` shows, and how much of the seed:
+    /// the matrix, off the switchers and the selects. Not stored — see
+    /// [`Params::rig`].
+    pub fn route(&self, m: usize, c: usize) -> f32 {
+        self.rig.feed(m).cameras[c]
     }
 
-    /// The switcher's source reversal, across cameras and inputs alike.
-    /// `false` — and nothing moved — on a column with fewer than two live
-    /// sources, or two at the same level: a monitor showing one thing has
-    /// nothing to reverse it with.
-    pub fn reverse(&mut self, monitor: usize) -> bool {
-        let mut column = self.column(monitor);
-        let mut levels: Vec<&mut f32> = column
-            .cameras
-            .iter_mut()
-            .chain(column.inputs.iter_mut())
-            .collect();
-        let strongest = |levels: &[&mut f32], but: Option<usize>| {
-            (0..levels.len())
-                .filter(|&i| Some(i) != but)
-                .max_by(|&i, &j| levels[i].total_cmp(levels[j]))
-        };
-        let Some(a) = strongest(&levels, None) else {
-            return false;
-        };
-        let Some(b) = strongest(&levels, Some(a)) else {
-            return false;
-        };
-        if *levels[b] <= 0.0 || *levels[a] == *levels[b] {
-            return false;
-        }
-        let (high, low) = (*levels[a], *levels[b]);
-        *levels[a] = low;
-        *levels[b] = high;
-        self.restore(&column);
-        true
+    pub fn send(&self, m: usize) -> f32 {
+        self.rig.feed(m).seed
     }
 
-    /// Every monitor whose period divides `pass` reverses. Whether the
-    /// `focused` one did: its crosspoint knobs are the only ones a fader can
-    /// be holding, and a reversal moves them without it.
-    ///
-    /// Counted from the start of the run rather than from when a period was
-    /// dialled in, so every monitor in the mode beats on one grid, which is
-    /// what the original's quantizing is for. A pass is a beat of the tempo,
-    /// so nothing here reads a clock.
+    /// The switcher's source reversal, and the foot pedal's momentary cut:
+    /// In1 and In2 trade places on the focused switcher. Its own inverse, so
+    /// the pedal's release is the same call as its press.
+    pub fn reverse(&mut self, switcher: usize) {
+        self.rig.flip(switcher);
+    }
+
+    /// Every switcher whose period divides `pass` reverses. Whether the
+    /// `focused` one did: its crossfade is a knob a fader can be holding, and
+    /// a reversal moves it without the hand.
     pub fn beat(&mut self, pass: u64, focused: usize) -> bool {
-        let mut moved = false;
-        for monitor in 0..self.monitors.len() {
-            let period = u64::from(self.monitors[monitor].period);
-            if period != 0 && pass.is_multiple_of(period) && self.reverse(monitor) {
-                moved |= monitor == focused;
-            }
-        }
-        moved
-    }
-
-    fn column(&self, monitor: usize) -> Crosspoints {
-        Crosspoints {
-            monitor,
-            cameras: self.routing[monitor].clone(),
-            inputs: self.inputs.iter().map(|plug| plug.into[monitor]).collect(),
-        }
-    }
-
-    /// Put a column back where [`Params::cut`] took it from.
-    pub fn restore(&mut self, points: &Crosspoints) {
-        self.routing[points.monitor].clone_from(&points.cameras);
-        for (plug, level) in self.inputs.iter_mut().zip(&points.inputs) {
-            plug.into[points.monitor] = *level;
-        }
+        self.rig.beat(pass)[focused]
     }
 
     /// Through [`Params::place`] rather than by writing the field, so the
@@ -1177,9 +1062,8 @@ impl Params {
             Knob::Temperature => mon.colour.temperature,
             Knob::Sharpness => mon.sharpness,
             Knob::Headroom => mon.headroom,
-            Knob::Period => mon.period as f32,
-            Knob::Route => self.routing[focus.monitor][focus.camera],
-            Knob::Send => self.inputs[focus.input].into[focus.monitor],
+            Knob::Period => self.rig.periods[focus.switcher] as f32,
+            Knob::Switcher => self.rig.switchers[focus.switcher],
         }
     }
 
@@ -1222,7 +1106,7 @@ impl Params {
     fn whole_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut u32> {
         match knob {
             Knob::Delay => Some(&mut self.cameras[focus.camera].delay),
-            Knob::Period => Some(&mut self.monitors[focus.monitor].period),
+            Knob::Period => Some(&mut self.rig.periods[focus.switcher]),
             _ => None,
         }
     }
@@ -1258,8 +1142,7 @@ impl Params {
             Knob::Temperature => &mut self.monitors[focus.monitor].colour.temperature,
             Knob::Sharpness => &mut self.monitors[focus.monitor].sharpness,
             Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
-            Knob::Route => &mut self.routing[focus.monitor][focus.camera],
-            Knob::Send => &mut self.inputs[focus.input].into[focus.monitor],
+            Knob::Switcher => &mut self.rig.switchers[focus.switcher],
             Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
             Knob::Delay | Knob::Period => unreachable!("nudge() rounds a count to whole steps"),
         }
@@ -1271,16 +1154,13 @@ impl Params {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         format!(
-            // A line per side of the graph rather than one for the lot: at
-            // two dozen knobs a single line wraps in a terminal, and
-            // consecutive presses stop lining up — which was the only thing
-            // a single line was buying.
             "cam {}/{}: zoom {:.3}  rot {:+.3}  pan {:+.3},{:+.3}  gain {:.3},{:.3},{:.3}  \
              bloom {:.3}  radius {:.3}  bleed {:.3}  noise {:.3}  delay {}/{}  \
              key {:.3}/{:.3}  key hue {:+.3}  key tol {:.3}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             gamma {:.3}  temp {:+.1}  sharp {:.3}  headroom {:.3}  period {}  seed {}\n\
-             route {:.3}: how much of cam {} mon {} shows{}",
+             gamma {:.3}  temp {:+.1}  sharp {:.3}  headroom {:.3}  seed {}  \
+             shows {:.3} of cam {}\n\
+             sw {}/{}: switcher {:.3}  period {}",
             focus.camera + 1,
             self.cameras.len(),
             cam.framing.zoom,
@@ -1310,22 +1190,13 @@ impl Params {
             mon.colour.temperature,
             mon.sharpness,
             mon.headroom,
-            mon.period,
             mon.seed,
-            self.routing[focus.monitor][focus.camera],
+            self.route(focus.monitor, focus.camera),
             focus.camera + 1,
-            focus.monitor + 1,
-            match Knob::Send.is_on(self) {
-                false => String::new(),
-                true => format!(
-                    "\n{} {:.3}: how much of input {}/{} mon {} shows",
-                    Knob::Send.name(),
-                    self.knob(Knob::Send, focus),
-                    focus.input + 1,
-                    self.inputs.len(),
-                    focus.monitor + 1,
-                ),
-            },
+            focus.switcher + 1,
+            self.rig.switchers.len(),
+            self.rig.switchers[focus.switcher],
+            self.rig.periods[focus.switcher],
         )
     }
 }
@@ -1430,10 +1301,17 @@ mod tests {
     #[test]
     fn a_side_reads_exactly_the_indices_its_knobs_are_stored_under() {
         for knob in Knob::ALL {
-            let mut params = crate::config::shaped(2, 2, 2);
+            let mut params = crate::config::instrument();
             params.delay = 1;
             assert!(knob.is_on(&params), "{knob:?}");
             let at = Focus::default();
+            // Every neighbouring focus as it stood, since the rig's nodes
+            // are not alike: what a side does not read must be exactly what
+            // it was, and what it reads must be what the nudge left.
+            let stood: Vec<f32> = Node::ALL
+                .iter()
+                .map(|node| params.knob(knob, at.with(*node, 1)))
+                .collect();
             let before = params.knob(knob, at);
             params.nudge(knob, 1.0, at);
             if params.knob(knob, at) == before {
@@ -1441,10 +1319,10 @@ mod tests {
             }
             let after = params.knob(knob, at);
             assert_ne!(before, after, "{knob:?} did not move");
-            for node in Node::ALL {
+            for (i, node) in Node::ALL.into_iter().enumerate() {
                 let elsewhere = params.knob(knob, at.with(node, 1));
                 let want = match knob.side().reads(node) {
-                    true => before,
+                    true => stood[i],
                     false => after,
                 };
                 assert_eq!(elsewhere, want, "{knob:?} under {node:?}");
@@ -1486,7 +1364,9 @@ mod tests {
         assert_eq!(cam.key.softness, 0.25);
         assert_eq!(cam.key.tolerance, Key::TOLERANT);
         assert_eq!(mon.headroom, 8.0);
-        assert_eq!(mon.period, Monitor::MAX_PERIOD);
+        assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
+        assert_eq!(params.rig.switchers[0], 1.0);
+        let mon = &params.monitors[0];
         assert_eq!(mon.colour.saturation, 4.0);
         assert_eq!(mon.colour.brightness, 0.5);
         assert_eq!(mon.colour.contrast, 4.0);
@@ -1511,7 +1391,6 @@ mod tests {
         assert_eq!(cam.key.softness, 0.0);
         assert_eq!(cam.key.tolerance, 0.0);
         assert_eq!(mon.headroom, 0.125);
-        assert_eq!(mon.period, 0);
         assert_eq!(mon.colour.saturation, 0.0);
         assert_eq!(mon.colour.brightness, -0.5);
         assert_eq!(mon.colour.contrast, 0.0);
@@ -1565,7 +1444,7 @@ mod tests {
     fn a_knob_follows_its_own_side_of_the_graph() {
         // Two cameras and two monitors: a camera knob nudged at focus (1, 0)
         // lands on camera 1 and nowhere else, and a monitor knob on monitor 0.
-        let mut params = crate::config::crossed();
+        let mut params = crate::config::instrument();
         let before = params.clone();
         params.nudge(
             Knob::Zoom,
@@ -1573,7 +1452,7 @@ mod tests {
             Focus {
                 camera: 1,
                 monitor: 0,
-                input: 0,
+                switcher: 0,
             },
         );
         params.nudge(
@@ -1582,7 +1461,7 @@ mod tests {
             Focus {
                 camera: 1,
                 monitor: 0,
-                input: 0,
+                switcher: 0,
             },
         );
         assert_eq!(params.cameras[0], before.cameras[0]);
@@ -1688,21 +1567,15 @@ mod tests {
 
     #[test]
     fn the_log_line_names_the_focus() {
-        let params = crate::config::crossed();
+        let params = crate::config::instrument();
         let at = params.describe(Focus {
             camera: 1,
             monitor: 0,
-            input: 0,
+            switcher: 2,
         });
-        assert!(at.contains("cam 2/2"));
-        assert!(at.contains("mon 1/2"));
-        assert!(!at.contains("send"));
-
-        let mut three = crate::config::external();
-        three.inputs = vec![three.inputs[0].clone(); 3];
-        three.inputs[1].into = vec![0.0];
-        three.inputs[2].into = vec![0.0];
-        assert!(three.describe(Focus::default()).contains("input 1/3"));
+        assert!(at.contains("cam 2/3"), "{at}");
+        assert!(at.contains("mon 1/5"), "{at}");
+        assert!(at.contains("sw 3/4"), "{at}");
     }
 
     /// Settings that between them exercise both signs of the phase, a
@@ -1747,7 +1620,7 @@ mod tests {
     /// the constant [`identity_graph`] is built from. Read off the same
     /// constant the code reads and a knob wired to the wrong field would
     /// agree with itself: this table is the independent word.
-    const IDENTITIES: [(Knob, f32); 28] = [
+    const IDENTITIES: [(Knob, f32); 27] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
         (Knob::TranslateX, 0.0),
@@ -1780,9 +1653,8 @@ mod tests {
         // The rail at twice display white: an amplifier always has one, and
         // this is the one that touches nothing a monitor can show.
         (Knob::Headroom, 2.0),
+        (Knob::Switcher, 0.0),
         (Knob::Period, 0.0),
-        (Knob::Route, 0.0),
-        (Knob::Send, 0.0),
     ];
 
     #[test]
@@ -1804,58 +1676,46 @@ mod tests {
 
     #[test]
     fn the_period_reverses_on_the_exact_pass_boundary_and_stops_at_zero() {
-        // Two cameras onto monitor 0 at unequal levels, so a reversal is
-        // visible as the row and its swap.
-        let mut params = crate::config::crossed();
-        params.routing[0] = vec![0.75, 0.25];
-        let (row, swapped) = (vec![0.75, 0.25], vec![0.25, 0.75]);
-        params.monitors[0].period = 3;
+        let mut params = crate::config::instrument();
+        let stood = params.rig.switchers[0];
+        params.rig.periods[0] = 3;
         for pass in 1..=12u64 {
             let moved = params.beat(pass, 0);
             assert_eq!(moved, pass % 3 == 0, "pass {pass}");
-            let expect = if (pass / 3) % 2 == 1 { &swapped } else { &row };
-            assert_eq!(&params.routing[0], expect, "pass {pass}");
+            let expect = if (pass / 3) % 2 == 1 {
+                1.0 - stood
+            } else {
+                stood
+            };
+            assert_eq!(params.rig.switchers[0], expect, "pass {pass}");
             assert_eq!(
-                params.routing[1],
-                [1.0, 0.0],
-                "pass {pass}: the other column"
+                params.rig.switchers[1],
+                crate::rig::Rig::PERFORMANCE.switchers[1],
+                "pass {pass}: the other switcher"
             );
         }
-        params.monitors[0].period = 0;
+        params.rig.periods[0] = 0;
         for pass in 13..=30u64 {
             assert!(!params.beat(pass, 0), "pass {pass}");
-            assert_eq!(params.routing[0], row);
+            assert_eq!(params.rig.switchers[0], stood);
         }
-        // One grid for every monitor in the mode; only the focused monitor's
-        // move is reported, since only its faders can be holding a knob.
-        params.routing[1] = vec![0.6, 0.4];
-        params.monitors[0].period = 4;
-        params.monitors[1].period = 2;
+        // One grid for every switcher in the mode; only the focused
+        // switcher's move is reported, since only its fader can be holding a
+        // knob.
+        let other = params.rig.switchers[1];
+        params.rig.periods[0] = 4;
+        params.rig.periods[1] = 2;
         assert!(
             !params.beat(2, 0),
-            "monitor 1's beat reported as monitor 0's"
+            "switcher 2's beat reported as switcher 1's"
         );
-        assert_eq!(params.routing[0], row, "not this monitor's beat");
-        assert_eq!(params.routing[1], [0.4, 0.6]);
+        assert_eq!(params.rig.switchers[0], stood, "not this switcher's beat");
+        assert_eq!(params.rig.switchers[1], 1.0 - other);
         assert!(params.beat(4, 0));
-        assert_eq!(params.routing[0], swapped);
-        assert_eq!(params.routing[1], [0.6, 0.4]);
+        assert_eq!(params.rig.switchers[0], 1.0 - stood);
+        assert_eq!(params.rig.switchers[1], other);
         assert!(params.beat(6, 1));
-        assert_eq!(params.routing[1], [0.4, 0.6]);
-        params.routing[1] = vec![0.5, 0.5];
-        assert!(!params.beat(8, 1), "a tie moved");
-        assert_eq!(params.routing[1], [0.5, 0.5]);
-    }
-
-    #[test]
-    fn the_period_is_off_the_map_on_a_graph_with_one_source() {
-        let mut params = crate::config::single();
-        assert!(!Knob::Period.is_on(&params));
-        params.delay = 0;
-        let why = Knob::Period.off_because(&params).unwrap();
-        assert!(why.contains("two sources"), "{why}");
-        assert!(Knob::Period.is_on(&crate::config::crossed()));
-        assert!(Knob::Period.is_on(&p()));
+        assert_eq!(params.rig.switchers[1], 1.0 - other);
     }
 
     #[test]
@@ -1864,22 +1724,22 @@ mod tests {
         let focus = Focus::default();
         assert_eq!(
             Knob::Period.limit(&params),
-            Limit::Whole(Monitor::MAX_PERIOD)
+            Limit::Whole(crate::rig::MAX_PERIOD)
         );
         params.set(Knob::Period, 2.4, focus);
-        assert_eq!(params.monitors[0].period, 2);
+        assert_eq!(params.rig.periods[0], 2);
         params.set(Knob::Period, 2.6, focus);
         assert_eq!(params.knob(Knob::Period, focus), 3.0);
         params.set(Knob::Period, 900.0, focus);
-        assert_eq!(params.monitors[0].period, Monitor::MAX_PERIOD);
+        assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
         assert!(params.describe(focus).contains("period 60"));
         params.reset(Knob::Period, focus);
-        assert_eq!(params.monitors[0].period, 0);
+        assert_eq!(params.rig.periods[0], 0);
     }
 
     #[test]
     fn the_delay_knob_lands_on_whole_frames_inside_the_reach() {
-        let mut params = crate::config::shaped(2, 2, 0);
+        let mut params = crate::config::instrument();
         params.delay = 4;
         let focus = Focus::default();
         assert_eq!(Knob::Delay.limit(&params), Limit::Whole(4));
@@ -2187,20 +2047,12 @@ mod tests {
         // at the wrong number: a nudge that the reader does not see, or sees
         // on another knob, is the whole failure.
         for knob in Knob::ALL {
-            // `crossed` with an input plugged in: the send is a field only
-            // where there is one, and a knob with no field is a knob this
-            // walk cannot tell a mis-wired reader from.
-            let mut params = crate::config::crossed();
-            params.inputs = vec![Plug {
-                source: Input::Pattern(crate::input::Pattern::Bars),
-                key: Key::OFF,
-                into: vec![0.0, 0.5],
-            }];
+            let mut params = crate::config::instrument();
             params.delay = 4;
             let focus = Focus {
                 camera: 1,
                 monitor: 1,
-                input: 0,
+                switcher: 1,
             };
             let before: Vec<f32> = Knob::ALL
                 .iter()
@@ -2293,28 +2145,31 @@ mod tests {
     }
 
     #[test]
-    fn the_crosspoint_knob_is_the_cell_both_halves_of_the_focus_name() {
-        // The one knob that reads the whole focus. On a graph whose routing
-        // matrix is not symmetric, so a transposed index would show.
-        let mut params = crate::config::crossed();
+    fn the_matrix_is_the_switchers_and_the_selects_and_nothing_else() {
+        // The one direction: a crossfade moved changes what the monitors
+        // show, and there is no cell anywhere to move instead.
+        let mut params = crate::config::instrument();
         let focus = Focus {
             camera: 0,
-            monitor: 1,
-            input: 0,
-        };
-        assert_eq!(params.routing[1][0], 1.0);
-        assert_eq!(params.routing[0][1], 1.0);
-        params.set(Knob::Route, 0.25, focus);
-        assert!((params.routing[1][0] - 0.25).abs() < 1e-6);
-        assert_eq!(params.routing[0][1], 1.0, "the transpose moved");
-        assert!((params.knob(Knob::Route, focus) - 0.25).abs() < 1e-6);
-        // And it follows both halves: the other corner is its own cell.
-        let other = Focus {
-            camera: 1,
             monitor: 0,
-            input: 0,
+            switcher: 0,
         };
-        assert!((params.knob(Knob::Route, other) - 1.0).abs() < 1e-6);
+        // Switcher A stands between camera A and camera B, and structure A's
+        // monitors are on its program.
+        params.set(Knob::Switcher, 0.25, focus);
+        assert!((params.route(0, 0) - 0.75).abs() < 1e-6);
+        assert!((params.route(0, 1) - 0.25).abs() < 1e-6);
+        params.set(Knob::Switcher, 1.0, focus);
+        assert!((params.route(0, 0)).abs() < 1e-6);
+        assert!((params.route(0, 1) - 1.0).abs() < 1e-6);
+        // A select is the other half of it, and takes the monitor off the
+        // program outright.
+        params.rig.selects[0] = crate::rig::Select::Direct;
+        assert!((params.route(0, 0) - 1.0).abs() < 1e-6);
+        assert!((params.route(0, 1)).abs() < 1e-6);
+        // The rotating monitor has no select and shows camera B whatever
+        // either says.
+        assert!((params.route(4, 1) - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -2336,40 +2191,25 @@ mod tests {
             let focus = Focus {
                 camera: 1,
                 monitor: 2,
-                input: 0,
+                switcher: 0,
             };
             let name = knob.name();
             let node = match knob.side() {
                 Side::Camera => format!("camera {}'s {name}", focus.camera),
                 Side::Monitor => format!("monitor {}'s {name}", focus.monitor),
-                Side::Edge => format!(
-                    "camera {}'s {name} to monitor {}",
-                    focus.camera, focus.monitor
-                ),
-                Side::InputEdge => format!(
-                    "input {}'s {name} to monitor {}",
-                    focus.input, focus.monitor
-                ),
+                Side::Switcher => format!("switcher {}'s {name}", focus.switcher),
             };
-            let (low, high) = knob.limit(&crate::config::insanity()).ends();
+            let (low, high) = knob.limit(&crate::config::instrument()).ends();
             // A count has no field below zero to poison.
             let pasts = match knob {
                 Knob::Delay | Knob::Period => vec![high + 1.0],
                 _ => vec![low - 1.0, high + 1.0],
             };
             for past in pasts {
-                // `insanity` with an input plugged in, so the send has a
-                // field on this walk like every other knob; without one it
-                // would be the one knob whose refusal nothing here reads.
-                let mut params = crate::config::insanity();
-                params.inputs = vec![Plug {
-                    source: Input::Pattern(crate::input::Pattern::Bars),
-                    key: Key::OFF,
-                    into: vec![0.0; params.monitors.len()],
-                }];
+                let mut params = crate::config::instrument();
                 match knob {
                     Knob::Delay => params.cameras[focus.camera].delay = past as u32,
-                    Knob::Period => params.monitors[focus.monitor].period = past as u32,
+                    Knob::Period => params.rig.periods[focus.switcher] = past as u32,
                     _ => *params.knob_mut(knob, focus) = past,
                 }
                 let why = crate::config::validate(&params)

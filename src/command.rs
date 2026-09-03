@@ -265,12 +265,14 @@ mod tests {
             Some(Action::Focus(Node::Camera, 2))
         );
         assert_eq!(describes("mon 3").as_deref(), Some("focus monitor 3"));
-        assert_eq!(action_for_name("in 1"), Some(Action::Focus(Node::Input, 0)));
-        // And it stops where the graph does: a fifth input is refused at
-        // load, so a name for one is a binding the loader would reject and a
-        // line in the refusal's own list of what to write instead.
-        assert_eq!(action_for_name("in 5"), None);
-        assert_eq!(action_for_name("cam 9"), None);
+        assert_eq!(
+            action_for_name("sw 1"),
+            Some(Action::Focus(Node::Switcher, 0))
+        );
+        // And it stops where the rig does: there is no fifth switcher and no
+        // fourth camera, so a name for one is a binding the loader rejects.
+        assert_eq!(action_for_name("sw 5"), None);
+        assert_eq!(action_for_name("cam 4"), None);
     }
 
     #[test]
