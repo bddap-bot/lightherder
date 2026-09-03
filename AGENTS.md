@@ -1,6 +1,8 @@
 # Landing contract
 
-Every push to `main` has two deploy targets, and a landing is complete only when both hold:
+Every push to `main` has two deploy targets, and a landing is complete only when both hold.
+This applies to EVERY landing — test-only and doc-only changes included — because the TV
+binary must equal the release build of HEAD, not merely behave like it:
 
 1. The TV binary at `/home/a/lightherder/lightherder` equals `cargo build --release` of `main` HEAD
    (same sha256). Install by rename swap: write `lightherder.new`, move the old binary to
