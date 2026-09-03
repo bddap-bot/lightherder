@@ -817,14 +817,16 @@ pub(crate) struct TestSurface {
 
 #[cfg(test)]
 impl TestSurface {
-    /// A button pushed, the way the reader thread reports one.
-    pub(crate) fn press(&self, control: u8) {
-        self.controls.send(change(control, 127)).unwrap();
+    pub(crate) fn send(&self, control: u8, value: u8) {
+        self.controls.send(change(control, value)).unwrap();
     }
 
-    /// And let go of.
+    pub(crate) fn press(&self, control: u8) {
+        self.send(control, 127);
+    }
+
     pub(crate) fn release(&self, control: u8) {
-        self.controls.send(change(control, 0)).unwrap();
+        self.send(control, 0);
     }
 }
 

@@ -861,6 +861,7 @@ mod tests {
     use super::*;
     use crate::affine::Axis;
     use crate::config;
+    use crate::midi::TestSurface;
     use crate::params::{Node, Seed};
 
     /// An instrument playing `params`, headless: no window has opened, so
@@ -996,8 +997,9 @@ mod tests {
         let Some(mut app) = playing(config::single()) else {
             return;
         };
+        let board = plugged(&mut app);
         assert!(app.params.inputs.is_empty());
-        surface(&mut app, 0, 100);
+        surface(&mut app, &board, 0, 100);
         assert_eq!(app.last_knob, None);
 
         let Some(mut app) = playing(config::external()) else {
@@ -1089,8 +1091,7 @@ mod tests {
         // is the graph's business rather than this test's — said outright,
         // so the panels below are exactly the lamps the focus is.
         app.params.monitors[0].seed = Seed::Dark;
-        let mut surface = app.midi.plug_in_a_test_surface();
-        surface.wire.handshake(0);
+        let mut surface = plugged(&mut app);
 
         // One row per kind, each as wide as this graph: camera 1 is S1 and
         // monitor 1 is M1, which are controls 32 and 48. The graph has no
@@ -1173,13 +1174,15 @@ mod tests {
         app.act(Action::Turn(knob, delta));
     }
 
-    /// One message off the surface, played the way the redraw plays it:
-    /// resolved against the panel as it stands, then applied to it.
-    fn surface(app: &mut App, control: u8, value: u8) {
-        let change = crate::midi::change(control, value);
-        if let Some(action) = app.midi.action_for(change, &app.params) {
-            app.act(action);
-        }
+    fn plugged(app: &mut App) -> TestSurface {
+        let mut surface = app.midi.plug_in_a_test_surface();
+        surface.wire.handshake(0);
+        surface
+    }
+
+    fn surface(app: &mut App, board: &TestSurface, control: u8, value: u8) {
+        board.send(control, value);
+        app.surface_frame();
     }
 
     #[test]
@@ -1247,11 +1250,12 @@ mod tests {
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
-        surface(&mut app, 4, 0);
-        surface(&mut app, 4, 127);
+        let board = plugged(&mut app);
+        surface(&mut app, &board, 4, 0);
+        surface(&mut app, &board, 4, 127);
         assert_eq!(app.params.monitors[0].colour.contrast, 2.0);
         app.act(Action::Focus(Node::Monitor, 1));
-        surface(&mut app, 4, 100);
+        surface(&mut app, &board, 4, 100);
         assert!(
             (app.params.monitors[1].colour.contrast - (1.0 - 27.0 / 127.0)).abs() < 1e-6,
             "{}",
@@ -1268,20 +1272,21 @@ mod tests {
         let Some(mut app) = playing(config::crossed()) else {
             return;
         };
+        let board = plugged(&mut app);
         let start = app.params.knob(Knob::Route, app.focus);
         assert_eq!(start, 0.0);
-        surface(&mut app, 7, 0);
-        surface(&mut app, 7, 64);
+        surface(&mut app, &board, 7, 0);
+        surface(&mut app, &board, 7, 64);
         let held = app.params.knob(Knob::Route, app.focus);
         assert!((held - 64.0 / 127.0 / 4.0).abs() < 1e-6, "{held}");
         app.act(Action::Cut(Edge::Down));
         assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
-        surface(&mut app, 7, 65);
-        surface(&mut app, 7, 66);
+        surface(&mut app, &board, 7, 65);
+        surface(&mut app, &board, 7, 66);
         assert_eq!(app.params.knob(Knob::Route, app.focus), 1.0);
         app.act(Action::Cut(Edge::Up));
         assert!((app.params.knob(Knob::Route, app.focus) - held).abs() < 1e-6);
-        surface(&mut app, 7, 67);
+        surface(&mut app, &board, 7, 67);
         assert!(
             (app.params.knob(Knob::Route, app.focus) - (held + 1.0 / 127.0 / 4.0)).abs() < 1e-6,
             "the steps past the rail were banked"
@@ -1423,16 +1428,17 @@ mod tests {
         let Some(mut app) = playing(params) else {
             return;
         };
+        let board = plugged(&mut app);
         let started = app.params.clone();
         app.act(Action::Focus(Node::Monitor, 1));
         app.act(Action::Page);
         // A quarter of sixty passes a throw: seventeen steps of it owe two.
-        surface(&mut app, 6, 0);
-        surface(&mut app, 6, 17);
+        surface(&mut app, &board, 6, 0);
+        surface(&mut app, &board, 6, 17);
         assert_eq!(app.params.monitors[1].period, 2);
         app.act(Action::Page);
-        surface(&mut app, 7, 127);
-        surface(&mut app, 7, 76);
+        surface(&mut app, &board, 7, 127);
+        surface(&mut app, &board, 7, 76);
         let row = app.params.routing[1].clone();
         assert!(
             (row[0] - (0.6 - 51.0 / 127.0 / 4.0)).abs() < 1e-3,
@@ -1457,7 +1463,7 @@ mod tests {
         assert_eq!(app.params.routing[1], row);
         // The beats moved the crosspoint under the fader and back; the fader
         // turns it on from there, by how far it moved and nothing more.
-        surface(&mut app, 7, 90);
+        surface(&mut app, &board, 7, 90);
         assert!(
             (app.params.routing[1][0] - (row[0] + 14.0 / 127.0 / 4.0)).abs() < 1e-3,
             "{}",
@@ -1518,20 +1524,21 @@ mod tests {
 
     #[test]
     fn the_tempo_buttons_move_the_rate_the_way_they_are_named() {
-        // The half the tempo tests cannot reach: which name carries which
-        // step. A table that hands the faster ratio to "rate -" is a wiring
+        // The half the tempo tests cannot reach: which button carries which
+        // step. A table that hands the faster ratio to track-prev is a wiring
         // mistake no arithmetic test would see.
         let Some(mut app) = playing(config::single()) else {
             return;
         };
+        let board = plugged(&mut app);
         let started = app.tempo.rate();
-        app.act(crate::command::action_for_name("rate +").unwrap());
+        surface(&mut app, &board, 59, 127);
         assert!(
             app.tempo.rate() > started,
             "{} is not faster",
             app.tempo.rate()
         );
-        app.act(crate::command::action_for_name("rate -").unwrap());
+        surface(&mut app, &board, 58, 127);
         assert!(
             (app.tempo.rate() - started).abs() < 1e-3,
             "a press each way left {}",
