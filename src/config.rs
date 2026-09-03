@@ -255,7 +255,7 @@ mod tests {
         // does not reach.
         let poison: &[fn(&mut Params)] = &[
             |p| p.cameras[0].gain[0] = f32::NAN,
-            |p| p.cameras[0].framing.rotation = f32::INFINITY,
+            |p| p.shafts[0].rotation = f32::INFINITY,
             |p| p.monitors[0].colour.saturation = f32::NAN,
             |p| p.input.key.threshold = f32::NAN,
             |p| p.rig.switchers[2] = f32::INFINITY,

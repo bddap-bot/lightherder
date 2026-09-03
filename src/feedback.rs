@@ -628,12 +628,11 @@ impl Feedback {
         }
         let aspect = self.aspect();
 
-        // Framings move every frame; the affine per camera is the same for
-        // all of its taps, so it is worked out once.
-        let framings: Vec<crate::affine::Affine2> = params
-            .cameras
-            .iter()
-            .map(|camera| sample_transform(&camera.framing, aspect))
+        // Shafts move every frame; the affine per camera is the same for all
+        // of its taps, so it is worked out once. Two cameras on one shaft get
+        // the same one, which is the lock.
+        let framings: Vec<crate::affine::Affine2> = (0..params.cameras.len())
+            .map(|c| sample_transform(&params.framing(c), aspect))
             .collect();
         // What the seed's tap samples through. It is plugged into the
         // switcher, so nothing frames it: it arrives square on and fills the

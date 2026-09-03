@@ -65,7 +65,7 @@ fn graph(s: &Single) -> Params {
     let mut p = blank();
     p.rig.selects[2] = Select::Program;
     p.rig.switchers = [0.0, 1.0, 1.0, s.seed];
-    p.cameras[2].framing = s.framing;
+    p.shafts = [s.framing; 2];
     p.cameras[2].gain = s.loop_gain;
     p.cameras[2].look = one_hot(MONITORS, SEEDED);
     p.monitors[SEEDED].colour = s.colour;
@@ -1036,7 +1036,6 @@ fn one_hot(len: usize, hot: usize) -> Vec<f32> {
 
 fn plain_camera(look: Vec<f32>) -> Camera {
     Camera {
-        framing: Framing::identity(),
         gain: [1.0; 3],
         look,
         delay: 0,
@@ -1061,6 +1060,7 @@ fn blank() -> Params {
     let mut p = lightherder::config::instrument();
     p.rig = Rig::IDENTITY;
     p.delay = 0;
+    p.shafts = [Framing::identity(); 2];
     for camera in &mut p.cameras {
         *camera = plain_camera(vec![0.0; MONITORS]);
     }
@@ -1152,7 +1152,7 @@ fn a_crossfade_delivers_the_fractions_it_names() {
     let mut p = blank();
     p.cameras[0].look = one_hot(MONITORS, SEEDED);
     p.cameras[1].look = one_hot(MONITORS, SEEDED);
-    p.cameras[1].framing.rotation = std::f32::consts::FRAC_PI_2;
+    p.shafts[1].rotation = std::f32::consts::FRAC_PI_2;
     // Monitor 3 takes the whole seed; monitor 1 takes switcher A's program,
     // a quarter of the way from camera A toward camera B.
     p.rig.selects[0] = Select::Program;
@@ -1656,7 +1656,7 @@ fn the_seed_arrives_whole_however_the_cameras_are_set() {
     const SEED_SHARE: f32 = 0.98;
     p.rig.switchers = [0.0, 1.0, 1.0, SEED_SHARE];
     p.cameras[2].look = one_hot(MONITORS, SEEDED);
-    p.cameras[2].framing.zoom = 0.5;
+    p.shafts[0].zoom = 0.5;
     p.cameras[2].gain = [0.1; 3];
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
@@ -1917,7 +1917,7 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
         let mut p = blank();
         p.cameras[0].delay = delay;
         p.cameras[0].gain = [0.9; 3];
-        p.cameras[0].framing.zoom = 0.9;
+        p.shafts[0].zoom = 0.9;
         p.cameras[0].look = one_hot(MONITORS, SEEDED);
         p.delay = Params::MAX_DELAY;
         seeding(&mut p);

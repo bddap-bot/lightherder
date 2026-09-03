@@ -94,6 +94,24 @@ pub struct Rig {
 
 /// The rig's counts, which are the instrument's: nothing chooses them.
 pub const CAMERAS: usize = 3;
+
+/// The shafts the cameras stand on. Two, not three: camera A and the
+/// rotating monitor are belt-locked to one shaft and turn and slide in
+/// unison, and camera 3 is fixed watching that monitor — so what camera 3
+/// sees turns and slides with camera A, off the one number they share.
+/// Camera B has its own. Whether A and B share one is not stated anywhere
+/// found, so they do not.
+pub const SHAFTS: usize = 2;
+
+/// Which shaft a camera's view stands on, in [`Params::cameras`] order. The
+/// lock is this table and the pair of shafts behind it: there is no second
+/// number for the two to disagree on.
+pub const fn shaft_of(camera: usize) -> usize {
+    match camera {
+        1 => 1,
+        _ => 0,
+    }
+}
 pub const MONITORS: usize = 5;
 pub const SWITCHERS: usize = 4;
 
@@ -244,18 +262,13 @@ impl Rig {
         }
     }
 
-    /// The rig at this setting, as the graph the instrument runs. Every
-    /// camera pulls back a little and turns the same way at its own rate, so
-    /// the structures stay distinct and no round trip cancels its own
-    /// rotation, with the third turning fastest since its monitor turns on a
-    /// shaft. The seed is the one physical camera, and the monitors are dark:
-    /// on this rig the seed input is what sparks the loops.
+    /// The rig at this setting, as the graph the instrument runs. Both shafts
+    /// pull back a little and turn the same way at their own rates, so the
+    /// structures stay distinct and no round trip cancels its own rotation.
+    /// The seed is the one physical camera, and the monitors are dark: on
+    /// this rig the seed input is what sparks the loops.
     pub fn params(&self) -> Params {
-        let camera = |cam: Cam, rotation: f32, gain: [f32; 3]| Camera {
-            framing: Framing {
-                zoom: 0.994,
-                rotation,
-            },
+        let camera = |cam: Cam, gain: [f32; 3]| Camera {
             gain,
             look: Screen::ALL.map(|screen| glass(cam, screen)).to_vec(),
             delay: 0,
@@ -263,10 +276,20 @@ impl Rig {
         };
         Params {
             rig: *self,
+            shafts: [
+                Framing {
+                    zoom: 0.994,
+                    rotation: 0.05,
+                },
+                Framing {
+                    zoom: 0.994,
+                    rotation: 0.08,
+                },
+            ],
             cameras: vec![
-                camera(Cam::A, 0.05, [0.980, 0.986, 0.992]),
-                camera(Cam::B, 0.08, [0.992, 0.986, 0.980]),
-                camera(Cam::Three, 0.12, [0.985; 3]),
+                camera(Cam::A, [0.980, 0.986, 0.992]),
+                camera(Cam::B, [0.992, 0.986, 0.980]),
+                camera(Cam::Three, [0.985; 3]),
             ],
             monitors: vec![Monitor::default(); MONITORS],
             input: Plug {
@@ -429,16 +452,30 @@ mod tests {
     }
 
     #[test]
-    fn every_camera_pulls_back_and_turns_the_same_way_at_its_own_rate() {
+    fn both_shafts_pull_back_and_turn_the_same_way_at_their_own_rates() {
         let params = Rig::PERFORMANCE.params();
-        let [a, b, three] = [&params.cameras[0], &params.cameras[1], &params.cameras[2]];
-        for cam in [a, b, three] {
-            assert!(cam.framing.zoom < 1.0, "{:?}", cam.framing);
+        for shaft in params.shafts {
+            assert!(shaft.zoom < 1.0, "{shaft:?}");
         }
-        assert!(0.0 < a.framing.rotation && a.framing.rotation < b.framing.rotation);
-        assert!(b.framing.rotation < three.framing.rotation);
+        let [a, b] = params.shafts;
+        assert!(0.0 < a.rotation && a.rotation < b.rotation);
         // A and B tinted opposite ways, so the structures stay distinct.
+        let (a, b) = (&params.cameras[0], &params.cameras[1]);
         assert!(a.gain[0] < a.gain[2] && b.gain[0] > b.gain[2]);
+    }
+
+    #[test]
+    fn camera_three_stands_on_camera_a_s_shaft_and_camera_b_on_its_own() {
+        // The belt: camera A and the rotating monitor turn and slide in
+        // unison, and camera 3 is fixed watching that monitor — so what it
+        // sees moves with camera A, off the one number they share. Turning
+        // it moves both readings and cannot move only one.
+        let mut params = Rig::PERFORMANCE.params();
+        assert_eq!(params.framing(0), params.framing(2));
+        assert_ne!(params.framing(0), params.framing(1));
+        params.shafts[0].rotation += 0.3;
+        assert_eq!(params.framing(0), params.framing(2));
+        assert_eq!(params.framing(1), Rig::PERFORMANCE.params().framing(1));
     }
 
     #[test]

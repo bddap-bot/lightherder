@@ -189,9 +189,6 @@ impl Key {
 /// the light it hands on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Camera {
-    /// How this camera's view is magnified and turned relative to what it
-    /// looks at.
-    pub framing: Framing,
     /// Per-channel gain applied to everything this camera sees: the loss down
     /// the cable and through the lens, which is what makes a loop settle
     /// rather than run. The channels differ to colour the trails. Nothing on
@@ -244,8 +241,8 @@ impl Params {
 /// and live there.
 fn identity_graph() -> Params {
     let mut params = crate::config::instrument();
+    params.shafts = [Framing::identity(); crate::rig::SHAFTS];
     for camera in &mut params.cameras {
-        camera.framing = Framing::identity();
         camera.gain = [1.0; 3];
         camera.delay = 0;
         camera.divider = 1;
@@ -299,6 +296,10 @@ impl Monitor {
 /// cannot drift.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Params {
+    /// The shafts the cameras stand on — see [`crate::rig::shaft_of`]. Camera
+    /// A and the rotating monitor share the first, so turning it turns both
+    /// and there is nothing to keep in step.
+    pub shafts: [Framing; crate::rig::SHAFTS],
     pub cameras: Vec<Camera>,
     pub monitors: Vec<Monitor>,
     /// The switchers and the router selects: the whole of the routing, and
@@ -652,6 +653,12 @@ impl Params {
     /// How much of camera `c` monitor `m` shows, and how much of the seed:
     /// the matrix, off the switchers and the selects. Not stored — see
     /// [`Params::rig`].
+    /// How camera `c`'s view is magnified and turned, which is where its
+    /// shaft stands.
+    pub fn framing(&self, c: usize) -> Framing {
+        self.shafts[crate::rig::shaft_of(c)]
+    }
+
     pub fn route(&self, m: usize, c: usize) -> f32 {
         self.rig.feed(m).cameras[c]
     }
@@ -692,8 +699,8 @@ impl Params {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         match knob {
-            Knob::Zoom => cam.framing.zoom,
-            Knob::Rotation => cam.framing.rotation,
+            Knob::Zoom => self.framing(focus.camera).zoom,
+            Knob::Rotation => self.framing(focus.camera).rotation,
             Knob::Delay => cam.delay as f32,
             Knob::Hue => mon.colour.hue,
             Knob::Saturation => mon.colour.saturation,
@@ -743,8 +750,8 @@ impl Params {
     /// see [`Knob::is_on`].
     fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
         match knob {
-            Knob::Zoom => &mut self.cameras[focus.camera].framing.zoom,
-            Knob::Rotation => &mut self.cameras[focus.camera].framing.rotation,
+            Knob::Zoom => &mut self.shafts[crate::rig::shaft_of(focus.camera)].zoom,
+            Knob::Rotation => &mut self.shafts[crate::rig::shaft_of(focus.camera)].rotation,
             Knob::Hue => &mut self.monitors[focus.monitor].colour.hue,
             Knob::Saturation => &mut self.monitors[focus.monitor].colour.saturation,
             Knob::Brightness => &mut self.monitors[focus.monitor].colour.brightness,
@@ -768,8 +775,8 @@ impl Params {
              sw {}/{}: switcher {:.3}  period {}",
             focus.camera + 1,
             self.cameras.len(),
-            cam.framing.zoom,
-            cam.framing.rotation,
+            self.framing(focus.camera).zoom,
+            self.framing(focus.camera).rotation,
             cam.delay,
             self.delay,
             focus.monitor + 1,
@@ -938,7 +945,7 @@ mod tests {
             }
         }
         let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
-        assert_eq!(cam.framing.zoom, 4.0);
+        assert_eq!(params.shafts[0].zoom, 4.0);
         assert_eq!(cam.delay, params.delay);
         assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.switchers[0], 1.0);
@@ -954,7 +961,7 @@ mod tests {
             }
         }
         let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
-        assert_eq!(cam.framing.zoom, 0.25);
+        assert_eq!(params.shafts[0].zoom, 0.25);
         assert_eq!(cam.delay, 0);
         assert_eq!(params.rig.periods[0], 0);
         assert_eq!(params.rig.switchers[0], 0.0);
@@ -1002,8 +1009,8 @@ mod tests {
                 switcher: 0,
             },
         );
-        assert_eq!(params.cameras[0], before.cameras[0]);
-        assert_ne!(params.cameras[1].framing, before.cameras[1].framing);
+        assert_eq!(params.shafts[0], before.shafts[0]);
+        assert_ne!(params.shafts[1], before.shafts[1]);
         assert_ne!(params.monitors[0].colour, before.monitors[0].colour);
         assert_eq!(params.monitors[1], before.monitors[1]);
     }
@@ -1011,13 +1018,13 @@ mod tests {
     #[test]
     fn rotation_wraps_instead_of_running_away() {
         let mut params = p();
-        params.cameras[0].framing.rotation = 0.0;
+        params.shafts[0].rotation = 0.0;
         for _ in 0..10_000 {
             nudge(&mut params, Knob::Rotation, 0.5);
-            let rotation = params.cameras[0].framing.rotation;
+            let rotation = params.shafts[0].rotation;
             assert!(rotation > -PI && rotation <= PI);
         }
-        assert!((params.cameras[0].framing.rotation - wrap_pi(5000.0)).abs() < 1e-2);
+        assert!((params.shafts[0].rotation - wrap_pi(5000.0)).abs() < 1e-2);
     }
 
     #[test]
