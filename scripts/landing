@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+head=$(git rev-parse HEAD)
+target=${CARGO_TARGET_DIR:-$PWD/target}
+export RUSTFLAGS="--remap-path-prefix=$PWD=/src --remap-path-prefix=$target=/target"
+installed=/home/a/lightherder/lightherder
+
+build() {
+  nix-shell --run 'cargo build --release' >&2
+}
+
+check() {
+  build
+  local built have pages ok=0
+  built=$(sha256sum "$target/release/lightherder" | cut -c1-64)
+  have=$(sudo sha256sum "$installed" | cut -c1-64)
+  if [ "$built" != "$have" ]; then
+    echo "TV binary $have is not the release build of $head ($built): run scripts/landing deploy"
+    ok=1
+  fi
+  pages=$(timeout 60 gh run list --workflow pages --json headSha,conclusion \
+    --jq "map(select(.headSha == \"$head\")) | .[0].conclusion // \"no run\"")
+  if [ "$pages" != success ]; then
+    echo "pages workflow on $head: $pages"
+    ok=1
+  fi
+  [ $ok = 0 ] && echo "landing check passed: TV == release build of $head, pages green"
+  return $ok
+}
+
+deploy() {
+  build
+  sudo install -o root -g root -m 755 "$target/release/lightherder" "$installed.new"
+  sudo mv "$installed" "$installed.prev"
+  sudo mv "$installed.new" "$installed"
+  check
+}
+
+case ${1:-} in
+  check) check ;;
+  deploy) deploy ;;
+  *) echo "usage: scripts/landing check|deploy" >&2; exit 2 ;;
+esac

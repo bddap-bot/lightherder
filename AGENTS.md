@@ -6,9 +6,11 @@ the release build of HEAD, not merely behave like it. Both or neither — a lagg
 is an unfinished landing, not a done one.
 
 1. The TV binary at `/home/a/lightherder/lightherder` equals `cargo build --release` of `main`
-   HEAD (same sha256). Install by rename swap: write `lightherder.new`, move the old binary to
-   `lightherder.prev`, rename `.new` into place, `root:root` `755`. Launch nothing;
-   `run-lightherder.sh` picks the binary up on its next start.
+   HEAD (same sha256). `scripts/landing deploy` installs it by rename swap and launches
+   nothing; `run-lightherder.sh` picks the binary up on its next start.
 2. The `pages` workflow is green on that same sha. It runs on push; if it is red, say so
    rather than re-triggering blindly.
 3. No code comments. Prose lives here or in the README.
+
+`scripts/landing check` proves 1 and 2; it is the `landing` entry of `test-map.json`, which
+the botq gate runs before it accepts a `done`.

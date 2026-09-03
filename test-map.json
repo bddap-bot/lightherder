@@ -7,6 +7,11 @@
       "why": "editing the map re-lints its own completeness over every tracked file"
     },
     {
+      "paths": ["scripts/**"],
+      "tests": ["nix-shell --run 'shellcheck scripts/landing'"],
+      "why": "the landing contract's one script; shellcheck is what a shell script has, and running it for real is the gate's job"
+    },
+    {
       "paths": ["**/*.md", ".gitignore", "LICENSE-*"],
       "tests": [],
       "why": "prose and licenses — nothing executes them"
