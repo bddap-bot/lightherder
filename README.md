@@ -390,10 +390,16 @@ stays dark,
 which is now what it means.
 
 The mode goes back to Internal on the way out, so the surface lights its own
-buttons again for whatever is played next. **On the way out of a clean exit**
-— a killed process runs nothing, and external mode lives in the device's RAM,
-so a `SIGTERM` leaves the mode set and the last lamp burning until the surface
-is replugged or the instrument is run again. Which is why, on the way in, the
+buttons again for whatever is played next. That includes being told to stop:
+`SIGTERM` and `SIGINT` — a Steam shortcut ending, `timeout`, Ctrl-C — end the
+run the way closing the window does, so the lights are put back before the
+process is gone. The signals are held and one thread waits on them, which is
+why nothing before the instrument opens its inputs may start a thread of its
+own; a second signal while the run is already stopping is swallowed rather
+than cut it short, because `timeout` and a cgroup stop deliver the same one
+twice. External mode lives in the device's RAM, so a `SIGKILL` or a power cut
+still leaves the mode set and the last lamp burning until the surface is
+replugged or the instrument is run again. Which is why, on the way in, the
 panel is blanked before any lamp is lit and the mode is put back even when it
 was already found set: the next run repairs what the last one was killed
 before finishing, rather than taking a dark panel on faith and lighting a

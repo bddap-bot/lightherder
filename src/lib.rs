@@ -11,6 +11,8 @@ pub mod command;
 pub mod config;
 pub mod feedback;
 pub mod gpu;
+#[cfg(not(target_arch = "wasm32"))]
+mod halt;
 pub mod input;
 pub(crate) mod lamps;
 pub mod midi;

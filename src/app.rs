@@ -167,6 +167,9 @@ fn start(event_loop: EventLoop<()>, mut app: App) -> Result<(), Box<dyn std::err
 /// block on it — the browser — is the reason the adapter is opened out here
 /// instead of inside `resumed`.
 pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let event_loop = EventLoop::new()?;
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::halt::on_signal(event_loop.create_proxy())?;
     crate::feedback::bank_fits(&params, cli.resolution)?;
     let mut sources = Vec::with_capacity(params.inputs.len());
     for input in &params.inputs {
@@ -186,7 +189,6 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     print!("{}", map.card());
     log::info!("surface: waiting for {}", map.device);
     let midi = Midi::new(map, &params)?;
-    let event_loop = EventLoop::new()?;
     // Through the event loop's own display connection rather than a window's:
     // the adapter is chosen before there is a window, and wgpu forbids a
     // surface created against a different one later.
@@ -785,6 +787,10 @@ impl ApplicationHandler for App {
         self.passes = 0;
         self.presents = 0;
         self.live = Some(live);
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _: ()) {
+        event_loop.exit();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
