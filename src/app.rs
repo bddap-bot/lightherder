@@ -610,9 +610,13 @@ impl App {
     /// The capture's own pass rather than the surface's: what the glass gets
     /// is a swapchain texture, which is not a copy source on every backend
     /// and is a different size on every window. Solo and the overlay are the
-    /// display's, so a capture is framed the way the display is.
+    /// display's, so a capture is framed the way the display is — but not
+    /// the focus mark, which guides the hand and is no part of the picture.
     fn grab(&self, capture: &mut Capture) -> Result<(), String> {
-        let view = self.view();
+        let view = match self.view() {
+            View::Bank { .. } => View::Bank { focus: None },
+            solo => solo,
+        };
         let live = self
             .live
             .as_ref()

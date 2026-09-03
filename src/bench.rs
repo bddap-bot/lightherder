@@ -82,7 +82,7 @@ pub async fn run(params: &Params, resolution: (u32, u32)) -> Result<(), String> 
             &queue,
             &target,
             feedback,
-            View::Bank { focus: None },
+            View::Bank { focus: Some(0) },
             None,
         );
     };

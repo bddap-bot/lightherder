@@ -12,15 +12,15 @@ use crate::feedback::Feedback;
 pub enum View {
     /// Every monitor, tiled. `focus` is the one the front panel plays, and
     /// its tile is framed with a line so a glance finds which glass the
-    /// faders are on; `None` frames nothing, for a target that is not a
-    /// display.
+    /// faders are on; `None` frames nothing, for a target no hand is
+    /// playing to — a recording, a test.
     Bank { focus: Option<usize> },
-    /// One monitor on the whole target. Nothing to pick out, so no line.
+    /// One monitor on the whole target: nothing to pick out, so no line.
     Solo(usize),
 }
 
 impl View {
-    fn solo(self) -> Option<usize> {
+    fn soloed(self) -> Option<usize> {
         match self {
             View::Solo(m) => Some(m),
             View::Bank { .. } => None,
@@ -34,13 +34,12 @@ pub struct Present {
 }
 
 /// The focus mark's line, in texels of a 1080-high target: it scales with
-/// the target so a 4K display shows the same line, not a hairline.
-const MARK: f32 = 2.0;
+/// the target so a 4K display shows the same line, not a hairline, and a
+/// small one still shows a texel.
+const LINE_AT_1080: f32 = 2.0;
 
-/// How thick the focus mark is on a target `height` texels high — never
-/// under a texel, so a small target still shows one.
-pub fn mark_thickness(height: u32) -> f32 {
-    (MARK * height as f32 / 1080.0).max(1.0)
+fn mark_thickness(height: u32) -> f32 {
+    (LINE_AT_1080 * height as f32 / 1080.0).max(1.0)
 }
 
 /// The tile grid for `monitors` tiles: `(columns, rows)`, as square as it
@@ -98,10 +97,10 @@ impl Present {
         view: View,
         overlay: Option<&crate::overlay::Overlay>,
     ) {
-        let tiles = tiles(monitors.monitors(), view.solo());
+        let tiles = tiles(monitors.monitors(), view.soloed());
         let marked = match view {
-            View::Bank { focus } if tiles.len() > 1 => focus,
-            _ => None,
+            View::Bank { focus } => focus,
+            View::Solo(_) => None,
         };
         let (cols, rows) = grid(tiles.len());
         let target_size = (target.width(), target.height());
@@ -170,7 +169,7 @@ fn tiles(monitors: usize, solo: Option<usize>) -> std::ops::Range<usize> {
 /// The four edges of `tile`, each `line` texels deep and drawn inside it, so
 /// the mark never reaches the neighbouring tile and is never lost under one
 /// drawn later. A tile too thin to hold two lines gets none.
-pub fn mark_strips(
+fn mark_strips(
     tile: (f32, f32, f32, f32),
     line: f32,
 ) -> impl Iterator<Item = (f32, f32, f32, f32)> {

@@ -1176,11 +1176,13 @@ fn the_focused_tile_is_framed_and_only_in_the_bank() {
         [255.0; 3],
         "the far corner is not lined"
     );
-    assert_eq!(
-        texel(&img, 1, 2, 2),
-        [0.0; 3],
-        "the line ate into the picture"
-    );
+    for inside in [1, SIZE - 2] {
+        assert_eq!(
+            texel(&img, 1, inside, inside),
+            [0.0; 3],
+            "the line ate into the picture"
+        );
+    }
     assert_eq!(texel(&img, 0, 0, 0), [0.0; 3], "an unfocused tile is lined");
     assert_eq!(
         texel(&img, 2, SIZE - 1, SIZE - 1),
@@ -1192,8 +1194,19 @@ fn the_focused_tile_is_framed_and_only_in_the_bank() {
     assert_eq!(texel(&img, 1, 0, 0), [0.0; 3], "a focus-less draw is lined");
 
     let img = draw(View::Solo(1));
-    assert_eq!(img.rgb_at(0.0, 0.0), [0.0; 3], "a solo is lined");
+    let (x, w) = ((width - height) as f32 / 2.0, height as f32);
+    assert_eq!(
+        img.rgb_at((x + 0.5) / width as f32, 0.0),
+        [0.0; 3],
+        "a solo is lined at its near corner"
+    );
+    assert_eq!(
+        img.rgb_at((x + w - 0.5) / width as f32, 0.0),
+        [0.0; 3],
+        "a solo is lined at its far corner"
+    );
 }
+
 #[test]
 fn a_crossfade_delivers_the_fractions_it_names() {
     // Two cameras on one monitor, crossfaded 3:1. Their framings differ —
