@@ -120,11 +120,13 @@ impl Map {
     /// panel, then the focused switcher's period and its crossfade — the
     /// lever the piece is played on, on the fader nearest the hand that is
     /// already on the select rows. The rotaries above them are the right
-    /// hand's, on the focused camera: where it stands on its shaft and how
-    /// late its cable is. Eleven handles on sixteen controls, so there is no
-    /// second page and the five rotaries past the third are dead — free for
-    /// a `midi.toml`, and no hand throws one by accident. The select rows
-    /// are as wide as the rig — see [`nano_buttons`].
+    /// hand's: the focused camera — where it stands on its shaft and how
+    /// late its cable is — and then the focused monitor's frame rate, the
+    /// one router-output setting a knob turns. Twelve handles on sixteen
+    /// controls, so there is no second page and the four rotaries past the
+    /// fourth are dead — free for a `midi.toml`, and no hand throws one by
+    /// accident. The select rows are as wide as the rig — see
+    /// [`nano_buttons`].
     pub(crate) fn nano_kontrol2() -> Map {
         Map {
             device: "nanoKONTROL".into(),
@@ -140,6 +142,7 @@ impl Map {
                 fader(16, Knob::Zoom),
                 fader(17, Knob::Rotation),
                 fader(18, Knob::Delay),
+                fader(19, Knob::FrameRate),
             ]
             .into(),
             button: nano_buttons(),
@@ -1592,6 +1595,7 @@ mod tests {
                 fader(16, Knob::Zoom),
                 fader(17, Knob::Rotation),
                 fader(18, Knob::Delay),
+                fader(19, Knob::FrameRate),
             ]
         );
 
@@ -1639,9 +1643,9 @@ mod tests {
                 button(39, "clutch"),
             ]
         );
-        // The five rotaries past the third are dead: eleven handles on
+        // The four rotaries past the fourth are dead: twelve handles on
         // sixteen controls, so nothing is owed a second page.
-        for cc in 19..24 {
+        for cc in 20..24 {
             assert!(!map.fader.iter().any(|f| f.cc == cc), "rotary cc {cc}");
         }
     }

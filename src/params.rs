@@ -247,14 +247,61 @@ fn identity_graph() -> Params {
     params
 }
 
-/// One monitor in the graph: its front panel, and the mirror the router
-/// output puts on what it is fed.
+/// The frame rate of a router output, against the [`Rate::FULL`] a second
+/// the rig runs at. A slower output shows each frame it is handed until the
+/// next is due, so a camera on it sees a held picture. No frame is copied
+/// to hold one: the ring is read further back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rate {
+    Full,
+    Half,
+    Film,
+}
+
+impl Rate {
+    pub const FULL: u32 = 60;
+
+    /// Fastest to slowest: the order the knob turns through them.
+    pub const ALL: [Rate; 3] = [Rate::Full, Rate::Half, Rate::Film];
+
+    /// The rate whose hold the ring is sized for, so a frame rate turns
+    /// without the bank growing under it.
+    pub const SLOWEST: Rate = Rate::Film;
+
+    pub const fn fps(self) -> u32 {
+        match self {
+            Rate::Full => 60,
+            Rate::Half => 30,
+            Rate::Film => 24,
+        }
+    }
+
+    /// How many frames old the frame this output shows is, `frame` frames
+    /// into a run: the distance back to the last frame it refreshed on. An
+    /// output refreshes where a count of `fps` a second crosses a whole
+    /// number, so 24 holds for three frames, then two, then three. The
+    /// pattern repeats every second, and a frame before the run began reads
+    /// as the pattern continued backwards.
+    pub fn hold(self, frame: i64) -> u32 {
+        let frame = frame.rem_euclid(Rate::FULL as i64) as u32;
+        let refreshes = frame * self.fps() / Rate::FULL;
+        frame - (refreshes * Rate::FULL).div_ceil(self.fps())
+    }
+
+    pub const fn longest_hold(self) -> u32 {
+        (Rate::FULL - 1) / self.fps()
+    }
+}
+
+/// One monitor in the graph: its front panel, and what the router output
+/// feeding it does to what it is fed — the mirror and the frame rate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Monitor {
     pub colour: Colour,
     /// Whether this monitor's router output is mirrored left for right and
     /// top for bottom, in [`Axis`] order.
     pub flip: [bool; 2],
+    pub rate: Rate,
     /// The unsharp mask on the front panel: how much of the difference
     /// between a texel and the mean of its four neighbours is added back.
     /// Zero is the stage skipped outright, so a rested knob is exactly
@@ -267,6 +314,7 @@ impl Default for Monitor {
         Monitor {
             colour: Colour::NEUTRAL,
             flip: [false; 2],
+            rate: Rate::Full,
             sharpness: 0.0,
         }
     }
@@ -400,6 +448,9 @@ pub enum Knob {
     Contrast,
     Temperature,
     Sharpness,
+    /// The frame rate of the router output feeding the focused monitor, as
+    /// a step along [`Rate::ALL`]: full rate at rest, slower up the travel.
+    FrameRate,
     /// How far the focused switcher stands toward its In2: 0 is In1 whole, 1
     /// is In2 whole. The routing is these four and the four selects, and
     /// nothing else.
@@ -462,7 +513,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 11] = [
+    pub const ALL: [Knob; 12] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::Delay,
@@ -472,6 +523,7 @@ impl Knob {
         Knob::Contrast,
         Knob::Temperature,
         Knob::Sharpness,
+        Knob::FrameRate,
         Knob::Switcher,
         Knob::Period,
     ];
@@ -490,6 +542,7 @@ impl Knob {
             Knob::Contrast => "contrast",
             Knob::Temperature => "temperature",
             Knob::Sharpness => "sharpness",
+            Knob::FrameRate => "frame rate",
             Knob::Switcher => "switcher",
             Knob::Period => "period",
         }
@@ -509,7 +562,8 @@ impl Knob {
             | Knob::Brightness
             | Knob::Contrast
             | Knob::Temperature
-            | Knob::Sharpness => Node::Monitor,
+            | Knob::Sharpness
+            | Knob::FrameRate => Node::Monitor,
             Knob::Switcher | Knob::Period => Node::Switcher,
         }
     }
@@ -548,6 +602,7 @@ impl Knob {
             // the travel is fivefold on it every pass; past that the loop
             // shows its grain and nothing else.
             Knob::Sharpness => Limit::Clamp(0.0, 2.0),
+            Knob::FrameRate => Limit::Whole(Rate::ALL.len() as u32 - 1),
             Knob::Period => Limit::Whole(crate::rig::MAX_PERIOD),
             // A crossfade stands between its two inputs and nowhere else.
             Knob::Switcher => Limit::Clamp(0.0, 1.0),
@@ -570,10 +625,11 @@ impl<'de> Deserialize<'de> for Knob {
 
 impl Params {
     /// How many frames of every monitor the bank keeps as a ring: the one a
-    /// pass is drawing, the one every camera reads, and one more per frame
-    /// of the graph's reach.
+    /// pass is drawing, the one every camera reads, one more per frame of
+    /// the graph's reach, and one more per frame the slowest router output
+    /// holds — bought at load, so turning a frame rate grows nothing.
     pub fn history(&self) -> usize {
-        2 + self.delay as usize
+        2 + self.delay as usize + Rate::SLOWEST.longest_hold() as usize
     }
 
     /// How camera `c`'s view is magnified and turned, which is where the
@@ -620,6 +676,7 @@ impl Params {
             Knob::Contrast => mon.colour.contrast,
             Knob::Temperature => mon.colour.temperature,
             Knob::Sharpness => mon.sharpness,
+            Knob::FrameRate => Rate::ALL.iter().position(|r| *r == mon.rate).unwrap() as f32,
             Knob::Period => self.rig.periods[focus.switcher] as f32,
             Knob::Switcher => self.rig.switchers[focus.switcher],
         }
@@ -636,10 +693,15 @@ impl Params {
     fn place(&mut self, knob: Knob, value: f32, focus: Focus) {
         match knob.limit(self) {
             Limit::Whole(most) => {
-                let count = self
-                    .whole_mut(knob, focus)
-                    .expect("a knob with a whole limit reads a count");
-                *count = value.round().clamp(0.0, most as f32) as u32;
+                let count = value.round().clamp(0.0, most as f32) as u32;
+                match knob {
+                    Knob::Delay => self.cameras[focus.camera].delay = count,
+                    Knob::Period => self.rig.periods[focus.switcher] = count,
+                    Knob::FrameRate => {
+                        self.monitors[focus.monitor].rate = Rate::ALL[count as usize]
+                    }
+                    _ => unreachable!("a knob with a whole limit reads a count"),
+                }
             }
             Limit::Clamp(low, high) | Limit::Ratio(low, high) => {
                 *self.knob_mut(knob, focus) = value.clamp(low, high);
@@ -647,14 +709,6 @@ impl Params {
             Limit::Wrap => {
                 *self.knob_mut(knob, focus) = wrap_pi(value);
             }
-        }
-    }
-
-    fn whole_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut u32> {
-        match knob {
-            Knob::Delay => Some(&mut self.cameras[focus.camera].delay),
-            Knob::Period => Some(&mut self.rig.periods[focus.switcher]),
-            _ => None,
         }
     }
 
@@ -670,7 +724,9 @@ impl Params {
             Knob::Temperature => &mut self.monitors[focus.monitor].colour.temperature,
             Knob::Sharpness => &mut self.monitors[focus.monitor].sharpness,
             Knob::Switcher => &mut self.rig.switchers[focus.switcher],
-            Knob::Delay | Knob::Period => unreachable!("nudge() rounds a count to whole steps"),
+            Knob::Delay | Knob::Period | Knob::FrameRate => {
+                unreachable!("nudge() rounds a count to whole steps")
+            }
         }
     }
 
@@ -682,7 +738,7 @@ impl Params {
         format!(
             "cam {}/{}: zoom {:.3}  rot {:+.3}  delay {}/{}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             temp {:+.1}  sharp {:.3}  flip {:?}  {}  shows {:.3} of cam {}\n\
+             temp {:+.1}  sharp {:.3}  flip {:?}  {} fps  {}  shows {:.3} of cam {}\n\
              sw {}/{}: switcher {:.3}  period {}",
             focus.camera + 1,
             self.cameras.len(),
@@ -699,6 +755,7 @@ impl Params {
             mon.colour.temperature,
             mon.sharpness,
             mon.flip,
+            mon.rate.fps(),
             match self.rig.on_program(focus.monitor) {
                 true => "program",
                 false => "direct",
@@ -746,9 +803,53 @@ mod tests {
     /// nothing else, so a fraction of one is a turn it rounds away.
     fn step_for(knob: Knob, step: f32) -> f32 {
         match knob {
-            Knob::Delay | Knob::Period => step.signum(),
+            Knob::Delay | Knob::Period | Knob::FrameRate => step.signum(),
             _ => step,
         }
+    }
+
+    #[test]
+    fn a_rate_holds_the_film_cadence_and_refreshes_its_fps_times_a_second() {
+        let holds = |rate: Rate| {
+            (0..Rate::FULL as i64)
+                .map(|f| rate.hold(f))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(holds(Rate::Film)[..10], [0, 1, 2, 0, 1, 0, 1, 2, 0, 1]);
+        assert_eq!(holds(Rate::Half)[..4], [0, 1, 0, 1]);
+        assert!(holds(Rate::Full).iter().all(|h| *h == 0));
+        for rate in Rate::ALL {
+            let holds = holds(rate);
+            let refreshes = holds.iter().filter(|h| **h == 0).count();
+            assert_eq!(refreshes as u32, rate.fps(), "{rate:?}");
+            for (f, pair) in holds.windows(2).enumerate() {
+                assert!(pair[1] == 0 || pair[1] == pair[0] + 1, "{rate:?} at {f}");
+            }
+            assert_eq!(
+                *holds.iter().max().unwrap(),
+                rate.longest_hold(),
+                "{rate:?}"
+            );
+            assert!(rate.longest_hold() <= Rate::SLOWEST.longest_hold());
+            assert_eq!(rate.hold(-1), rate.hold(Rate::FULL as i64 - 1), "{rate:?}");
+        }
+    }
+
+    #[test]
+    fn the_frame_rate_knob_steps_through_the_rates_and_stops_at_the_slowest() {
+        let mut params = p();
+        let focus = Focus::default();
+        assert_eq!(params.monitors[0].rate, Rate::Full);
+        nudge(&mut params, Knob::FrameRate, 1.0);
+        assert_eq!(params.monitors[0].rate, Rate::Half);
+        nudge(&mut params, Knob::FrameRate, 1.0);
+        assert_eq!(params.monitors[0].rate, Rate::Film);
+        nudge(&mut params, Knob::FrameRate, 1.0);
+        assert_eq!(params.monitors[0].rate, Rate::Film);
+        assert_eq!(params.knob(Knob::FrameRate, focus), 2.0);
+        assert!(params.monitors[1..].iter().all(|m| m.rate == Rate::Full));
+        nudge(&mut params, Knob::FrameRate, -3.0);
+        assert_eq!(params.monitors[0].rate, Rate::Full);
     }
 
     #[test]
@@ -883,19 +984,6 @@ mod tests {
     }
 
     #[test]
-    fn a_whole_limit_is_the_one_on_a_knob_whose_field_is_a_count() {
-        let mut params = Params::default();
-        for knob in Knob::ALL {
-            assert_eq!(
-                matches!(knob.limit(&params), Limit::Whole(_)),
-                params.whole_mut(knob, Focus::default()).is_some(),
-                "{}",
-                knob.name()
-            );
-        }
-    }
-
-    #[test]
     fn a_knob_follows_its_own_side_of_the_graph() {
         // Two cameras and two monitors: a camera knob nudged at focus (1, 0)
         // lands on camera 1 and nowhere else, and a monitor knob on monitor 0.
@@ -1007,7 +1095,7 @@ mod tests {
     /// the constant [`identity_graph`] is built from. Read off the same
     /// constant the code reads and a knob wired to the wrong field would
     /// agree with itself: this table is the independent word.
-    const IDENTITIES: [(Knob, f32); 11] = [
+    const IDENTITIES: [(Knob, f32); 12] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
         (Knob::Delay, 0.0),
@@ -1017,6 +1105,7 @@ mod tests {
         (Knob::Contrast, 1.0),
         (Knob::Temperature, 0.0),
         (Knob::Sharpness, 0.0),
+        (Knob::FrameRate, 0.0),
         // A crossfade has no setting that leaves the light alone, so its
         // identity is the end of its travel it starts at — see
         // [`identity_graph`].
@@ -1471,6 +1560,7 @@ mod tests {
             // A count has no field below zero to poison.
             let pasts = match knob {
                 Knob::Delay | Knob::Period => vec![high + 1.0],
+                Knob::FrameRate => vec![],
                 _ => vec![low - 1.0, high + 1.0],
             };
             for past in pasts {
@@ -1478,6 +1568,7 @@ mod tests {
                 match knob {
                     Knob::Delay => params.cameras[focus.camera].delay = past as u32,
                     Knob::Period => params.rig.periods[focus.switcher] = past as u32,
+                    Knob::FrameRate => unreachable!("a rate is one of three and cannot be past"),
                     _ => *params.knob_mut(knob, focus) = past,
                 }
                 let why = crate::config::validate(&params)

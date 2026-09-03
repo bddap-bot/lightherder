@@ -13,7 +13,7 @@ use lightherder::affine::Framing;
 use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
-use lightherder::params::{Camera, Colour, Key, Monitor, Params, Plug};
+use lightherder::params::{Camera, Colour, Key, Monitor, Params, Plug, Rate};
 use lightherder::present::{Present, View};
 use lightherder::rig::{Rig, Select, MONITORS};
 
@@ -1047,6 +1047,7 @@ fn silent_monitor() -> Monitor {
     Monitor {
         colour: Colour::NEUTRAL,
         flip: [false; 2],
+        rate: Rate::Full,
         sharpness: 0.0,
     }
 }
@@ -2284,4 +2285,72 @@ fn sharpness_steepens_a_step_both_ways_and_reaches_one_texel() {
         sharp.pixels, rest.pixels,
         "the mask found detail in a flat field"
     );
+}
+
+#[test]
+fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
+    // A one-pass flash on monitor 3 on frame `flash`, with monitor 3's
+    // router output at `rate`, and camera A on it drawing to monitor 1 with
+    // `delay` frames on its cable. Monitor 3 shows the flash for as long as
+    // its output holds that frame, and monitor 1 lights on exactly the
+    // passes on which the camera, that many frames late, sees it — the
+    // passes `Rate::hold` names, which the lib tests pin to the film
+    // cadence. Every lit frame on monitor 1 is byte for byte the full-rate
+    // undelayed one: a hold moves when a frame changes, never what it is.
+    // The flash lands on frames 0 and 3 so both lengths of the film cadence
+    // (three, then two) are crossed, and the delay reaches 3 so a held
+    // frame is read from past the ring's newest slabs.
+    let flashing = |delay: u32, rate: Rate| {
+        let mut p = blank();
+        p.cameras[0].delay = delay;
+        p.cameras[0].look = one_hot(SEEDED);
+        p.monitors[SEEDED].rate = rate;
+        p.delay = 3;
+        p
+    };
+    let mut full: Vec<Vec<u8>> = Vec::new();
+    for flash in [0u64, 3] {
+        for delay in [0u32, 3] {
+            for rate in Rate::ALL {
+                let mut p = flashing(delay, rate);
+                let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+                    return;
+                };
+                let held = |frame: u64| frame - rate.hold(frame as i64) as u64 == flash;
+                let last = flash + delay as u64 + Rate::SLOWEST.longest_hold() as u64 + 3;
+                for pass in 0..=last {
+                    if pass == flash {
+                        seeding(&mut p);
+                    } else {
+                        seeded_no_more(&mut p);
+                    }
+                    h.step_graph(&p);
+                    h.present(Some(SEEDED));
+                    let shows = h.read().brightest() > 200.0;
+                    assert_eq!(
+                        shows,
+                        held(pass),
+                        "{rate:?} flash {flash}: monitor 3 on pass {pass}"
+                    );
+                    h.present(Some(0));
+                    let img = h.read();
+                    let seen = pass as i64 - 1 - delay as i64;
+                    let lit = seen >= 0 && held(seen as u64);
+                    assert_eq!(
+                        img.brightest() > 200.0,
+                        lit,
+                        "{rate:?} flash {flash} delay {delay}: monitor 1 on pass {pass}"
+                    );
+                    if rate == Rate::Full && delay == 0 && flash == 0 {
+                        full.push(img.pixels);
+                    } else if lit {
+                        assert_eq!(
+                            img.pixels, full[1],
+                            "{rate:?} flash {flash} delay {delay}: pass {pass} is not the full-rate frame"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
