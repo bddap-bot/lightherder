@@ -16,7 +16,7 @@ use web_time::Instant;
 
 use crate::feedback::Feedback;
 use crate::overlay::Overlay;
-use crate::present::Present;
+use crate::present::{Present, View};
 use crate::tempo::Tempo;
 
 /// The most a capture is. A 4K display read back frame by frame is a
@@ -184,7 +184,7 @@ impl Capture {
         queue: &wgpu::Queue,
         present: &Present,
         monitors: &Feedback,
-        solo: Option<usize>,
+        view: View,
         overlay: Option<&Overlay>,
     ) -> Result<(), String> {
         let due = match self.clock.as_mut() {
@@ -194,7 +194,7 @@ impl Capture {
         if due == 0 {
             return Ok(());
         }
-        present.draw(device, queue, &self.target, monitors, solo, overlay);
+        present.draw(device, queue, &self.target, monitors, view, overlay);
         self.read(device, queue)?;
         let stdin = self
             .stdin

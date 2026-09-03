@@ -525,9 +525,11 @@ since neither the resolution nor the depth alone is what went wrong.
 is not on the board it does not exist. The card prints on startup;
 the surface's cycle button shows the same panel on the glass, drawn as it is actually mapped and each
 control captioned in a couple of words. Every knob logs its new value on
-change, and the log line is the only readout there is: the focused camera,
-monitor and switcher, every knob on them, and whether that monitor is on
-program or direct.
+change, and the log line is the numeric readout: the focused camera, monitor
+and switcher, every knob on them, and whether that monitor is on program or
+direct. The glass shows one thing of the focus itself: in the tiled bank the
+focused monitor's tile is framed with a thin line, so a glance finds which
+glass the faders are on. A solo has nothing to pick out and draws none.
 
 The knobs act on the focused camera (where it stands on its shaft, and its
 delay), the focused monitor (its front panel) and the focused switcher (its

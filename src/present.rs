@@ -4,8 +4,43 @@
 
 use crate::feedback::Feedback;
 
+/// What of the bank the display shows: the whole of it tiled, with the
+/// monitor the front panel plays picked out, or one monitor alone. One value
+/// rather than a solo beside a focus, so a solo of one monitor with the mark
+/// on another cannot be asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    /// Every monitor, tiled. `focus` is the one the front panel plays, and
+    /// its tile is framed with a line so a glance finds which glass the
+    /// faders are on; `None` frames nothing, for a target that is not a
+    /// display.
+    Bank { focus: Option<usize> },
+    /// One monitor on the whole target. Nothing to pick out, so no line.
+    Solo(usize),
+}
+
+impl View {
+    fn solo(self) -> Option<usize> {
+        match self {
+            View::Solo(m) => Some(m),
+            View::Bank { .. } => None,
+        }
+    }
+}
+
 pub struct Present {
     pipeline: wgpu::RenderPipeline,
+    mark: wgpu::RenderPipeline,
+}
+
+/// The focus mark's line, in texels of a 1080-high target: it scales with
+/// the target so a 4K display shows the same line, not a hairline.
+const MARK: f32 = 2.0;
+
+/// How thick the focus mark is on a target `height` texels high — never
+/// under a texel, so a small target still shows one.
+pub fn mark_thickness(height: u32) -> f32 {
+    (MARK * height as f32 / 1080.0).max(1.0)
 }
 
 /// The tile grid for `monitors` tiles: `(columns, rows)`, as square as it
@@ -28,7 +63,16 @@ impl Present {
             None,
             "present",
         );
-        Present { pipeline }
+        let mark = crate::fullscreen_pipeline(
+            device,
+            monitor.shader(),
+            monitor.layout(),
+            "fs_mark",
+            format,
+            None,
+            "focus mark",
+        );
+        Present { pipeline, mark }
     }
 
     /// Draws each monitor into the largest centred rectangle of its grid
@@ -36,11 +80,11 @@ impl Present {
     /// stays black. Stretching instead would undo the aspect correction the
     /// sampling transform and the seed spot both go to trouble to maintain.
     ///
-    /// `solo` is one monitor on the whole target rather than the bank tiled
+    /// A solo is one monitor on the whole target rather than the bank tiled
     /// across it, which is [`tiles`] and nothing else: the same grid with
     /// one tile in it. The overlay, when shown, rides the same pass after
     /// the monitors: it is a caption over the picture, not a second way of
-    /// drawing one.
+    /// drawing one, and the focus mark is drawn the same way.
     ///
     /// The target is the texture rather than a view and a size, because a
     /// size that is not that texture's puts every viewport somewhere else
@@ -51,10 +95,14 @@ impl Present {
         queue: &wgpu::Queue,
         target: &wgpu::Texture,
         monitors: &Feedback,
-        solo: Option<usize>,
+        view: View,
         overlay: Option<&crate::overlay::Overlay>,
     ) {
-        let tiles = tiles(monitors.monitors(), solo);
+        let tiles = tiles(monitors.monitors(), view.solo());
+        let marked = match view {
+            View::Bank { focus } if tiles.len() > 1 => focus,
+            _ => None,
+        };
         let (cols, rows) = grid(tiles.len());
         let target_size = (target.width(), target.height());
         let cell = (target_size.0 / cols, target_size.1 / rows);
@@ -79,7 +127,6 @@ impl Present {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
             // Every cell is the same size, so one fit serves them all — and
             // cells too small to hold a viewport skip the lot.
             let fitted = fit(cell, monitors.aspect());
@@ -88,18 +135,22 @@ impl Present {
                     continue;
                 };
                 let (col, row) = (tile as u32 % cols, tile as u32 / cols);
-                pass.set_viewport(
-                    x + (col * cell.0) as f32,
-                    y + (row * cell.1) as f32,
-                    width,
-                    height,
-                    0.0,
-                    1.0,
-                );
+                let (x, y) = (x + (col * cell.0) as f32, y + (row * cell.1) as f32);
+                pass.set_pipeline(&self.pipeline);
+                pass.set_viewport(x, y, width, height, 0.0, 1.0);
                 // The dynamic offset picks the monitor: its uniform slot
                 // carries its own layer index for fs_present.
                 pass.set_bind_group(0, monitors.bind_group(), &[monitors.uniform_offset(m)]);
                 pass.draw(0..3, 0..1);
+                if marked == Some(m) {
+                    pass.set_pipeline(&self.mark);
+                    for (sx, sy, sw, sh) in
+                        mark_strips((x, y, width, height), mark_thickness(target_size.1))
+                    {
+                        pass.set_viewport(sx, sy, sw, sh, 0.0, 1.0);
+                        pass.draw(0..3, 0..1);
+                    }
+                }
             }
             if let Some(overlay) = overlay {
                 overlay.draw(&mut pass, target_size);
@@ -116,6 +167,25 @@ fn tiles(monitors: usize, solo: Option<usize>) -> std::ops::Range<usize> {
     solo.map_or(0..monitors, |m| m..m + 1)
 }
 
+/// The four edges of `tile`, each `line` texels deep and drawn inside it, so
+/// the mark never reaches the neighbouring tile and is never lost under one
+/// drawn later. A tile too thin to hold two lines gets none.
+pub fn mark_strips(
+    tile: (f32, f32, f32, f32),
+    line: f32,
+) -> impl Iterator<Item = (f32, f32, f32, f32)> {
+    let (x, y, w, h) = tile;
+    let fits = w >= 2.0 * line && h >= 2.0 * line;
+    [
+        (x, y, w, line),
+        (x, y + h - line, w, line),
+        (x, y, line, h),
+        (x + w - line, y, line, h),
+    ]
+    .into_iter()
+    .filter(move |_| fits)
+}
+
 /// The centred `(x, y, width, height)` of aspect `aspect` inside `target`, or
 /// `None` when the target is too small to hold a viewport at all.
 fn fit(target: (u32, u32), aspect: f32) -> Option<(f32, f32, f32, f32)> {
@@ -130,7 +200,34 @@ fn fit(target: (u32, u32), aspect: f32) -> Option<(f32, f32, f32, f32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit, grid, tiles};
+    use super::{fit, grid, mark_strips, mark_thickness, tiles};
+
+    #[test]
+    fn the_mark_lines_the_inside_of_the_tile_edges() {
+        let strips: Vec<_> = mark_strips((10.0, 20.0, 100.0, 50.0), 2.0).collect();
+        assert_eq!(
+            strips,
+            vec![
+                (10.0, 20.0, 100.0, 2.0),
+                (10.0, 68.0, 100.0, 2.0),
+                (10.0, 20.0, 2.0, 50.0),
+                (108.0, 20.0, 2.0, 50.0),
+            ]
+        );
+        // Every strip stays inside the tile: a line past its edge lands on
+        // the neighbour or outside the target, which wgpu refuses.
+        for (x, y, w, h) in strips {
+            assert!(x >= 10.0 && x + w <= 110.0 && y >= 20.0 && y + h <= 70.0);
+        }
+        assert_eq!(mark_strips((0.0, 0.0, 3.0, 50.0), 2.0).count(), 0);
+    }
+
+    #[test]
+    fn the_mark_scales_with_the_display_and_never_vanishes() {
+        assert_eq!(mark_thickness(1080), 2.0);
+        assert_eq!(mark_thickness(2160), 4.0);
+        assert_eq!(mark_thickness(128), 1.0);
+    }
 
     #[test]
     fn a_matching_target_is_filled_edge_to_edge() {

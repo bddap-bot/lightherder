@@ -14,7 +14,7 @@ use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Camera, Colour, Key, Monitor, Params, Plug};
-use lightherder::present::Present;
+use lightherder::present::{Present, View};
 use lightherder::rig::{Rig, Select};
 
 /// Where the spot this suite lights sits, in screen units — off-centre on
@@ -197,12 +197,13 @@ impl Harness {
     }
 
     fn present(&self, solo: Option<usize>) {
+        let view = solo.map_or(View::Bank { focus: None }, View::Solo);
         self.present.draw(
             self.device,
             self.queue,
             &self.target,
             &self.feedback,
-            solo,
+            view,
             None,
         );
     }
@@ -1142,6 +1143,58 @@ fn the_routing_matrix_sends_each_camera_across() {
 }
 
 #[test]
+fn the_focused_tile_is_framed_and_only_in_the_bank() {
+    // The front panel plays one monitor of five, and the tiled bank shows
+    // which by a line round its tile: the line is at the tile's very edge,
+    // on the focused tile alone, and not at all when a solo already shows
+    // one monitor and nothing else.
+    let p = blank();
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
+        return;
+    };
+    h.feedback.step(h.device, h.queue, &p);
+    let (width, height) = tiled();
+    let texel = |img: &Image, m: usize, x: u32, y: u32| {
+        let (u, v) = tile(MONITORS, m, 0.0, 0.0);
+        img.rgb_at(u + x as f32 / width as f32, v + y as f32 / height as f32)
+    };
+    let draw = |view| {
+        h.present
+            .draw(h.device, h.queue, &h.target, &h.feedback, view, None);
+        h.read()
+    };
+
+    let img = draw(View::Bank { focus: Some(1) });
+    assert_eq!(texel(&img, 1, 0, 0), [255.0; 3], "the corner is not lined");
+    assert_eq!(
+        texel(&img, 1, SIZE / 2, 0),
+        [255.0; 3],
+        "the top edge is not lined"
+    );
+    assert_eq!(
+        texel(&img, 1, SIZE - 1, SIZE - 1),
+        [255.0; 3],
+        "the far corner is not lined"
+    );
+    assert_eq!(
+        texel(&img, 1, 2, 2),
+        [0.0; 3],
+        "the line ate into the picture"
+    );
+    assert_eq!(texel(&img, 0, 0, 0), [0.0; 3], "an unfocused tile is lined");
+    assert_eq!(
+        texel(&img, 2, SIZE - 1, SIZE - 1),
+        [0.0; 3],
+        "an unfocused tile is lined"
+    );
+
+    let img = draw(View::Bank { focus: None });
+    assert_eq!(texel(&img, 1, 0, 0), [0.0; 3], "a focus-less draw is lined");
+
+    let img = draw(View::Solo(1));
+    assert_eq!(img.rgb_at(0.0, 0.0), [0.0; 3], "a solo is lined");
+}
+#[test]
 fn a_crossfade_delivers_the_fractions_it_names() {
     // Two cameras on one monitor, crossfaded 3:1. Their framings differ —
     // one holds still, one turns the picture a quarter round — so the two
@@ -1869,7 +1922,14 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
     let mut last = started;
     while started.elapsed() < std::time::Duration::from_millis(400) {
         video
-            .frame(h.device, h.queue, &h.present, &h.feedback, None, None)
+            .frame(
+                h.device,
+                h.queue,
+                &h.present,
+                &h.feedback,
+                View::Bank { focus: None },
+                None,
+            )
             .expect("a frame down the pipe");
         last = std::time::Instant::now();
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1928,7 +1988,14 @@ fn still_at(
     let mut capture =
         Capture::still(h.device, dir, size, format).expect("ffmpeg, and somewhere to write");
     capture
-        .frame(h.device, h.queue, &present, &h.feedback, None, None)
+        .frame(
+            h.device,
+            h.queue,
+            &present,
+            &h.feedback,
+            View::Bank { focus: None },
+            None,
+        )
         .expect("a frame down the pipe");
     capture.finish().expect("a still")
 }

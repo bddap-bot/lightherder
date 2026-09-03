@@ -18,7 +18,7 @@ use crate::input::Source;
 use crate::midi::{Map, Midi, Shown};
 use crate::overlay::Overlay;
 use crate::params::{Focus, Knob, Node, Params};
-use crate::present::Present;
+use crate::present::{Present, View};
 use crate::tempo::Tempo;
 
 /// Close a capture and say where it went, which is the only report a
@@ -338,7 +338,7 @@ impl Live {
     /// with no texture to give is the one way a present does nothing, and
     /// the caller counts the ones that landed so that a stale surface reads
     /// as the rate it really is.
-    fn show(&mut self, gpu: &Gpu, solo: Option<usize>, overlay: bool) -> bool {
+    fn show(&mut self, gpu: &Gpu, view: View, overlay: bool) -> bool {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -361,7 +361,7 @@ impl Live {
             &gpu.queue,
             &frame.texture,
             &self.feedback,
-            solo,
+            view,
             overlay.then_some(&self.overlay),
         );
         gpu.queue.present(frame);
@@ -413,11 +413,16 @@ impl App {
         }
     }
 
-    /// The monitor the display is showing on its own, if any. The solo keeps
-    /// no index: which monitor is the focus's business, and a second one
-    /// would be a focus that can disagree with the focus.
-    fn soloed(&self) -> Option<usize> {
-        self.solo.then_some(self.focus.monitor)
+    /// What the display shows. The solo keeps no index: which monitor is
+    /// the focus's business, and a second one would be a focus that can
+    /// disagree with the focus.
+    fn view(&self) -> View {
+        match self.solo {
+            true => View::Solo(self.focus.monitor),
+            false => View::Bank {
+                focus: Some(self.focus.monitor),
+            },
+        }
     }
 
     /// Point the knobs at another node. The one way `self.focus` moves.
@@ -607,7 +612,7 @@ impl App {
     /// and is a different size on every window. Solo and the overlay are the
     /// display's, so a capture is framed the way the display is.
     fn grab(&self, capture: &mut Capture) -> Result<(), String> {
-        let solo = self.soloed();
+        let view = self.view();
         let live = self
             .live
             .as_ref()
@@ -617,7 +622,7 @@ impl App {
             &self.gpu.queue,
             &live.present,
             &live.feedback,
-            solo,
+            view,
             self.overlay_shown.then_some(&live.overlay),
         )
     }
@@ -797,7 +802,7 @@ impl ApplicationHandler for App {
                 // Read before the window is taken, which is the whole of why
                 // it is up here: the solo is the focus's and the focus is not
                 // the window's.
-                let solo = self.soloed();
+                let view = self.view();
                 let overlay = self.overlay_shown;
                 let Some(live) = self.live.as_mut() else {
                     return;
@@ -816,7 +821,7 @@ impl ApplicationHandler for App {
                 // all, which the chain below would spin on, or stops handing
                 // them out and leaves a second per frame inside the acquire.
                 // The piece plays on through either; only the picture waits.
-                let shown = !self.covered && live.show(&self.gpu, solo, overlay);
+                let shown = !self.covered && live.show(&self.gpu, view, overlay);
                 // Under Fifo the present waits for the blank, so a frame that
                 // went out is the one thing that can ask for the next at the
                 // display's rate. One that did not paces nothing.
