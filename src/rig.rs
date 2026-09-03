@@ -6,9 +6,9 @@
 //! Every switcher on the rig is a crossfade between two feeds and a router
 //! select picks one of two, so what any monitor shows is a weighted sum of
 //! the three cameras and the seed input — which is what [`Params::routing`]
-//! and [`Params::routing_inputs`] already are. So the rig gets no mixer of
-//! its own: [`Rig::params`] multiplies the chain out and writes the products
-//! into the matrix, and from then on only the matrix exists. Switcher A and
+//! and each [`Plug::into`] already are. So the rig gets no mixer of its
+//! own: [`Rig::params`] multiplies the chain out and writes the products into
+//! the matrix, and from then on only the matrix exists. Switcher A and
 //! the four selects land on the matrix directly; switchers B, C and D reach
 //! a monitor only as products of one another, so a control on one of those would have to hold a [`Rig`] beside
 //! the matrix and re-flatten — a second state to drift, which is why none is
@@ -16,7 +16,7 @@
 
 use crate::affine::Framing;
 use crate::input::{Input, Pattern};
-use crate::params::{Camera, Character, Key, Monitor, Params};
+use crate::params::{Camera, Character, Key, Monitor, Params, Plug};
 
 /// In [`Params::cameras`] order. A and B are on the rotating, sliding shafts,
 /// one per structure; the third watches the rotating monitor alone.
@@ -193,9 +193,11 @@ impl Rig {
                 camera(Cam::Three, 0.12, [0.985; 3]),
             ],
             monitors: vec![Monitor::default(); Screen::ALL.len()],
-            inputs: vec![Input::Pattern(Pattern::Bars)],
+            inputs: vec![Plug {
+                source: Input::Pattern(Pattern::Bars),
+                into: feeds.iter().map(|feed| feed.seed).collect(),
+            }],
             routing: feeds.iter().map(|feed| feed.cameras.to_vec()).collect(),
-            routing_inputs: vec![feeds.iter().map(|feed| feed.seed).collect()],
             // Two frames, not the original's thirty: a frame of reach is a copy
             // of all five monitors, and the bank cap at 4K holds about four.
             delay: 2,
@@ -376,7 +378,7 @@ mod tests {
                 have.iter().zip(row).all(|(have, want)| close(*have, *want)),
                 "monitor {m}: {have:?} is not {row:?}"
             );
-            assert!(close(params.routing_inputs[0][m], seed), "monitor {m}");
+            assert!(close(params.inputs[0].into[m], seed), "monitor {m}");
         }
         assert_eq!(params.cameras[0].look, [0.5, 0.5, 0.0, 0.0, 0.0]);
         assert_eq!(params.cameras[1].look, [0.0, 0.0, 0.5, 0.5, 0.0]);

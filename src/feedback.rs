@@ -196,10 +196,10 @@ pub(crate) fn taps_of(
                 })
         });
     let straight_in = params
-        .routing_inputs
+        .inputs
         .iter()
         .enumerate()
-        .map(move |(i, into)| (i, into[m]))
+        .map(move |(i, plug)| (i, plug.into[m]))
         .filter(|(_, route)| *route > 0.0)
         .map(move |(i, route)| (None, shape.input(i), route));
     through_cameras.chain(straight_in)
@@ -885,7 +885,10 @@ mod tests {
         single.cameras[0].divider = 1;
         assert_eq!(layers(&single), 5);
         assert_eq!(bank_bytes(&single, (1920, 1080)), 5 * 1920 * 1080 * 8);
-        single.inputs = vec![crate::input::Input::Pattern(crate::input::Pattern::Bars)];
+        single.inputs = vec![crate::params::Plug {
+            source: crate::input::Input::Pattern(crate::input::Pattern::Bars),
+            into: vec![0.0],
+        }];
         assert_eq!(layers(&single), 6);
         assert_eq!(bank_bytes(&single, (1920, 1080)), 6 * 1920 * 1080 * 8);
     }
@@ -901,7 +904,10 @@ mod tests {
         let mut most = insanity.clone();
         most.monitors = vec![most.monitors[0].clone(); crate::config::MAX_MONITORS];
         most.inputs = vec![
-            crate::input::Input::Pattern(crate::input::Pattern::Bars);
+            crate::params::Plug {
+                source: crate::input::Input::Pattern(crate::input::Pattern::Bars),
+                into: vec![0.0; crate::config::MAX_MONITORS],
+            };
             crate::config::MAX_INPUTS
         ];
         assert_eq!(Shape::of(&most).layers(), 20);

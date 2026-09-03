@@ -375,7 +375,10 @@ fn identity_graph() -> Params {
         // An input, so the send has a crosspoint to read its identity out of
         // rather than agreeing with the absent-crosspoint reading by
         // coincidence. Its kind does not matter — nothing opens this graph.
-        inputs: vec![Input::Pattern(crate::input::Pattern::Bars)],
+        inputs: vec![Plug {
+            source: Input::Pattern(crate::input::Pattern::Bars),
+            into: vec![0.0],
+        }],
         // Zero, where every other identity here is the value that leaves
         // the light alone. A crosspoint has no such value: it is not a stage
         // the light passes through but a weight in a sum, and its row is the
@@ -387,7 +390,6 @@ fn identity_graph() -> Params {
         // it back, which is the error that corrects itself. The send is the
         // same weight and gets the same reading.
         routing: vec![vec![0.0]],
-        routing_inputs: vec![vec![0.0]],
         delay: 0,
     }
 }
@@ -533,29 +535,13 @@ pub struct Params {
     /// patterns, video files, capture devices. Plugged into the switcher and
     /// nothing else — nothing draws to one and no camera may watch one — so
     /// it is light entering the graph, like the seed spot, rather than light
-    /// going round it. `routing_inputs` is where each one lands.
+    /// going round it. Each carries its own weight onto every monitor.
     #[serde(default)]
-    pub inputs: Vec<Input>,
+    pub inputs: Vec<Plug>,
     /// The routing matrix: `routing[m][c]` is how much of camera `c`'s output
     /// monitor `m` displays. A permutation matrix is a plain switcher; rows
     /// with several non-zero entries mix cameras on one monitor.
     pub routing: Vec<Vec<f32>>,
-    /// The other half of the same switcher: `routing_inputs[i][m]` is how
-    /// much of input `i` monitor `m` shows. This is the whole of how outside
-    /// light reaches the graph, and the level it enters at.
-    ///
-    /// Counted against its own kind rather than added as columns of
-    /// `routing`, for the reason a camera's `look` is: a list that no longer
-    /// matches its own kind is a refusal, where one shared index space would
-    /// let a camera added to a graph quietly take over an input's weight.
-    ///
-    /// A row per *input* over the monitors, where `routing` is a row per
-    /// monitor over the cameras. The count that disappears when a graph has
-    /// no inputs is the one that had better be the row count: a graph
-    /// without them writes `[]` rather than a rack of empty rows, and there
-    /// is no empty-means-nothing case for a loader to get wrong.
-    #[serde(default)]
-    pub routing_inputs: Vec<Vec<f32>>,
     /// The frame delay units' reach: how many frames a camera's `delay` may
     /// be dialled up to, and so how deep a ring of the monitors the bank
     /// keeps. Bought at load, since a frame of it is another copy of every
@@ -563,6 +549,19 @@ pub struct Params {
     /// no delay unit, and no delay knob.
     #[serde(default)]
     pub delay: u32,
+}
+
+/// One input plugged into the switcher: the source, and the switcher's other
+/// half for it — `into[m]` is how much of it monitor `m` shows, the whole of
+/// how outside light reaches the graph and the level it enters at. On the
+/// input rather than as columns of [`Params::routing`], for the reason a
+/// camera's `look` is: one shared index space would let a camera added to
+/// a graph quietly take over an input's weight.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Plug {
+    pub source: Input,
+    pub into: Vec<f32>,
 }
 
 impl Default for Params {
@@ -1101,15 +1100,15 @@ impl Params {
         Crosspoints {
             monitor,
             cameras: self.routing[monitor].clone(),
-            inputs: self.routing_inputs.iter().map(|row| row[monitor]).collect(),
+            inputs: self.inputs.iter().map(|plug| plug.into[monitor]).collect(),
         }
     }
 
     /// Put a column back where [`Params::cut`] took it from.
     pub fn restore(&mut self, points: &Crosspoints) {
         self.routing[points.monitor].clone_from(&points.cameras);
-        for (row, level) in self.routing_inputs.iter_mut().zip(&points.inputs) {
-            row[points.monitor] = *level;
+        for (plug, level) in self.inputs.iter_mut().zip(&points.inputs) {
+            plug.into[points.monitor] = *level;
         }
     }
 
@@ -1182,7 +1181,7 @@ impl Params {
             Knob::Headroom => mon.headroom,
             Knob::Period => mon.period as f32,
             Knob::Route => self.routing[focus.monitor][focus.camera],
-            Knob::Send => self.routing_inputs[focus.input][focus.monitor],
+            Knob::Send => self.inputs[focus.input].into[focus.monitor],
         }
     }
 
@@ -1262,7 +1261,7 @@ impl Params {
             Knob::Sharpness => &mut self.monitors[focus.monitor].sharpness,
             Knob::Headroom => &mut self.monitors[focus.monitor].headroom,
             Knob::Route => &mut self.routing[focus.monitor][focus.camera],
-            Knob::Send => &mut self.routing_inputs[focus.input][focus.monitor],
+            Knob::Send => &mut self.inputs[focus.input].into[focus.monitor],
             Knob::Gain => unreachable!("nudge() splits Gain into its channels"),
             Knob::Delay | Knob::Period => unreachable!("nudge() rounds a count to whole steps"),
         }
@@ -1361,8 +1360,10 @@ mod tests {
     /// it.
     fn p() -> Params {
         let params = Params {
-            inputs: vec![Input::Pattern(crate::input::Pattern::Bars)],
-            routing_inputs: vec![vec![0.5]],
+            inputs: vec![Plug {
+                source: Input::Pattern(crate::input::Pattern::Bars),
+                into: vec![0.5],
+            }],
             delay: 4,
             ..Params::default()
         };
@@ -1680,7 +1681,8 @@ mod tests {
 
         let mut three = crate::config::external();
         three.inputs = vec![three.inputs[0].clone(); 3];
-        three.routing_inputs = vec![vec![0.014], vec![0.0], vec![0.0]];
+        three.inputs[1].into = vec![0.0];
+        three.inputs[2].into = vec![0.0];
         assert!(three.describe(Focus::default()).contains("input 1/3"));
     }
 
@@ -2170,8 +2172,10 @@ mod tests {
             // where there is one, and a knob with no field is a knob this
             // walk cannot tell a mis-wired reader from.
             let mut params = crate::config::crossed();
-            params.inputs = vec![Input::Pattern(crate::input::Pattern::Bars)];
-            params.routing_inputs = vec![vec![0.0, 0.5]];
+            params.inputs = vec![Plug {
+                source: Input::Pattern(crate::input::Pattern::Bars),
+                into: vec![0.0, 0.5],
+            }];
             params.delay = 4;
             let focus = Focus {
                 camera: 1,
@@ -2338,8 +2342,10 @@ mod tests {
                 // field on this walk like every other knob; without one it
                 // would be the one knob whose refusal nothing here reads.
                 let mut params = crate::config::insanity();
-                params.inputs = vec![Input::Pattern(crate::input::Pattern::Bars)];
-                params.routing_inputs = vec![vec![0.0; params.monitors.len()]];
+                params.inputs = vec![Plug {
+                    source: Input::Pattern(crate::input::Pattern::Bars),
+                    into: vec![0.0; params.monitors.len()],
+                }];
                 match knob {
                     Knob::Delay => params.cameras[focus.camera].delay = past as u32,
                     Knob::Period => params.monitors[focus.monitor].period = past as u32,

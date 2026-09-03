@@ -13,7 +13,7 @@ use lightherder::affine::Framing;
 use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
-use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params, Seed};
+use lightherder::params::{Camera, Character, Colour, Key, Monitor, Params, Plug, Seed};
 use lightherder::present::Present;
 
 /// The bootstrap stage's one-camera-one-monitor params, kept as this suite's
@@ -66,7 +66,6 @@ fn graph(s: &Single) -> Params {
         }],
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
-        routing_inputs: Vec::new(),
         delay: 0,
     }
 }
@@ -1181,6 +1180,13 @@ fn silent_monitor() -> Monitor {
     }
 }
 
+fn bars(into: Vec<f32>) -> Plug {
+    Plug {
+        source: Input::Pattern(Pattern::Bars),
+        into,
+    }
+}
+
 #[test]
 fn the_routing_matrix_sends_each_camera_across() {
     // The crossed two-structure wiring, distilled: camera j is aimed straight
@@ -1198,7 +1204,6 @@ fn the_routing_matrix_sends_each_camera_across() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
-        routing_inputs: Vec::new(),
         delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
@@ -1270,7 +1275,6 @@ fn mix_weights_scale_each_camera_s_contribution() {
         }],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 0.0]],
-        routing_inputs: Vec::new(),
         delay: 0,
     };
     h.step_graph(&p);
@@ -1310,7 +1314,6 @@ fn a_beam_splitter_blends_two_monitors_into_one_camera() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![1.0], vec![0.0]],
-        routing_inputs: Vec::new(),
         delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
@@ -1352,7 +1355,6 @@ fn insanity_mode_composes_every_monitor_from_one_seed() {
             .collect(),
         inputs: Vec::new(),
         routing: vec![vec![0.25; 4]; 4],
-        routing_inputs: Vec::new(),
         delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
@@ -1396,7 +1398,6 @@ fn a_solo_puts_one_monitor_on_the_whole_target() {
             .collect(),
         inputs: Vec::new(),
         routing: vec![vec![0.0; 4]; 4],
-        routing_inputs: Vec::new(),
         delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE * 2), &p) else {
@@ -1726,7 +1727,6 @@ fn each_camera_carries_its_own_character() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
-        routing_inputs: Vec::new(),
         delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
@@ -1842,8 +1842,8 @@ fn the_grain_is_monochrome_and_signed() {
 /// shipped patterns are still, so one delivery is the whole of it; a moving
 /// source would want this every step, as the app does.
 fn feed_inputs(h: &mut Harness, params: &Params) {
-    for (i, input) in params.inputs.iter().enumerate() {
-        let frame = match input {
+    for (i, plug) in params.inputs.iter().enumerate() {
+        let frame = match &plug.source {
             // A capture device is real hardware this suite cannot demand —
             // the webcam preset names /dev/video0. Its layer gets a
             // stand-in of the scene such a preset expects, a bright subject
@@ -1853,7 +1853,7 @@ fn feed_inputs(h: &mut Harness, params: &Params) {
                 quartered_frame(h.feedback.size(), [[200; 3], [30; 3], [200; 3], [30; 3]])
             }
             _ => {
-                let mut source = pollster::block_on(Source::open(input, h.feedback.size()))
+                let mut source = pollster::block_on(Source::open(&plug.source, h.feedback.size()))
                     .unwrap_or_else(|e| panic!("input {i}: {e}"));
                 source
                     .frame()
@@ -1897,9 +1897,8 @@ fn one_input_on_one_monitor() -> Params {
     Params {
         cameras: vec![plain_camera(vec![1.0])],
         monitors: vec![silent_monitor()],
-        inputs: vec![Input::Pattern(Pattern::Bars)],
+        inputs: vec![bars(vec![1.0])],
         routing: vec![vec![0.0]],
-        routing_inputs: vec![vec![1.0]],
         delay: 0,
     }
 }
@@ -1959,9 +1958,8 @@ fn each_input_lands_on_its_own_layer() {
     let p = Params {
         cameras: vec![plain_camera(vec![0.0; 2])],
         monitors: vec![silent_monitor(), silent_monitor()],
-        inputs: vec![Input::Pattern(Pattern::Bars); 2],
+        inputs: vec![bars(one_hot(2, 0)), bars(one_hot(2, 1))],
         routing: vec![vec![0.0], vec![0.0]],
-        routing_inputs: vec![one_hot(2, 0), one_hot(2, 1)],
         delay: 0,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
@@ -2013,7 +2011,7 @@ fn the_switcher_mixes_an_input_with_a_camera_on_one_monitor() {
     // the config and the tap cannot come out the same.
     let mut p = one_input_on_one_monitor();
     p.routing = vec![vec![0.25]];
-    p.routing_inputs = vec![vec![0.75]];
+    p.inputs[0].into = vec![0.75];
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -2096,9 +2094,8 @@ fn keyed_camera_watching_a_picture(key: Key) -> Params {
             ..plain_camera(one_hot(2, 0))
         }],
         monitors: vec![silent_monitor(), silent_monitor()],
-        inputs: vec![Input::Pattern(Pattern::Bars)],
+        inputs: vec![bars(vec![1.0, 0.0])],
         routing: vec![vec![0.0], vec![1.0]],
-        routing_inputs: vec![vec![1.0, 0.0]],
         delay: 0,
     }
 }
@@ -2387,7 +2384,6 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0], vec![1.0]],
-        routing_inputs: Vec::new(),
         delay: Params::MAX_DELAY,
     };
     let mut undelayed: Option<Vec<u8>> = None;
@@ -2437,9 +2433,8 @@ fn an_input_lands_past_the_whole_ring() {
             ..plain_camera(one_hot(1, 0))
         }],
         monitors: vec![silent_monitor()],
-        inputs: vec![Input::Pattern(Pattern::Bars)],
+        inputs: vec![bars(vec![1.0])],
         routing: vec![vec![0.0]],
-        routing_inputs: vec![vec![1.0]],
         delay: 5,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
@@ -2479,7 +2474,6 @@ fn blanking_the_monitors_empties_the_whole_ring() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0], vec![1.0]],
-        routing_inputs: Vec::new(),
         delay,
     };
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE * 2, SIZE), &p) else {
@@ -2672,7 +2666,6 @@ fn a_divided_camera_holds_each_frame_for_that_many_passes() {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0], vec![1.0]],
-        routing_inputs: Vec::new(),
         delay,
     };
     let mut undelayed: Vec<Vec<u8>> = Vec::new();

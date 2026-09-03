@@ -172,9 +172,9 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     crate::halt::on_signal(event_loop.create_proxy())?;
     crate::feedback::bank_fits(&params, cli.resolution)?;
     let mut sources = Vec::with_capacity(params.inputs.len());
-    for input in &params.inputs {
-        log::info!("input: {input}");
-        sources.push(Source::open(input, cli.resolution).await?);
+    for plug in &params.inputs {
+        log::info!("input: {}", plug.source);
+        sources.push(Source::open(&plug.source, cli.resolution).await?);
     }
     // Read before the window opens, like the inputs and for the same reason:
     // a map that will not load is a terminal error, not a surface that turns
@@ -891,7 +891,7 @@ mod tests {
         let sources = params
             .inputs
             .iter()
-            .map(|input| pollster::block_on(Source::open(input, resolution)))
+            .map(|plug| pollster::block_on(Source::open(&plug.source, resolution)))
             .collect::<Result<Vec<Source>, String>>()
             .unwrap();
         Some(App {
@@ -1357,7 +1357,8 @@ mod tests {
         // cut takes the camera off and shows that input and not the first.
         let mut params = config::shaped(1, 2, 2);
         params.routing = vec![vec![1.0], vec![1.0]];
-        params.routing_inputs = vec![vec![0.25, 0.5], vec![0.0, 0.75]];
+        params.inputs[0].into = vec![0.25, 0.5];
+        params.inputs[1].into = vec![0.0, 0.75];
         let Some(mut app) = playing(params) else {
             return;
         };
@@ -1366,10 +1367,8 @@ mod tests {
         let before = app.params.clone();
         app.act(Action::Cut(Edge::Down));
         assert_eq!(app.params.routing, vec![vec![1.0], vec![0.0]]);
-        assert_eq!(
-            app.params.routing_inputs,
-            vec![vec![0.25, 0.0], vec![0.0, 1.0]]
-        );
+        assert_eq!(app.params.inputs[0].into, [0.25, 0.0]);
+        assert_eq!(app.params.inputs[1].into, [0.0, 1.0]);
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, before);
     }
@@ -1380,7 +1379,7 @@ mod tests {
         // the other monitor stay put.
         let mut params = config::shaped(2, 2, 1);
         params.routing = vec![vec![1.0, 0.0], vec![0.6, 0.1]];
-        params.routing_inputs = vec![vec![0.0, 0.3]];
+        params.inputs[0].into = vec![0.0, 0.3];
         let Some(mut app) = playing(params) else {
             return;
         };
@@ -1388,7 +1387,7 @@ mod tests {
         let before = app.params.clone();
         app.act(Action::Reverse);
         assert_eq!(app.params.routing, vec![vec![1.0, 0.0], vec![0.3, 0.1]]);
-        assert_eq!(app.params.routing_inputs, vec![vec![0.0, 0.6]]);
+        assert_eq!(app.params.inputs[0].into, [0.0, 0.6]);
         // Pressed again, it is the reverse of the reverse.
         app.act(Action::Reverse);
         assert_eq!(app.params, before);

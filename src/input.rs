@@ -3,8 +3,8 @@
 //! A monitor and an external input are the same kind of thing to the pass
 //! that samples one: a layer of the source bank. Which layer a monitor is
 //! shown comes off the switcher — the cameras by
-//! [`crate::params::Params::routing`], the inputs by
-//! [`crate::params::Params::routing_inputs`].
+//! [`crate::params::Params::routing`], the inputs each by their own
+//! [`crate::params::Plug::into`].
 //! That is the whole of this stage's model — an input is a source plugged
 //! into the switcher, so everything the switcher already does to a camera it
 //! does to this unchanged, and nothing new appears in the shader. No camera

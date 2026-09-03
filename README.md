@@ -135,9 +135,9 @@ which is where a real rig plugs it in.
 
 An input is a further layer of the same source bank, and the switcher has a
 second half addressed to those layers — `routing[m][c]` weights the cameras
-onto monitor `m`, `routing_inputs[i][m]` weights input `i` onto the same
-monitors. Two lists, each counted against its own kind, so a camera added to
-a graph cannot silently take over an input's level: a list that no longer
+onto monitor `m`, and each input carries its own `into[m]`, its weight onto
+the same monitors. Each list is counted against its own kind, so a camera
+added to a graph cannot silently take over an input's level: a list that no longer
 matches its own kind is a refusal rather than a shift. Nothing in the shader
 knows which kind of layer it sampled, and a monitor sums the two halves
 without being told which was which.
@@ -150,13 +150,12 @@ keyer are a camera's, and an input passes none.
 
 ```toml
 inputs = [
-  { pattern = "bars" },
-  { file = "clip.mp4" },                               # looped, at its own rate
-  { capture = { format = "v4l2", device = "/dev/video0" } },
+  { source = { pattern = "bars" }, into = [0.0] },
+  { source = { file = "clip.mp4" }, into = [0.5] },    # looped, at its own rate, onto the monitor at half
+  { source = { capture = { format = "v4l2", device = "/dev/video0" } }, into = [0.0] },
 ]
 cameras = [{ look = [1.0] }]                           # watches the monitor, as every camera does
 routing = [[0.98]]                                     # …and the switcher sends it back
-routing_inputs = [[0.0], [0.5], [0.0]]                 # the clip, onto that monitor, at half
 ```
 
 A file and a capture device are one implementation — an `ffmpeg` reading
@@ -544,9 +543,9 @@ its unsharp mask, 0 to 2, and 0 — the default — is the stage skipped.
 picture as a whole. `seed` is
 `{ white_blob = <brightness> }` or `"dark"`, and defaults to `"dark"` — a
 monitor lit only by what the switcher hands it. `routing[m][c]` is how much
-of camera `c` monitor `m` shows and `routing_inputs[i][m]` how much of input
-`i`, and anything omitted — framing, gain, colour, an empty switcher half — is
-neutral.
+of camera `c` monitor `m` shows and an input's `into[m]` how much of it; an
+input is always written with its `into`. Anything omitted — framing, gain,
+colour, the inputs list itself — is neutral.
 
 The `shell.nix` pins nixpkgs, puts the Vulkan loader and windowing libraries
 on `LD_LIBRARY_PATH`, which wgpu and winit open at run time, and carries the

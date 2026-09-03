@@ -6,7 +6,7 @@ use crate::affine::Framing;
 use crate::feedback::MAX_TAPS;
 use crate::input::{Input, Pattern};
 use crate::midi::ROW_BUTTONS;
-use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Node, Params, Seed, Side};
+use crate::params::{Camera, Character, Focus, Key, Knob, Monitor, Node, Params, Plug, Seed, Side};
 use crate::rig::Rig;
 
 /// More monitors than this and the uniform buffer, the present grid and the
@@ -63,9 +63,14 @@ pub(crate) fn shaped(cameras: usize, monitors: usize, inputs: usize) -> Params {
             })
             .collect(),
         monitors: (0..monitors).map(|_| Monitor::default()).collect(),
-        inputs: vec![Input::Pattern(Pattern::Bars); inputs],
+        inputs: vec![
+            Plug {
+                source: Input::Pattern(Pattern::Bars),
+                into: vec![0.0; monitors],
+            };
+            inputs
+        ],
         routing: (0..monitors).map(|_| vec![0.0; cameras]).collect(),
-        routing_inputs: (0..inputs).map(|_| vec![0.0; monitors]).collect(),
         delay: 0,
     }
 }
@@ -96,7 +101,6 @@ pub fn single() -> Params {
         }],
         inputs: Vec::new(),
         routing: vec![vec![1.0]],
-        routing_inputs: Vec::new(),
         delay: 0,
     }
 }
@@ -162,7 +166,6 @@ pub fn crossed() -> Params {
         ],
         inputs: Vec::new(),
         routing: vec![vec![0.0, 1.0], vec![1.0, 0.0]],
-        routing_inputs: Vec::new(),
         delay: 0,
     }
 }
@@ -206,7 +209,6 @@ pub fn insanity() -> Params {
             .collect(),
         inputs: Vec::new(),
         routing: vec![vec![1.0 / N as f32; N]; N],
-        routing_inputs: Vec::new(),
         delay: 0,
     }
 }
@@ -237,13 +239,15 @@ pub fn external() -> Params {
             divider: 1,
         }],
         monitors: vec![Monitor::default()],
-        inputs: vec![Input::Pattern(Pattern::Bars)],
-        // The loop camera at a full send.
-        routing: vec![vec![1.0]],
         // The bars at a trickle. The pattern arrives square on and whole,
         // since nothing frames what the switcher hands over — everything
         // that happens to it afterwards is the loop's doing.
-        routing_inputs: vec![vec![0.014]],
+        inputs: vec![Plug {
+            source: Input::Pattern(Pattern::Bars),
+            into: vec![0.014],
+        }],
+        // The loop camera at a full send.
+        routing: vec![vec![1.0]],
         delay: 0,
     }
 }
@@ -293,17 +297,19 @@ pub fn webcam() -> Params {
     Params {
         cameras: vec![looking_at_the_room, looking_at_the_loop],
         monitors: vec![Monitor::default(); 2],
-        inputs: vec![Input::Capture {
-            format: "v4l2".into(),
-            device: "/dev/video0".into(),
+        // The device onto the window, whole. Its level is the keyed camera's
+        // gain, one stage further on, so this end of it stays at full.
+        inputs: vec![Plug {
+            source: Input::Capture {
+                format: "v4l2".into(),
+                device: "/dev/video0".into(),
+            },
+            into: vec![1.0, 0.0],
         }],
         // The keyed camera and the loop camera both onto the loop's monitor,
         // and nothing onto the window: a camera routed there would put the
         // loop back in front of the lens that is watching the room.
         routing: vec![vec![0.0, 0.0], vec![1.0, 1.0]],
-        // The device onto the window, whole. Its level is the keyed camera's
-        // gain, one stage further on, so this end of it stays at full.
-        routing_inputs: vec![vec![1.0, 0.0]],
         delay: 0,
     }
 }
@@ -458,10 +464,9 @@ pub fn validate(params: &Params) -> Result<(), String> {
     }
     // The switcher's shape, before anything reads a crosspoint out of it:
     // `Params::knob` indexes `routing[monitor][camera]` directly, so a short
-    // row would panic rather than fail. Its two halves are counted against
-    // their own kinds and transposed from each other — a row per monitor
-    // over the cameras, a row per input over the monitors — which is why
-    // this is two shape checks and not one.
+    // row would panic rather than fail. An input's sends ride on the input,
+    // so their count is the input count by construction; their length is
+    // not.
     if params.routing.len() != m {
         return Err(format!(
             "routing has {} rows; needs one per monitor, {m}",
@@ -476,17 +481,11 @@ pub fn validate(params: &Params) -> Result<(), String> {
             ));
         }
     }
-    if params.routing_inputs.len() != n {
-        return Err(format!(
-            "routing_inputs has {} rows; needs one per input, {n}",
-            params.routing_inputs.len()
-        ));
-    }
-    for (i, row) in params.routing_inputs.iter().enumerate() {
-        if row.len() != m {
+    for (i, plug) in params.inputs.iter().enumerate() {
+        if plug.into.len() != m {
             return Err(format!(
-                "routing_inputs row {i} has {} entries; needs one per monitor, {m}",
-                row.len()
+                "input {i} has {} sends; needs one per monitor, {m}",
+                plug.into.len()
             ));
         }
     }
@@ -621,7 +620,7 @@ mod tests {
         // preset settles instead of blooming to white. Near 1, or the trail
         // is not worth seeing.
         //
-        // `routing` and not `routing_inputs`: an input is light entering the
+        // `routing` and not the inputs' sends: an input is light entering the
         // graph, so it belongs to what the loop is driven *by*, not to what
         // it multiplies — the seed is left out of this sum for exactly the
         // same reason. Reading the loop's own gain is naming one of the two
@@ -799,19 +798,23 @@ mod tests {
         }
     }
 
-    /// A graph carrying one of every kind of input, the switcher's input
-    /// half widened to match: `external` plus a file and a device.
+    /// `external` with its input list replaced by one of every kind, each
+    /// sent nowhere: the kinds are what its callers read, not the levels.
     fn one_of_every_input() -> Params {
         let mut params = external();
-        params.inputs = vec![
+        params.inputs = [
             Input::Pattern(Pattern::Bars),
             Input::File("clip.mp4".into()),
             Input::Capture {
                 format: "v4l2".into(),
                 device: "/dev/video0".into(),
             },
-        ];
-        params.routing_inputs.resize(3, vec![0.0]);
+        ]
+        .map(|source| Plug {
+            source,
+            into: vec![0.0],
+        })
+        .to_vec();
         params
     }
 
@@ -825,11 +828,10 @@ mod tests {
             "cameras = [{ look = [1.0] }]\n\
              monitors = [{}]\n\
              routing = [[1.0]]\n\
-             routing_inputs = [[0.0], [0.0], [0.0]]\n\
              inputs = [\n\
-             \x20 { pattern = \"bars\" },\n\
-             \x20 { file = \"clip.mp4\" },\n\
-             \x20 { capture = { format = \"v4l2\", device = \"/dev/video0\" } },\n\
+             \x20 { source = { pattern = \"bars\" }, into = [0.0] },\n\
+             \x20 { source = { file = \"clip.mp4\" }, into = [0.0] },\n\
+             \x20 { source = { capture = { format = \"v4l2\", device = \"/dev/video0\" } }, into = [0.0] },\n\
              ]\n",
         )
         .unwrap();
@@ -854,17 +856,26 @@ mod tests {
             "refused for the wrong reason: {why}"
         );
 
-        // And a monitor added, which is the same story on the other axis: the
-        // input patch is a row per input over the monitors, so it comes out
-        // one monitor short rather than sending the new monitor whatever the
-        // old one had.
+        // And a monitor added, which is the same story on the other axis: an
+        // input's sends are one per monitor, so they come out one short
+        // rather than sending the new monitor whatever the old one had.
         let mut params = external();
         params.monitors.push(params.monitors[0].clone());
         params.routing = vec![vec![1.0]; 2];
         params.cameras[0].look = vec![1.0, 0.0];
         let why = validate(&params).unwrap_err();
         assert!(
-            why.contains("routing_inputs row 0") && why.contains("per monitor"),
+            why.contains("input 0 has") && why.contains("per monitor"),
+            "refused for the wrong reason: {why}"
+        );
+        // And a send left behind by a monitor taken away, which is not short
+        // but long: a level nothing reads is a level the loader must not
+        // quietly drop either.
+        let mut params = external();
+        params.inputs[0].into.push(0.0);
+        let why = validate(&params).unwrap_err();
+        assert!(
+            why.contains("input 0 has") && why.contains("per monitor"),
             "refused for the wrong reason: {why}"
         );
 
@@ -880,32 +891,9 @@ mod tests {
     }
 
     #[test]
-    fn a_switcher_with_the_wrong_number_of_sends_is_refused() {
-        // The row count, which is the check that keeps a send addressing a
-        // bank layer the graph has not got. An input plugged in and the
-        // patch left alone is a source nothing can reach; a row left behind
-        // by an input taken away is a tap on a layer past the end of the
-        // bank, which the sampler would quietly clamp onto a neighbour
-        // rather than fail.
-        for wrong in [
-            (|p: &mut Params| p.inputs.push(Input::Pattern(Pattern::Bars))) as fn(&mut Params),
-            |p: &mut Params| p.routing_inputs.push(vec![0.0]),
-        ] {
-            let mut params = external();
-            wrong(&mut params);
-            let why = validate(&params).unwrap_err();
-            assert!(
-                why.contains("routing_inputs has") && why.contains("per input"),
-                "refused for the wrong reason: {why}"
-            );
-        }
-    }
-
-    #[test]
     fn more_inputs_than_the_switcher_has_are_refused() {
-        let mut params = one_of_every_input();
-        params.inputs = vec![Input::Pattern(Pattern::Bars); MAX_INPUTS + 1];
-        params.routing_inputs = vec![vec![0.0]; MAX_INPUTS + 1];
+        let mut params = external();
+        params.inputs = vec![params.inputs[0].clone(); MAX_INPUTS + 1];
         let why = validate(&params).unwrap_err();
         assert!(
             why.contains("at most"),
@@ -921,7 +909,7 @@ mod tests {
         let (_, high) = Knob::Send.limit(&external()).ends();
         for level in [high + 0.1, -0.1, f32::NAN] {
             let mut params = external();
-            params.routing_inputs[0][0] = level;
+            params.inputs[0].into[0] = level;
             let why = validate(&params).unwrap_err();
             assert!(
                 why.contains("input 0's send to monitor 0"),
@@ -945,7 +933,7 @@ mod tests {
         // unity, which the doc claims lands just under the bars' own
         // brightness. A number asserted as a number would pass at ten times
         // this and paint a monitor the bars could not.
-        let settled = p.routing_inputs[0][0] / (1.0 - p.cameras[0].gain[0]);
+        let settled = p.inputs[0].into[0] / (1.0 - p.cameras[0].gain[0]);
         assert!((0.9..1.0).contains(&settled), "settles at {settled}");
     }
 
@@ -954,16 +942,18 @@ mod tests {
         let p = webcam();
         assert_eq!(
             p.inputs,
-            vec![Input::Capture {
-                format: "v4l2".into(),
-                device: "/dev/video0".into(),
+            vec![Plug {
+                source: Input::Capture {
+                    format: "v4l2".into(),
+                    device: "/dev/video0".into(),
+                },
+                into: vec![1.0, 0.0],
             }]
         );
         // The device lands whole on the window monitor, which is a window
         // and not a loop: nothing is routed to it, so what the keyed camera
         // watches is one frame of the room and not a frame of the room plus
         // whatever came back.
-        assert_eq!(p.routing_inputs, vec![vec![1.0, 0.0]]);
         assert_eq!(p.routing[0], vec![0.0, 0.0]);
 
         // The key is on the camera watching the window — a camera watching a
@@ -1050,8 +1040,7 @@ mod tests {
              \x20 colour = { hue = 0.1, saturation = 1.1, brightness = 0.02, contrast = 1.05, gamma = 1.2, temperature = 20 },\n\
              \x20 sharpness = 0.5 }]\n\
              routing = [[0.7]]\n\
-             routing_inputs = [[0.3]]\n\
-             inputs = [{ pattern = \"bars\" }]\n\
+             inputs = [{ source = { pattern = \"bars\" }, into = [0.3] }]\n\
              delay = 6\n",
         )
         .unwrap();
@@ -1089,8 +1078,13 @@ mod tests {
         assert_eq!(monitor.sharpness, 0.5);
 
         assert_eq!(params.routing, [[0.7]]);
-        assert_eq!(params.routing_inputs, [[0.3]]);
-        assert_eq!(params.inputs, [Input::Pattern(Pattern::Bars)]);
+        assert_eq!(
+            params.inputs,
+            [Plug {
+                source: Input::Pattern(Pattern::Bars),
+                into: vec![0.3],
+            }]
+        );
 
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -1208,7 +1202,7 @@ mod tests {
             for weight in all_on
                 .routing
                 .iter_mut()
-                .chain(&mut all_on.routing_inputs)
+                .chain(all_on.inputs.iter_mut().map(|plug| &mut plug.into))
                 .flatten()
             {
                 *weight = 1.0;
@@ -1232,9 +1226,14 @@ mod tests {
         // counts it all the same — the send is a knob, so a zero on disk is
         // no promise about a second later.
         let mut sent_nowhere = external();
-        sent_nowhere.routing_inputs[0][0] = 0.0;
+        sent_nowhere.inputs[0].into[0] = 0.0;
         assert_eq!(crate::feedback::taps_of(&sent_nowhere, 0, 0, 0).count(), 1);
         assert_eq!(crate::feedback::reachable_taps(&sent_nowhere), 2);
+        // And per monitor, on the one preset whose sends differ between
+        // monitors: the device is a tap on the window and none on the loop.
+        let webcam = webcam();
+        assert_eq!(crate::feedback::taps_of(&webcam, 0, 0, 0).count(), 1);
+        assert_eq!(crate::feedback::taps_of(&webcam, 1, 0, 0).count(), 2);
     }
 
     #[test]
@@ -1301,7 +1300,6 @@ mod tests {
                 .collect(),
             monitors: (0..MAX_MONITORS).map(|_| Monitor::default()).collect(),
             inputs: Vec::new(),
-            routing_inputs: Vec::new(),
             delay: 0,
             // One camera per monitor switched on: well under the bound as it
             // stands, and over it the moment a crosspoint is swept.
