@@ -787,11 +787,6 @@ impl ApplicationHandler for App {
                     live.window.request_redraw();
                 }
             }
-            // A window that loses focus is a window whose held controls all
-            // come up. A surface button still physically down is stopped
-            // with it, and starts a new recording on its next press: the
-            // alternative is a recording that outlives the hand on it.
-            WindowEvent::Focused(false) => self.stop_recording(),
             WindowEvent::Resized(size) => {
                 if let Some(live) = self.live.as_mut() {
                     live.resize(&self.gpu, size.width, size.height);
