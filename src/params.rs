@@ -247,35 +247,40 @@ fn identity_graph() -> Params {
     params
 }
 
-/// The frame rate of a router output, as a fraction of the rig's own: the
-/// rig's clock is a pass, so the tempo scales these with everything else.
+/// The frame rate of a router output, as the cadence of passes it takes a
+/// fresh frame on. A cadence rather than a rate because the rig's clock is
+/// a pass, not a second: the tempo scales these along with everything else,
+/// and `rate` in this crate is the tempo's word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Rate {
+pub enum Cadence {
     Full,
     Half,
     Film,
 }
 
-impl Rate {
-    pub const RIG_FPS: u32 = 60;
+impl Cadence {
+    /// A second of the rig's clock, in passes: what [`Cadence::fps`] is
+    /// counted against, and the period every cadence repeats in.
+    pub const SECOND: u32 = 60;
 
     /// Fastest to slowest: the order the knob turns through them.
-    pub const ALL: [Rate; 3] = [Rate::Full, Rate::Half, Rate::Film];
+    pub const ALL: [Cadence; 3] = [Cadence::Full, Cadence::Half, Cadence::Film];
 
     pub const fn fps(self) -> u32 {
         match self {
-            Rate::Full => 60,
-            Rate::Half => 30,
-            Rate::Film => 24,
+            Cadence::Full => Cadence::SECOND,
+            Cadence::Half => 30,
+            Cadence::Film => 24,
         }
     }
 
-    /// Whether an output at this rate takes a fresh frame on pass `frame`
-    /// rather than holding the one it has: where a count of `fps` a second
-    /// crosses a whole number. The pattern repeats every second.
+    /// Whether an output at this cadence takes a fresh frame on pass
+    /// `frame` rather than holding the one it has: where a count of `fps`
+    /// a second crosses a whole number.
     pub fn refreshes(self, frame: u64) -> bool {
-        let frame = (frame % Rate::RIG_FPS as u64) as u32;
-        frame == 0 || frame * self.fps() / Rate::RIG_FPS != (frame - 1) * self.fps() / Rate::RIG_FPS
+        let frame = (frame % Cadence::SECOND as u64) as u32;
+        frame == 0
+            || frame * self.fps() / Cadence::SECOND != (frame - 1) * self.fps() / Cadence::SECOND
     }
 }
 
@@ -287,7 +292,7 @@ pub struct Monitor {
     /// Whether this monitor's router output is mirrored left for right and
     /// top for bottom, in [`Axis`] order.
     pub flip: [bool; 2],
-    pub rate: Rate,
+    pub cadence: Cadence,
     /// The unsharp mask on the front panel: how much of the difference
     /// between a texel and the mean of its four neighbours is added back.
     /// Zero is the stage skipped outright, so a rested knob is exactly
@@ -300,7 +305,7 @@ impl Default for Monitor {
         Monitor {
             colour: Colour::NEUTRAL,
             flip: [false; 2],
-            rate: Rate::Full,
+            cadence: Cadence::Full,
             sharpness: 0.0,
         }
     }
@@ -435,7 +440,7 @@ pub enum Knob {
     Temperature,
     Sharpness,
     /// The frame rate of the router output feeding the focused monitor, as
-    /// a step along [`Rate::ALL`]: full rate at rest, slower up the travel.
+    /// a step along [`Cadence::ALL`]: full rate at rest, slower up the travel.
     FrameRate,
     /// How far the focused switcher stands toward its In2: 0 is In1 whole, 1
     /// is In2 whole. The routing is these four and the four selects, and
@@ -588,7 +593,7 @@ impl Knob {
             // the travel is fivefold on it every pass; past that the loop
             // shows its grain and nothing else.
             Knob::Sharpness => Limit::Clamp(0.0, 2.0),
-            Knob::FrameRate => Limit::Whole(Rate::ALL.len() as u32 - 1),
+            Knob::FrameRate => Limit::Whole(Cadence::ALL.len() as u32 - 1),
             Knob::Period => Limit::Whole(crate::rig::MAX_PERIOD),
             // A crossfade stands between its two inputs and nowhere else.
             Knob::Switcher => Limit::Clamp(0.0, 1.0),
@@ -661,7 +666,10 @@ impl Params {
             Knob::Contrast => mon.colour.contrast,
             Knob::Temperature => mon.colour.temperature,
             Knob::Sharpness => mon.sharpness,
-            Knob::FrameRate => mon.rate as u32 as f32,
+            Knob::FrameRate => Cadence::ALL
+                .iter()
+                .position(|c| *c == mon.cadence)
+                .expect("every cadence is on the ladder") as f32,
             Knob::Period => self.rig.periods[focus.switcher] as f32,
             Knob::Switcher => self.rig.switchers[focus.switcher],
         }
@@ -683,7 +691,7 @@ impl Params {
                     Knob::Delay => self.cameras[focus.camera].delay = count,
                     Knob::Period => self.rig.periods[focus.switcher] = count,
                     Knob::FrameRate => {
-                        self.monitors[focus.monitor].rate = Rate::ALL[count as usize]
+                        self.monitors[focus.monitor].cadence = Cadence::ALL[count as usize]
                     }
                     Knob::Zoom
                     | Knob::Rotation
@@ -693,9 +701,7 @@ impl Params {
                     | Knob::Contrast
                     | Knob::Temperature
                     | Knob::Sharpness
-                    | Knob::Switcher => {
-                        unreachable!("a knob with a whole limit reads a count")
-                    }
+                    | Knob::Switcher => unreachable!("only a count has a whole limit"),
                 }
             }
             Limit::Clamp(low, high) | Limit::Ratio(low, high) => {
@@ -733,7 +739,7 @@ impl Params {
         format!(
             "cam {}/{}: zoom {:.3}  rot {:+.3}  delay {}/{}\n\
              mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             temp {:+.1}  sharp {:.3}  flip {:?}  {} fps  {}  shows {:.3} of cam {}\n\
+             temp {:+.1}  sharp {:.3}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}\n\
              sw {}/{}: switcher {:.3}  period {}",
             focus.camera + 1,
             self.cameras.len(),
@@ -750,7 +756,8 @@ impl Params {
             mon.colour.temperature,
             mon.sharpness,
             mon.flip,
-            mon.rate.fps(),
+            mon.cadence.fps(),
+            Cadence::SECOND,
             match self.rig.on_program(focus.monitor) {
                 true => "program",
                 false => "direct",
@@ -805,22 +812,27 @@ mod tests {
 
     #[test]
     fn a_rate_refreshes_its_fps_times_a_second_in_the_film_cadence() {
-        let refreshes = |rate: Rate, second: u64| {
-            (0..Rate::RIG_FPS as u64)
-                .map(|f| rate.refreshes(second * Rate::RIG_FPS as u64 + f))
+        assert_eq!(Cadence::ALL.map(Cadence::fps), [60, 30, 24]);
+        let refreshes = |rate: Cadence, second: u64| {
+            (0..Cadence::SECOND as u64)
+                .map(|f| rate.refreshes(second * Cadence::SECOND as u64 + f))
                 .collect::<Vec<_>>()
         };
-        let film = refreshes(Rate::Film, 0);
+        let film = refreshes(Cadence::Film, 0);
         assert_eq!(
-            film[..10],
-            [true, false, false, true, false, true, false, false, true, false]
+            film[..14],
+            [
+                true, false, false, true, false, true, false, false, true, false, true, false,
+                false, true
+            ]
         );
-        assert_eq!(refreshes(Rate::Half, 0)[..4], [true, false, true, false]);
-        assert!(refreshes(Rate::Full, 0).iter().all(|r| *r));
-        for rate in Rate::ALL {
+        assert_eq!(refreshes(Cadence::Half, 0)[..4], [true, false, true, false]);
+        assert!(refreshes(Cadence::Full, 0).iter().all(|r| *r));
+        for rate in Cadence::ALL {
             let first = refreshes(rate, 0);
             assert_eq!(first.iter().filter(|r| **r).count() as u32, rate.fps());
-            assert_eq!(first, refreshes(rate, 7), "{rate:?} in a later second");
+            let last = u64::MAX / Cadence::SECOND as u64 - 1;
+            assert_eq!(first, refreshes(rate, last), "{rate:?} in the last second");
         }
     }
 
@@ -828,17 +840,19 @@ mod tests {
     fn the_frame_rate_knob_steps_through_the_rates_and_stops_at_the_slowest() {
         let mut params = p();
         let focus = Focus::default();
-        assert_eq!(params.monitors[0].rate, Rate::Full);
+        assert_eq!(params.monitors[0].cadence, Cadence::Full);
         nudge(&mut params, Knob::FrameRate, 1.0);
-        assert_eq!(params.monitors[0].rate, Rate::Half);
+        assert_eq!(params.monitors[0].cadence, Cadence::Half);
         nudge(&mut params, Knob::FrameRate, 1.0);
-        assert_eq!(params.monitors[0].rate, Rate::Film);
+        assert_eq!(params.monitors[0].cadence, Cadence::Film);
         nudge(&mut params, Knob::FrameRate, 1.0);
-        assert_eq!(params.monitors[0].rate, Rate::Film);
+        assert_eq!(params.monitors[0].cadence, Cadence::Film);
         assert_eq!(params.knob(Knob::FrameRate, focus), 2.0);
-        assert!(params.monitors[1..].iter().all(|m| m.rate == Rate::Full));
+        assert!(params.monitors[1..]
+            .iter()
+            .all(|m| m.cadence == Cadence::Full));
         nudge(&mut params, Knob::FrameRate, -3.0);
-        assert_eq!(params.monitors[0].rate, Rate::Full);
+        assert_eq!(params.monitors[0].cadence, Cadence::Full);
     }
 
     #[test]

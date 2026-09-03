@@ -73,9 +73,10 @@ switcher's program. One or the other, never a mix — mixing is the switcher's
 job, one stage upstream. The rotating monitor has no select, and the button is
 dead on it.
 
-The router output feeding each monitor has two settings of its own, and the
-monitor carries them: the **flip**, left for right and top for bottom, and the
-**frame rate** — 60, 30 or 24 of the rig's 60. A slower output shows each
+Past the select, the router output feeding each monitor has two settings that
+are the output's alone, and the monitor carries them: the **flip**, left for
+right and top for bottom, and the **frame rate** — 60, 30 or 24 of the rig's
+60. A slower output shows each
 frame it is handed until the next is due, so a camera on that monitor sees a
 held picture: 30 takes every other frame, and 24 holds for three frames, then
 two, then three, the cadence of film on a 60 Hz display. On the original, 24

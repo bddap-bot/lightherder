@@ -13,7 +13,7 @@ use lightherder::affine::Framing;
 use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
-use lightherder::params::{Camera, Colour, Key, Monitor, Params, Plug, Rate};
+use lightherder::params::{Cadence, Camera, Colour, Key, Monitor, Params, Plug};
 use lightherder::present::{Present, View};
 use lightherder::rig::{Rig, Select, MONITORS};
 
@@ -1047,7 +1047,7 @@ fn silent_monitor() -> Monitor {
     Monitor {
         colour: Colour::NEUTRAL,
         flip: [false; 2],
-        rate: Rate::Full,
+        cadence: Cadence::Full,
         sharpness: 0.0,
     }
 }
@@ -2292,7 +2292,7 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
     // A one-pass flash on monitor 3 on frame `flash`, with monitor 3's
     // router output at `rate`, and camera A on it drawing to monitor 1 with
     // `delay` frames on its cable. The frames an output refreshes on are
-    // written out here from the rig's cadence rather than read off `Rate`,
+    // written out here from the rig's cadence rather than read off `Cadence`,
     // so the two have to agree. Monitor 3 shows the flash from the frame it
     // lands on until the output next refreshes — and never, if it lands on
     // a frame the output is holding through. Monitor 1 lights on exactly
@@ -2300,19 +2300,19 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
     // every lit frame is byte for byte the full-rate undelayed one: a hold
     // moves when a frame changes, never what it is. Flashes on 0, 3 and 4
     // cross both lengths of the film cadence and one held-through frame.
-    let refreshes = |rate: Rate| -> Vec<u64> {
+    let refreshes = |rate: Cadence| -> Vec<u64> {
         match rate {
-            Rate::Full => (0..24).collect(),
-            Rate::Half => (0..24).step_by(2).collect(),
-            Rate::Film => vec![0, 3, 5, 8, 10, 13, 15, 18, 20, 23],
+            Cadence::Full => (0..24).collect(),
+            Cadence::Half => (0..24).step_by(2).collect(),
+            Cadence::Film => vec![0, 3, 5, 8, 10, 13, 15, 18, 20, 23],
         }
     };
-    let passes = 12u64;
-    let run = |flash: u64, delay: u32, rate: Rate| -> Option<Vec<(bool, f32, Vec<u8>)>> {
+    let passes = 14u64;
+    let run = |flash: u64, delay: u32, rate: Cadence| -> Option<Vec<(bool, f32, Vec<u8>)>> {
         let mut p = blank();
         p.cameras[0].delay = delay;
         p.cameras[0].look = one_hot(SEEDED);
-        p.monitors[SEEDED].rate = rate;
+        p.monitors[SEEDED].cadence = rate;
         p.delay = 3;
         let mut h = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p)?;
         Some(
@@ -2323,7 +2323,7 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
                     } else {
                         seeded_no_more(&mut p);
                     }
-                    h.step_graph(&p);
+                    h.feedback.step(h.device, h.queue, &p);
                     h.present(Some(SEEDED));
                     let shows = h.read().brightest() > 200.0;
                     h.present(Some(0));
@@ -2334,12 +2334,12 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
         )
     };
     for flash in [0u64, 3, 4] {
-        let Some(reference) = run(flash, 0, Rate::Full) else {
+        let Some(reference) = run(flash, 0, Cadence::Full) else {
             return;
         };
         let reference = &reference[flash as usize + 1].2;
         for delay in [0u32, 3] {
-            for rate in Rate::ALL {
+            for rate in Cadence::ALL {
                 let shown = |frame: u64| {
                     refreshes(rate)
                         .into_iter()
@@ -2347,7 +2347,7 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
                         .max()
                         .unwrap()
                 };
-                let frames = run(flash, delay, rate).unwrap();
+                let frames = run(flash, delay, rate).expect("the adapter that ran the reference");
                 for (pass, (shows, brightest, pixels)) in frames.iter().enumerate() {
                     let pass = pass as u64;
                     assert_eq!(

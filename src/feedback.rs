@@ -269,8 +269,8 @@ pub struct Feedback {
     /// The ring slab holding the newest frame — the one the present pass
     /// shows and an undelayed camera reads.
     newest: usize,
-    /// Passes drawn so far: the clock a router output's
-    /// [`crate::params::Rate`] runs on.
+    /// Passes stepped so far: the clock a router output's
+    /// [`crate::params::Cadence`] runs on.
     frame: u64,
     uniforms: wgpu::Buffer,
     /// One frame in the bank's format, reused by every
@@ -309,8 +309,6 @@ impl Feedback {
             format: MONITOR_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                // What an input's frames are written through, and what a
-                // held frame is carried forward in the ring by.
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
@@ -683,30 +681,33 @@ impl Feedback {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("step"),
         });
+        let refreshes = |m: usize| params.monitors[m].cadence.refreshes(self.frame);
+        // A router output holding its frame: the monitor's face does not
+        // change, so its last frame is carried forward in the ring as it is
+        // — a redraw would put it through the front panel again.
+        for m in (0..self.shape.monitors).filter(|m| !refreshes(*m)) {
+            let layer = |slab: usize| wgpu::TexelCopyTextureInfo {
+                texture: &self.ring,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: self.shape.monitor(slab, m) as u32,
+                },
+                aspect: wgpu::TextureAspect::All,
+            };
+            encoder.copy_texture_to_texture(
+                layer(self.newest),
+                layer(next),
+                wgpu::Extent3d {
+                    width: self.width,
+                    height: self.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         for (m, view) in self.layer_views[next].iter().enumerate() {
-            // A router output holding its frame: the monitor's face does not
-            // change, so its last frame is carried forward in the ring as it
-            // is — a redraw would put it through the front panel again.
-            if !params.monitors[m].rate.refreshes(self.frame) {
-                let layer = |slab: usize| wgpu::TexelCopyTextureInfo {
-                    texture: &self.ring,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: 0,
-                        y: 0,
-                        z: self.shape.monitor(slab, m) as u32,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                };
-                encoder.copy_texture_to_texture(
-                    layer(self.newest),
-                    layer(next),
-                    wgpu::Extent3d {
-                        width: self.width,
-                        height: self.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
+            if !refreshes(m) {
                 continue;
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
