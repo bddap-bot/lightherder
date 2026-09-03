@@ -402,12 +402,11 @@ able to.
 | `--windowed` | a window rather than the whole display |
 | `--resolution 3840x2160` | how big every monitor is (default 1920x1080) |
 | `--rate 30` | passes a second, the speed the piece plays at (default 60, 1 to 240) |
-| `--cheatsheet` | the surface as it is mapped, and exit |
 | `--bench` | what a frame costs, off screen, and exit |
 
 Through `cargo run` they need the `--` above, which is cargo's and not this
 program's; a built binary takes them directly. Two of them at once — `--bench
---cheatsheet` — is refused rather than answered silently with one, and a rate
+--help` — is refused rather than answered silently with one, and a rate
 outside the range is refused rather than clamped: a performer who typed 6000
 meant something, and playing 240 instead answers neither the number nor the
 mistake behind it.
@@ -523,9 +522,8 @@ since neither the resolution nor the depth alone is what went wrong.
 ## Playing it
 
 **The control surface is the instrument.** There is no keyboard: if a control
-is not on the board it does not exist. The card prints on startup and
-`--cheatsheet` prints it without starting anything; the surface's cycle button
-toggles the same panel on the glass, drawn as it is actually mapped and each
+is not on the board it does not exist. The card prints on startup;
+the surface's cycle button shows the same panel on the glass, drawn as it is actually mapped and each
 control captioned in a couple of words. Every knob logs its new value on
 change, and the log line is the only readout there is: the focused camera,
 monitor and switcher, every knob on them, and whether that monitor is on

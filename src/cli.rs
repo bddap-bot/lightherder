@@ -26,8 +26,6 @@ pub const MAX_RESOLUTION: u32 = 7680;
 pub enum Mode {
     /// Open a window and play.
     Play,
-    /// Print the surface as it is actually mapped, and exit.
-    Cheatsheet,
     /// Step the graph off screen, as fast as the GPU will take it, and report
     /// what a frame costs. The only way to see how much of a pass is spare: on
     /// a display the loop is paced by the tempo, so a window reports the rate
@@ -69,7 +67,6 @@ pub fn usage() -> String {
          \x20 --rate HZ           passes a second, the speed the piece plays at\n\
          \x20                     (default {}, {} to {}; the surface's track\n\
          \x20                     pair moves it from there)\n\
-         \x20 --cheatsheet        print the controls and exit\n\
          \x20 --bench             time {} frames off screen and exit\n\
          \x20 --help              this\n",
         DEFAULT_RESOLUTION.0,
@@ -91,10 +88,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--windowed" => cli.fullscreen = false,
-            // One mode a run, for the reason a second graph is refused below:
-            // last-flag-wins on `--bench --cheatsheet` is a typo answered by
-            // doing one of the two things silently.
-            "--cheatsheet" => mode(&mut cli.mode, Mode::Cheatsheet)?,
             "--bench" => mode(&mut cli.mode, Mode::Bench)?,
             "--help" | "-h" => mode(&mut cli.mode, Mode::Usage)?,
             // Both spellings, because a flag with a value is written with a
@@ -198,10 +191,6 @@ mod tests {
     fn the_flags_do_what_they_say() {
         assert!(!parse_argv(&["--windowed"]).unwrap().fullscreen);
         assert_eq!(parse_argv(&["--bench"]).unwrap().mode, Mode::Bench);
-        assert_eq!(
-            parse_argv(&["--cheatsheet"]).unwrap().mode,
-            Mode::Cheatsheet
-        );
         assert_eq!(parse_argv(&["--help"]).unwrap().mode, Mode::Usage);
         // Both spellings of a flag with a value, since the usage shows one
         // and hands reach for the other.
@@ -237,9 +226,8 @@ mod tests {
     fn a_second_run_is_refused_the_same_way_a_second_graph_is() {
         // Last-flag-wins here would answer a typo by doing one of the two
         // things silently, which is the case the graphs are refused for.
-        let why = parse_argv(&["--bench", "--cheatsheet"]).unwrap_err();
-        assert!(why.contains("Bench") && why.contains("Cheatsheet"), "{why}");
-        assert!(parse_argv(&["--help", "--bench"]).is_err());
+        let why = parse_argv(&["--bench", "--help"]).unwrap_err();
+        assert!(why.contains("Bench") && why.contains("Usage"), "{why}");
         // Once each is not two: repeating one flag is not a second run.
         assert_eq!(
             parse_argv(&["--windowed", "--windowed"]).unwrap().mode,
@@ -272,13 +260,7 @@ mod tests {
     #[test]
     fn the_usage_names_every_flag_the_parser_answers_to() {
         let usage = usage();
-        for flag in [
-            "--windowed",
-            "--resolution",
-            "--rate",
-            "--cheatsheet",
-            "--bench",
-        ] {
+        for flag in ["--windowed", "--resolution", "--rate", "--bench"] {
             assert!(usage.contains(flag), "{flag} is not in the usage");
         }
     }

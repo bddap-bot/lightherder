@@ -23,19 +23,11 @@ fn play() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let params = lightherder::config::instrument();
-    // The controls are the one thing worth printing without a GPU or a
-    // display: it is the card a performer reads while setting up.
-    if cli.mode == Mode::Cheatsheet {
-        print!("{}", lightherder::cheatsheet(&params)?);
-        return Ok(());
-    }
     match cli.mode {
         Mode::Bench => Ok(pollster::block_on(lightherder::bench::run(
             &params,
             cli.resolution,
         ))?),
-        // The instrument prints its own controls once it has the map it will
-        // play, so there is one read of that file rather than two.
         _ => pollster::block_on(lightherder::app::run(params, &cli)),
     }
 }

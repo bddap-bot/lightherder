@@ -24,17 +24,6 @@ pub mod tempo;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
-/// The controls as they actually are: the control surface under whatever map
-/// is in force, which is the whole of what plays this instrument. Printed by
-/// `--cheatsheet` and on the way up, from the tables that drive the
-/// instrument rather than from a copy kept beside them. Against `params`
-/// because the select rows are as wide as the graph — the card is of the rig
-/// about to be played, not of a rig in general.
-pub fn cheatsheet(params: &params::Params) -> Result<String, String> {
-    let map = midi::Map::load(&midi::map_path(), params)?;
-    Ok(map.card())
-}
-
 /// Vulkan, Metal, DX12 and WebGPU. Deliberately not `Backends::all()`, which
 /// also brings up a GL context per instance purely to enumerate adapters.
 pub const BACKENDS: wgpu::Backends = wgpu::Backends::PRIMARY;

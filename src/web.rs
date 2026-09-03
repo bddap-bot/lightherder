@@ -58,35 +58,15 @@ fn query() -> Option<web_sys::UrlSearchParams> {
         .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
 }
 
-/// Write into an element of the page, if it is there.
-fn fill(id: &str, text: &str) {
-    if let Some(el) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id(id))
-    {
-        el.set_text_content(Some(text));
-    }
-}
-
 /// Say why nothing is going to happen, on the page rather than only in the
 /// console — a visitor whose browser has no WebGPU sees a black rectangle
 /// otherwise, and has no way to tell that from a bug. Reached from inside the
 /// run loop as well, where the alternative is the console and nothing else.
 pub(crate) fn complain(why: &str) {
     log::error!("{why}");
-    fill("why", why);
-}
-
-/// The corner legend: the tempo as the query string spells it, which is the
-/// whole of what a browser can be told here. No control surface — there is
-/// no ALSA in a page — and no keys, so the instrument plays itself.
-fn legend() -> String {
-    format!(
-        "?rate={}  ({} to {})\n",
-        crate::tempo::DEFAULT_RATE,
-        crate::tempo::MIN_RATE,
-        crate::tempo::MAX_RATE
-    )
+    if let Some(el) = document().ok().and_then(|d| d.get_element_by_id("why")) {
+        el.set_text_content(Some(why));
+    }
 }
 
 /// Called by the page as soon as the module is instantiated.
@@ -94,7 +74,6 @@ fn legend() -> String {
 pub fn start() {
     console_error_panic_hook::set_once();
     let _ = console_log::init_with_level(log::Level::Info);
-    fill("legend", &legend());
     wasm_bindgen_futures::spawn_local(async {
         let params = crate::config::instrument();
         let rate = match requested_rate() {
