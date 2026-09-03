@@ -737,6 +737,20 @@ pub enum Side {
     InputEdge,
 }
 
+impl Side {
+    /// Whether the focus's index of `node` addresses a knob on this side:
+    /// the indices a walk over the side's focuses steps, and the select
+    /// buttons that move such a knob out from under a hand.
+    pub const fn reads(self, node: Node) -> bool {
+        matches!(
+            (self, node),
+            (Side::Camera | Side::Edge, Node::Camera)
+                | (Side::Monitor | Side::Edge | Side::InputEdge, Node::Monitor)
+                | (Side::InputEdge, Node::Input)
+        )
+    }
+}
+
 /// What a knob does when it runs out of room.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Limit {
@@ -1432,6 +1446,31 @@ mod tests {
             assert_eq!(params.knob(knob, focus), knob.identity(), "{knob:?}");
         }
         assert_eq!(ratios, [Knob::Zoom, Knob::Gamma, Knob::Headroom]);
+    }
+
+    #[test]
+    fn a_side_reads_exactly_the_indices_its_knobs_are_stored_under() {
+        for knob in Knob::ALL {
+            let mut params = crate::config::shaped(2, 2, 2);
+            params.delay = 1;
+            assert!(knob.is_on(&params), "{knob:?}");
+            let at = Focus::default();
+            let before = params.knob(knob, at);
+            params.nudge(knob, 1.0, at);
+            if params.knob(knob, at) == before {
+                params.nudge(knob, -1.0, at);
+            }
+            let after = params.knob(knob, at);
+            assert_ne!(before, after, "{knob:?} did not move");
+            for node in Node::ALL {
+                let elsewhere = params.knob(knob, at.with(node, 1));
+                let want = match knob.side().reads(node) {
+                    true => before,
+                    false => after,
+                };
+                assert_eq!(elsewhere, want, "{knob:?} under {node:?}");
+            }
+        }
     }
 
     #[test]

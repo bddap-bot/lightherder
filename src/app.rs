@@ -17,7 +17,7 @@ use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::midi::{Map, Midi, Page, Shown};
 use crate::overlay::Overlay;
-use crate::params::{Crosspoints, Focus, Knob, Params};
+use crate::params::{Crosspoints, Focus, Knob, Node, Params};
 use crate::present::Present;
 use crate::tempo::Tempo;
 
@@ -433,14 +433,12 @@ impl App {
     /// which moves nothing. The readout still prints —
     /// on a one-node graph that press is the only way to ask what the knobs
     /// are on, and the log line is the only place the answer appears.
-    fn refocus(&mut self, focus: Focus) {
-        if focus != self.focus {
-            self.focus = focus;
-            // The knob the hands were on was a knob of the node they have
-            // just left; putting "the last knob turned" back on the node they
-            // landed on would reset one nobody has touched.
+    fn refocus(&mut self, node: Node, index: usize) {
+        let moved_under = |knob: Knob| knob.side().reads(node) && index != self.focus.at(node);
+        if self.last_knob.is_some_and(moved_under) {
             self.last_knob = None;
         }
+        self.focus = self.focus.with(node, index);
         log::info!("{}", self.params.describe(self.focus));
     }
 
@@ -503,7 +501,7 @@ impl App {
             // Never past the graph: the factory rows are built as wide as it
             // is, and `Map::validate` refuses a hand-written select on a node
             // the rig has not got.
-            Action::Focus(node, index) => self.refocus(self.focus.with(node, index)),
+            Action::Focus(node, index) => self.refocus(node, index),
             Action::Reset => self.reset(),
             Action::ResetLastKnob => self.reset_knob(),
             // The focused monitor's, because the seed is the monitor's: the
@@ -1214,6 +1212,31 @@ mod tests {
             app.params.knob(Knob::Gamma, app.focus),
             Knob::Gamma.identity()
         );
+    }
+
+    #[test]
+    fn a_select_on_a_node_the_last_knob_does_not_read_leaves_it_named() {
+        let Some(mut app) = playing(config::shaped(2, 2, 1)) else {
+            return;
+        };
+        turn(&mut app, Knob::Send, 0.005);
+        app.act(Action::Focus(Node::Camera, 1));
+        assert_eq!(
+            app.last_knob,
+            Some(Knob::Send),
+            "the send is not the camera's"
+        );
+        app.act(Action::Focus(Node::Input, 0));
+        assert_eq!(app.last_knob, Some(Knob::Send), "the input under the knobs");
+        app.act(Action::Focus(Node::Monitor, 1));
+        assert_eq!(app.last_knob, None, "the send is the monitor's too");
+
+        turn(&mut app, Knob::Zoom, 0.5);
+        app.act(Action::Focus(Node::Input, 0));
+        app.act(Action::Focus(Node::Monitor, 0));
+        assert_eq!(app.last_knob, Some(Knob::Zoom), "zoom reads neither");
+        app.act(Action::Focus(Node::Camera, 0));
+        assert_eq!(app.last_knob, None);
     }
 
     #[test]

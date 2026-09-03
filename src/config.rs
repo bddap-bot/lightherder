@@ -378,12 +378,15 @@ fn read(path: &std::path::Path) -> Result<Params, String> {
 /// over one rail each: they are different pairs of indices, not a matrix and
 /// an exception to it.
 fn focuses(side: Side, params: &Params) -> impl Iterator<Item = Focus> {
-    let (cameras, monitors, inputs) = match side {
-        Side::Camera => (params.cameras.len(), 1, 1),
-        Side::Monitor => (1, params.monitors.len(), 1),
-        Side::Edge => (params.cameras.len(), params.monitors.len(), 1),
-        Side::InputEdge => (1, params.monitors.len(), params.inputs.len()),
+    let count = |node| match side.reads(node) {
+        true => params.count(node),
+        false => 1,
     };
+    let (cameras, monitors, inputs) = (
+        count(Node::Camera),
+        count(Node::Monitor),
+        count(Node::Input),
+    );
     (0..cameras).flat_map(move |camera| {
         (0..monitors).flat_map(move |monitor| {
             (0..inputs).map(move |input| Focus {

@@ -639,9 +639,10 @@ A beat at sixty is 16.7 ms, so the heaviest graph that ships uses a seventh of
 one at 4K. Measured on an RTX 2080. What the numbers leave out is a frame's
 edges rather than its loop: handing the frame to the compositor, and the
 upload of a live input, which for a video file or a capture device is a
-conversion and two writes of a whole frame every frame. `webcam` is measured
-with none — `--bench` steps the graph, and a device that is not there uploads
-nothing — so its row is the passes and not the wire.
+conversion and two writes of a whole frame every frame. `--bench` opens no
+input at all — every input layer stays black, which a tap samples for what it
+would charge a picture — so `external`'s and `webcam`'s rows are the passes
+and not the wire.
 
 The bank itself is what grows: at eight bytes a texel, a ring holding every
 monitor twice plus once more per frame of the graph's delay reach and per pass of

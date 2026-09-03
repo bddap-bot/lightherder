@@ -9,9 +9,10 @@
 //! Two things it leaves out, both of them a frame's edges rather than its
 //! loop. Handing the frame to the compositor, which is not this program's
 //! work; and the upload of a live input, which for a file or a capture device
-//! is a conversion and two writes of a whole frame per input per frame. A
-//! graph whose inputs are drawn patterns — every one that ships — uploads
-//! them once and is timed whole.
+//! is a conversion and two writes of a whole frame per input per frame. No
+//! input is opened here at all: every input layer stays black, and a tap
+//! samples black for what it would charge a picture, so a graph with inputs
+//! is timed whole and its row is the passes and not the wire.
 
 use web_time::Instant;
 
