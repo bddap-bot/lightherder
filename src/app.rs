@@ -176,7 +176,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     // out to be playing the wrong knobs once there is light on the glass.
     let map_path = crate::midi::map_path();
     log::info!("surface map: {}", map_path.display());
-    let map = Map::load(&map_path, &params)?;
+    let map = Map::load(&map_path)?;
     // The controls, off the map that is about to be played rather than off a
     // second read of the same file. Fullscreen this scrolls past behind the
     // instrument; it is here for the terminal it was started from, which is
@@ -886,7 +886,7 @@ mod tests {
             initial: params.clone(),
             focus: Focus::default(),
             source,
-            midi: Midi::new(Map::nano_kontrol2(&params)).unwrap(),
+            midi: Midi::new(Map::nano_kontrol2()).unwrap(),
             params,
             last_knob: None,
             resolution,

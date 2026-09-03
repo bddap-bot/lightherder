@@ -187,7 +187,7 @@ impl Key {
 
 /// One camera in the graph: what it sees, how it frames it, and how much of
 /// the light it hands on.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     /// Per-channel gain applied to everything this camera sees: the loss down
     /// the cable and through the lens, which is what makes a loop settle
@@ -204,7 +204,7 @@ pub struct Camera {
     /// and light already going round; light from outside arrives where a
     /// switcher takes it, on [`Params::send`]. That is what makes every
     /// camera recursive by construction rather than by convention.
-    pub look: Vec<f32>,
+    pub look: [f32; crate::rig::MONITORS],
     /// The frame delay unit on this camera's cable: how many passes old the
     /// frames it hands on are, past the one pass every camera is behind by,
     /// at most the graph's reach. Zero is the cable alone. What it does to the picture is the
@@ -249,7 +249,7 @@ fn identity_graph() -> Params {
 
 /// One monitor in the graph: its front panel, and the mirror the router
 /// output puts on what it is fed.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Monitor {
     pub colour: Colour,
     /// Whether this monitor's router output is mirrored left for right and
@@ -287,8 +287,8 @@ pub struct Params {
     /// A and the rotating monitor share the first, so turning it turns both
     /// and there is nothing to keep in step.
     pub shafts: [Framing; crate::rig::SHAFTS],
-    pub cameras: Vec<Camera>,
-    pub monitors: Vec<Monitor>,
+    pub cameras: [Camera; crate::rig::CAMERAS],
+    pub monitors: [Monitor; crate::rig::MONITORS],
     /// The switchers and the router selects: the whole of the routing, and
     /// the one place it lives. What each monitor shows is worked out from
     /// this every time it is asked for, so there is no matrix to keep in
@@ -522,7 +522,7 @@ impl Knob {
     /// Read out of [`identity_graph`] rather than written here as a second
     /// table of numbers: every value it holds is already a named constant a
     /// config file defaults to, and a table beside them is a copy to keep in
-    /// step. The graph costs five small allocations, once per button press.
+    /// step.
     pub fn identity(self) -> f32 {
         identity_graph().knob(self, Focus::default())
     }
@@ -569,16 +569,6 @@ impl<'de> Deserialize<'de> for Knob {
 }
 
 impl Params {
-    /// The one walk over the three lists by kind, so a surface built from
-    /// the graph and a check run against it cannot count it two ways.
-    pub fn count(&self, node: Node) -> usize {
-        match node {
-            Node::Camera => self.cameras.len(),
-            Node::Monitor => self.monitors.len(),
-            Node::Switcher => self.rig.switchers.len(),
-        }
-    }
-
     /// How many frames of every monitor the bank keeps as a ring: the one a
     /// pass is drawing, the one every camera reads, and one more per frame
     /// of the graph's reach.

@@ -15,7 +15,7 @@ use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Camera, Colour, Key, Monitor, Params, Plug};
 use lightherder::present::{Present, View};
-use lightherder::rig::{Rig, Select};
+use lightherder::rig::{Rig, Select, MONITORS};
 
 /// Where the spot this suite lights sits, in screen units — off-centre on
 /// purpose: a radially symmetric spot at the centre is a fixed point of
@@ -67,7 +67,7 @@ fn graph(s: &Single) -> Params {
     p.rig.switchers = [0.0, 1.0, 1.0, s.seed];
     p.shafts = [s.framing; 2];
     p.cameras[2].gain = s.loop_gain;
-    p.cameras[2].look = one_hot(MONITORS, SEEDED);
+    p.cameras[2].look = one_hot(SEEDED);
     p.monitors[SEEDED].colour = s.colour;
     p
 }
@@ -1029,13 +1029,13 @@ fn tile(monitors: usize, m: usize, u: f32, v: f32) -> (f32, f32) {
     )
 }
 
-fn one_hot(len: usize, hot: usize) -> Vec<f32> {
-    let mut look = vec![0.0; len];
+fn one_hot(hot: usize) -> [f32; MONITORS] {
+    let mut look = [0.0; MONITORS];
     look[hot] = 1.0;
     look
 }
 
-fn plain_camera(look: Vec<f32>) -> Camera {
+fn plain_camera(look: [f32; MONITORS]) -> Camera {
     Camera {
         gain: [1.0; 3],
         look,
@@ -1062,16 +1062,13 @@ fn blank() -> Params {
     p.delay = 0;
     p.shafts = [Framing::identity(); 2];
     for camera in &mut p.cameras {
-        *camera = plain_camera(vec![0.0; MONITORS]);
+        *camera = plain_camera([0.0; MONITORS]);
     }
     for monitor in &mut p.monitors {
         *monitor = silent_monitor();
     }
     p
 }
-
-/// The rig's monitor count, which every graph here has.
-const MONITORS: usize = 5;
 
 /// The whole target, as the grid the bank is tiled into.
 fn tiled() -> (u32, u32) {
@@ -1093,8 +1090,8 @@ fn the_routing_matrix_sends_each_camera_across() {
     // and never sit still where it was. Camera A watches monitor 3 and camera
     // B watches monitor 1, each drawing to its own structure.
     let mut p = blank();
-    p.cameras[0].look = one_hot(MONITORS, SEEDED);
-    p.cameras[1].look = one_hot(MONITORS, 0);
+    p.cameras[0].look = one_hot(SEEDED);
+    p.cameras[1].look = one_hot(0);
     seeding(&mut p);
     let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
@@ -1215,8 +1212,8 @@ fn a_crossfade_delivers_the_fractions_it_names() {
     // on its own.
     let Some(mut h) = square() else { return };
     let mut p = blank();
-    p.cameras[0].look = one_hot(MONITORS, SEEDED);
-    p.cameras[1].look = one_hot(MONITORS, SEEDED);
+    p.cameras[0].look = one_hot(SEEDED);
+    p.cameras[1].look = one_hot(SEEDED);
     p.shafts[1].rotation = std::f32::consts::FRAC_PI_2;
     // Monitor 3 takes the whole seed; monitor 1 takes switcher A's program,
     // a quarter of the way from camera A toward camera B.
@@ -1361,7 +1358,7 @@ fn a_structure_takes_half_of_the_other_through_the_cross_link() {
     // A is blind, so what lands on structure A is exactly the light the
     // crossfade passed, and structure B keeps the whole of it.
     let mut p = blank();
-    p.cameras[1].look = one_hot(MONITORS, SEEDED);
+    p.cameras[1].look = one_hot(SEEDED);
     seeding(&mut p);
     let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
@@ -1737,7 +1734,7 @@ fn the_switcher_mixes_the_seed_with_a_camera_on_one_monitor() {
     // seed and a quarter of camera 3 — which is watching that same monitor.
     let mut p = seed_on_a_monitor();
     p.rig.switchers = [0.0, 1.0, 1.0, 0.75];
-    p.cameras[2].look = one_hot(MONITORS, SEEDED);
+    p.cameras[2].look = one_hot(SEEDED);
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1771,7 +1768,7 @@ fn the_seed_arrives_whole_however_the_cameras_are_set() {
     // camera has is live.
     const SEED_SHARE: f32 = 0.98;
     p.rig.switchers = [0.0, 1.0, 1.0, SEED_SHARE];
-    p.cameras[2].look = one_hot(MONITORS, SEEDED);
+    p.cameras[2].look = one_hot(SEEDED);
     p.shafts[0].zoom = 0.5;
     p.cameras[2].gain = [0.1; 3];
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
@@ -2048,7 +2045,7 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
         p.cameras[0].delay = delay;
         p.cameras[0].gain = [0.9; 3];
         p.shafts[0].zoom = 0.9;
-        p.cameras[0].look = one_hot(MONITORS, SEEDED);
+        p.cameras[0].look = one_hot(SEEDED);
         p.delay = Params::MAX_DELAY;
         seeding(&mut p);
         p
@@ -2123,7 +2120,7 @@ fn blanking_the_monitors_empties_the_whole_ring() {
     let delay = 4;
     let mut p = blank();
     p.cameras[0].delay = delay;
-    p.cameras[0].look = one_hot(MONITORS, SEEDED);
+    p.cameras[0].look = one_hot(SEEDED);
     p.delay = delay;
     seeding(&mut p);
     let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {

@@ -169,7 +169,7 @@ const fn cmd(name: &'static str, action: Action, what: &'static str) -> Command 
 /// most of that kind a graph may legally hold, so every name it mints is one
 /// a `midi.toml` can actually bind.
 pub fn select_names(node: Node) -> impl Iterator<Item = String> {
-    (1..=crate::config::cap(node)).map(move |i| format!("{} {i}", node.short()))
+    (1..=crate::rig::count(node)).map(move |i| format!("{} {i}", node.short()))
 }
 
 /// The one walk behind [`action_for_name`] and [`describes`], so what a name
@@ -250,7 +250,7 @@ mod tests {
                     format!("focus {} {}", node.name(), index + 1)
                 );
             }
-            assert_eq!(select_names(node).count(), crate::config::cap(node));
+            assert_eq!(select_names(node).count(), crate::rig::count(node));
         }
         // The one place the actual words are pinned: every other select test
         // builds its expectation out of `Node::short` and `Node::name`, so a

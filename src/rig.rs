@@ -11,7 +11,7 @@
 
 use crate::affine::Framing;
 use crate::input::Input;
-use crate::params::{Camera, Key, Monitor, Params, Plug};
+use crate::params::{Camera, Key, Monitor, Node, Params, Plug};
 
 /// In [`Params::cameras`] order. A and B are on the rotating, sliding shafts,
 /// one per structure; the third watches the rotating monitor alone.
@@ -110,6 +110,16 @@ pub const SWITCHERS: usize = 4;
 /// own name rather than [`SWITCHERS`], which the rig happens to have as many
 /// of.
 pub const SELECTS: usize = MONITORS - 1;
+
+/// The rig's count of `node`, by kind: how far the surface's vocabulary of
+/// selects runs.
+pub const fn count(node: Node) -> usize {
+    match node {
+        Node::Camera => CAMERAS,
+        Node::Monitor => MONITORS,
+        Node::Switcher => SWITCHERS,
+    }
+}
 
 /// The longest period, in passes: a second at the default tempo. The
 /// original's rates are unverified; a beat slower than that is a hand on the
@@ -264,7 +274,7 @@ impl Rig {
     pub fn params(&self) -> Params {
         let camera = |cam: Cam, gain: [f32; 3]| Camera {
             gain,
-            look: Screen::ALL.map(|screen| glass(cam, screen)).to_vec(),
+            look: Screen::ALL.map(|screen| glass(cam, screen)),
             delay: 0,
         };
         Params {
@@ -279,12 +289,12 @@ impl Rig {
                     rotation: 0.08,
                 },
             ],
-            cameras: vec![
+            cameras: [
                 camera(Cam::A, [0.980, 0.986, 0.992]),
                 camera(Cam::B, [0.992, 0.986, 0.980]),
                 camera(Cam::Three, [0.985; 3]),
             ],
-            monitors: vec![Monitor::default(); MONITORS],
+            monitors: [Monitor::default(); MONITORS],
             input: Plug {
                 source: Input::Capture {
                     format: "v4l2".into(),

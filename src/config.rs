@@ -1,23 +1,7 @@
 //! The instrument's graph, and everything the GPU side assumes about it.
 
-use crate::midi::ROW_BUTTONS;
 use crate::params::{Focus, Knob, Node, Params};
 use crate::rig::{self, Rig};
-
-/// The most of `node` there is — the rig's own counts, which is how far the
-/// surface's vocabulary of selects runs.
-pub const fn cap(node: Node) -> usize {
-    match node {
-        Node::Camera => rig::CAMERAS,
-        Node::Monitor => rig::MONITORS,
-        Node::Switcher => rig::SWITCHERS,
-    }
-}
-
-const _: () = assert!(
-    rig::CAMERAS <= ROW_BUTTONS && rig::MONITORS <= ROW_BUTTONS && rig::SWITCHERS <= ROW_BUTTONS,
-    "a count past the select row would name selects no button can carry"
-);
 
 /// The instrument: Blair's rig at its performance setting — see [`Rig`].
 /// There is one, and nothing chooses it.
@@ -32,9 +16,9 @@ pub fn instrument() -> Params {
 /// the ones a knob does not distinguish would be the same checks and five
 /// times the loop, once a frame. The rest stay at zero, since a knob on any
 /// other side never reads them.
-fn focuses(side: Node, params: &Params) -> impl Iterator<Item = Focus> {
+fn focuses(side: Node) -> impl Iterator<Item = Focus> {
     let count = |node| match side == node {
-        true => params.count(node),
+        true => rig::count(node),
         false => 1,
     };
     let (cameras, monitors, switchers) = (
@@ -64,14 +48,6 @@ fn focuses(side: Node, params: &Params) -> impl Iterator<Item = Focus> {
 /// because `clamp` passes it through and Reset restores the same poisoned
 /// initial.
 pub fn validate(params: &Params) -> Result<(), String> {
-    let (m, c) = (params.monitors.len(), params.cameras.len());
-    if (m, c) != (rig::MONITORS, rig::CAMERAS) {
-        return Err(format!(
-            "{c} cameras and {m} monitors; the rig is {} on {}",
-            rig::CAMERAS,
-            rig::MONITORS
-        ));
-    }
     // A splitter is not a knob — nothing on the panel turns one — so this is
     // the only place its weights are decided, and they are checked as
     // written rather than against a rail no control could hit. Monitors only:
@@ -80,12 +56,6 @@ pub fn validate(params: &Params) -> Result<(), String> {
         if let Some(g) = camera.gain.iter().find(|g| !g.is_finite() || **g < 0.0) {
             return Err(format!(
                 "camera {i}'s gain contains {g}; gains are finite and >= 0"
-            ));
-        }
-        if camera.look.len() != m {
-            return Err(format!(
-                "camera {i}'s look has {} entries; needs one per monitor, {m}",
-                camera.look.len(),
             ));
         }
         if let Some(w) = camera.look.iter().find(|w| !w.is_finite() || **w < 0.0) {
@@ -112,7 +82,7 @@ pub fn validate(params: &Params) -> Result<(), String> {
     // differ on.
     for knob in Knob::ALL {
         let (low, high) = knob.limit(params).ends();
-        for focus in focuses(knob.node(), params) {
+        for focus in focuses(knob.node()) {
             let value = params.knob(knob, focus);
             if !(low..=high).contains(&value) {
                 // Built only on the way out, so the frame-by-frame
@@ -201,21 +171,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn a_misshapen_graph_is_refused() {
-        let mut wrong_look = instrument();
-        wrong_look.cameras[0].look.pop();
-        assert!(validate(&wrong_look).is_err());
-
-        let mut short = instrument();
-        short.cameras.pop();
-        assert!(validate(&short).is_err());
-
-        let mut empty = instrument();
-        empty.monitors.clear();
-        assert!(validate(&empty).is_err());
     }
 
     #[test]

@@ -289,7 +289,6 @@ impl Feedback {
         assert!(width > 0 && height > 0, "monitors must have a size");
         let shape = Shape::of(params);
         let monitors = shape.monitors;
-        assert!(monitors > 0, "a graph with no monitors draws nothing");
         let layers = shape.layers();
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/feedback.wgsl"));

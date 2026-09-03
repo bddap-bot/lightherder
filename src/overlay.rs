@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn the_left_cluster_is_arranged_the_way_the_surface_is() {
-        let raster = rasterize(&Map::nano_kontrol2(&crate::config::instrument()));
+        let raster = rasterize(&Map::nano_kontrol2());
         // Every expectation below is in the strip's own texels, so the
         // strip's own place has to be claimed outright: it starts at the
         // panel's edge and its widest row stops short of the channel
@@ -607,7 +607,7 @@ mod tests {
 
     #[test]
     fn the_factory_panel_is_drawn_and_captioned() {
-        let raster = rasterize(&Map::nano_kontrol2(&crate::config::instrument()));
+        let raster = rasterize(&Map::nano_kontrol2());
         assert_eq!(
             (raster.width, raster.height),
             (PANEL_W as u32, PANEL_H as u32)
@@ -623,8 +623,8 @@ mod tests {
         // The rule inherited from rl's controls display: a picture that
         // drifts from the map in force is disallowed. Move one knob in the
         // map and the picture must move with it.
-        let before = rasterize(&Map::nano_kontrol2(&crate::config::instrument()));
-        let mut moved = Map::nano_kontrol2(&crate::config::instrument());
+        let before = rasterize(&Map::nano_kontrol2());
+        let mut moved = Map::nano_kontrol2();
         moved.fader[0].knob = crate::params::Knob::Sharpness;
         let moved = rasterize(&moved);
         assert!(texels_differing(&before, &moved) > 100);
@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn a_binding_off_the_panel_gets_a_line_rather_than_vanishing() {
-        let mut map = Map::nano_kontrol2(&crate::config::instrument());
+        let mut map = Map::nano_kontrol2();
         map.button.push(crate::midi::Button {
             cc: 100,
             command: "blank".into(),
@@ -643,8 +643,7 @@ mod tests {
 
     #[test]
     fn an_unknown_surface_is_listed_not_drawn() {
-        let params = crate::config::instrument();
-        let mut map = Map::nano_kontrol2(&params);
+        let mut map = Map::nano_kontrol2();
         map.device = "Launchpad".into();
         let raster = rasterize(&map);
         // A listing is one line per binding plus the device's own, and
@@ -661,7 +660,7 @@ mod tests {
         // The ceiling, on the half of the panel that is captioned by
         // a knob's name. The button half is every command's own name, held
         // to the same two words by `command::a_name_is_two_words_at_most`.
-        let map = Map::nano_kontrol2(&crate::config::instrument());
+        let map = Map::nano_kontrol2();
         for f in &map.fader {
             assert!(
                 f.knob.name().split_whitespace().count() <= 2,
@@ -728,37 +727,31 @@ mod tests {
         // The rig's three counts differ, so a row drawn from another kind's
         // would read wrong on at least one of them. Past the choice the strip
         // is bare chrome, which is what a dead button looks like.
-        {
-            let params = crate::config::instrument();
-            let raster = rasterize(&Map::nano_kontrol2(&params));
-            for node in Node::ALL {
-                let bound = match params.count(node) {
-                    0 | 1 => 0,
-                    have => have,
+        let raster = rasterize(&Map::nano_kontrol2());
+        for node in Node::ALL {
+            let bound = crate::rig::count(node);
+            for i in 0..crate::midi::ROW_BUTTONS as u8 {
+                let want = if (i as usize) < bound {
+                    selects(node, i)
+                } else {
+                    match crate::midi::row_of(node) + i {
+                        crate::midi::REVERSE => captioned(node, i, "reverse"),
+                        crate::midi::FLIP_X => captioned(node, i, "flip x"),
+                        crate::midi::FLIP_Y => captioned(node, i, "flip y"),
+                        crate::midi::SELECT => captioned(node, i, "select"),
+                        crate::midi::FINER => captioned(node, i, "precision -"),
+                        crate::midi::COARSER => captioned(node, i, "precision +"),
+                        crate::midi::CLUTCH => captioned(node, i, "clutch"),
+                        _ => asleep(node, i),
+                    }
                 };
-                for i in 0..crate::midi::ROW_BUTTONS as u8 {
-                    let want = if (i as usize) < bound {
-                        selects(node, i)
-                    } else {
-                        match crate::midi::row_of(node) + i {
-                            crate::midi::REVERSE => captioned(node, i, "reverse"),
-                            crate::midi::FLIP_X => captioned(node, i, "flip x"),
-                            crate::midi::FLIP_Y => captioned(node, i, "flip y"),
-                            crate::midi::SELECT => captioned(node, i, "select"),
-                            crate::midi::FINER => captioned(node, i, "precision -"),
-                            crate::midi::COARSER => captioned(node, i, "precision +"),
-                            crate::midi::CLUTCH => captioned(node, i, "clutch"),
-                            _ => asleep(node, i),
-                        }
-                    };
-                    assert_eq!(
-                        band(&raster.pixels, raster.width as i32, node, i),
-                        want,
-                        "{} {}",
-                        node.name(),
-                        i + 1
-                    );
-                }
+                assert_eq!(
+                    band(&raster.pixels, raster.width as i32, node, i),
+                    want,
+                    "{} {}",
+                    node.name(),
+                    i + 1
+                );
             }
         }
     }
