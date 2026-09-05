@@ -34,6 +34,8 @@ pub struct Bank {
     pub tiles: Vec<Rect>,
 }
 
+/// One fit serves every cell, so a cell too small for a viewport is no bank
+/// at all rather than a bank with holes.
 pub(crate) fn bank(target: (u32, u32), aspect: f32, count: usize) -> Option<Bank> {
     let (cols, rows) = grid(count);
     let cell = (target.0 / cols, target.1 / rows);
@@ -76,9 +78,8 @@ pub fn grid(monitors: usize) -> (u32, u32) {
     (cols, (monitors as u32).div_ceil(cols))
 }
 
-/// Tile `i` of `count` as `(column, row)`: the grid fills down before it
-/// fills across, so consecutive monitors stack — a structure's upper monitor
-/// over its lower, the way they stand on the rig.
+/// Down before across, so a structure's upper monitor stands over its lower,
+/// the way they stand on the rig.
 pub fn cell_of(count: usize, i: usize) -> (u32, u32) {
     let (_, rows) = grid(count);
     (i as u32 / rows, i as u32 % rows)
@@ -115,10 +116,11 @@ impl Present {
     /// sampling transform and the seed spot both go to trouble to maintain.
     ///
     /// A solo is one monitor on the whole target rather than the bank tiled
-    /// across it, which is [`tiles`] and nothing else: the same grid with
-    /// one tile in it. The overlay, when shown, rides the same pass after
-    /// the monitors: it is a caption over the picture, not a second way of
-    /// drawing one, and the focus mark is drawn the same way.
+    /// across it, which is [`tiles`] and no bank for the dataflow to hang
+    /// on: the same grid with one tile in it. The overlay, when shown, rides
+    /// the same pass after the monitors: it is a caption over the picture,
+    /// not a second way of drawing one, and the focus mark is drawn the same
+    /// way.
     ///
     /// The target is the texture rather than a view and a size, because a
     /// size that is not that texture's puts every viewport somewhere else

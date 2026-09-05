@@ -41,24 +41,9 @@ const SOURCE_W: i32 = 64;
 const SOURCE_H: i32 = 16;
 const SOURCES: usize = CAMERAS + 1;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Seat {
-    col: f32,
-    row: f32,
-}
-
-const SEATS: [Seat; SOURCES] = [
-    Seat { col: 0.5, row: 1.0 },
-    Seat {
-        col: 1.25,
-        row: 1.0,
-    },
-    Seat { col: 2.5, row: 1.0 },
-    Seat {
-        col: 1.75,
-        row: 1.0,
-    },
-];
+const SEAT_ROW: f32 = 1.0;
+const SEAT_COLS: [f32; SOURCES] = [0.5, 1.25, 2.5, 1.75];
+const SEAT_W: f32 = 0.3;
 
 const MAX_ARROWS: usize = 40;
 const _: () = assert!(MAX_ARROWS.is_multiple_of(4));
@@ -402,11 +387,12 @@ fn source(i: usize) -> Raster {
 
 fn seats(bank: &Bank) -> Option<[Rect; SOURCES]> {
     let size = (SOURCE_W as u32, SOURCE_H as u32);
-    let scale = scale_into(size, (bank.cell.0 * 0.3, bank.cell.1 * 0.15))?;
+    let band = bank.cell.1 - bank.tiles.first()?.h;
+    let scale = scale_into(size, (bank.cell.0 * SEAT_W, band))?;
     let (w, h) = (SOURCE_W as f32 * scale, SOURCE_H as f32 * scale);
     Some(std::array::from_fn(|i| Rect {
-        x: SEATS[i].col * bank.cell.0 - w / 2.0,
-        y: SEATS[i].row * bank.cell.1 - h / 2.0,
+        x: SEAT_COLS[i] * bank.cell.0 - w / 2.0,
+        y: SEAT_ROW * bank.cell.1 - h / 2.0,
         w,
         h,
     }))
@@ -1062,8 +1048,11 @@ mod tests {
             && p[1] <= r.y + r.h + slack
     }
 
-    fn overlaps(a: Rect, b: Rect) -> bool {
-        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    fn overlaps(a: Rect, b: Rect, slack: f32) -> bool {
+        a.x < b.x + b.w + slack
+            && b.x < a.x + a.w + slack
+            && a.y < b.y + b.h + slack
+            && b.y < a.y + a.h + slack
     }
 
     #[test]
@@ -1136,11 +1125,11 @@ mod tests {
         let boxes = seats(&bank).unwrap();
         for (i, b) in boxes.iter().enumerate() {
             for t in &bank.tiles {
-                assert!(!overlaps(*b, *t), "{} sits on a tile", source_name(i));
+                assert!(!overlaps(*b, *t, 2.0), "{} sits on a tile", source_name(i));
             }
             for (j, o) in boxes.iter().enumerate().skip(i + 1) {
                 assert!(
-                    !overlaps(*b, *o),
+                    !overlaps(*b, *o, 2.0),
                     "{} sits on {}",
                     source_name(i),
                     source_name(j)
@@ -1150,7 +1139,10 @@ mod tests {
         let arrows = arrows(params.flows(), &bank.tiles, &boxes, 2.0);
         let (length, crossings) = (length(&arrows, bank.cell.0), crossings(&arrows));
         println!("identity dataflow: {length:.2} tile widths of arrow, {crossings} crossings");
-        assert!(length < 2.5, "{length:.2} tile widths of arrow");
+        assert!(
+            length < 2.5,
+            "{length:.2} tile widths of arrow, over the 2.5 budget"
+        );
         assert_eq!(crossings, 0);
         for flow in params.flows() {
             let (source, m) = match (flow.from, flow.to) {
@@ -1159,9 +1151,8 @@ mod tests {
                 _ => continue,
             };
             let (col, _) = crate::present::cell_of(MONITORS, m);
-            assert_eq!(
-                SEATS[source].col.floor() as u32,
-                col,
+            assert!(
+                (SEAT_COLS[source] - col as f32 - 0.5).abs() < 0.5,
                 "{} is not seated in the column of monitor {}",
                 source_name(source),
                 m + 1
