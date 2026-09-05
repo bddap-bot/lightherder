@@ -2377,3 +2377,78 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
         }
     }
 }
+
+fn proof(h: &Harness, name: &str, view: View, overlay: Option<&lightherder::overlay::Overlay>) {
+    let Some(dir) = std::env::var_os("LIGHTHERDER_PROOF_DIR") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let mut capture =
+        Capture::still(h.device, &dir, h.target_size, TARGET_FORMAT).expect("a capture");
+    capture
+        .frame(h.device, h.queue, &h.present, &h.feedback, view, overlay)
+        .expect("a frame");
+    let path = capture.finish().expect("a png");
+    std::fs::rename(&path, dir.join(format!("{name}.png"))).expect("the proof's name");
+}
+
+const QUARTERS: [[u8; 3]; 4] = [
+    [255, 255, 0],
+    [0, 255, 255],
+    [255, 255, 255],
+    [255, 128, 255],
+];
+
+fn quarters_of(img: &Image, monitors: usize, m: usize) -> [[f32; 3]; 4] {
+    [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)].map(|(u, v)| {
+        let (u, v) = tile(monitors, m, u, v);
+        img.rgb_at(u, v)
+    })
+}
+
+fn assert_shows_the_seed(img: &Image, monitors: usize, m: usize, what: &str) {
+    for (have, want) in quarters_of(img, monitors, m).iter().zip(QUARTERS) {
+        for channel in 0..3 {
+            let (have, want) = (have[channel], want[channel] as f32);
+            assert!(
+                (have - want).abs() <= 8.0,
+                "{what}: monitor {m} shows {have} for {want} in channel {channel}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_startup_graph_carries_the_seed_to_the_last_pair_of_screens() {
+    let p = lightherder::config::instrument();
+    let n = p.monitors.len();
+    let monitor = (256, 144);
+    let Some(mut h) = graph_harness(monitor, (3 * monitor.0, 2 * monitor.1), &p) else {
+        return;
+    };
+    h.feedback
+        .write_seed(h.queue, &quartered_frame(monitor, QUARTERS));
+
+    h.step_graph(&p);
+    proof(&h, "startup-pass-1", View::Bank { focus: None }, None);
+    let img = h.read();
+    for m in [2, 3] {
+        assert_shows_the_seed(&img, n, m, "pass 1, the B pair");
+    }
+    for m in [0, 1, 4] {
+        let (u0, v0) = tile(n, m, 0.0, 0.0);
+        let (u1, v1) = tile(n, m, 1.0, 1.0);
+        let peak = img.brightest_in(u0, v0, u1, v1);
+        assert!(
+            peak < 8.0,
+            "pass 1: monitor {m} is lit before camera B has seen the pair: {peak}"
+        );
+    }
+
+    h.step_graph(&p);
+    proof(&h, "startup-pass-2", View::Bank { focus: None }, None);
+    let img = h.read();
+    for m in 0..n {
+        assert_shows_the_seed(&img, n, m, "pass 2, every screen");
+    }
+}
