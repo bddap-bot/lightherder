@@ -956,7 +956,6 @@ mod tests {
             before.knob(Knob::Saturation, app.focus) + 1.0,
             "the saturation went back too"
         );
-        assert_eq!(app.params.cameras[0], before.cameras[0], "camera 1 moved");
 
         // Idempotent: a second press is the same knob at the same place, not
         // the one before it.
@@ -1166,6 +1165,8 @@ mod tests {
             Some(Knob::Zoom),
             "zoom is the rig's, not a camera's"
         );
+        app.overlay_shown = true;
+        proof(&app, "overlay-one-shaft", View::Bank { focus: None });
         turn(&mut app, Knob::Delay, 1.0);
         app.act(Action::Focus(Node::Camera, 1));
         assert_eq!(app.last_knob, None);

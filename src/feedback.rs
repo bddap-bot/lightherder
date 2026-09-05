@@ -633,11 +633,11 @@ impl Feedback {
                 // every stage a camera would have takes its identity and the
                 // layer arrives as itself. Its key is the switcher's own,
                 // which is where this rig keys at all.
-                let (framing, gain, key) = match through {
+                let (sampled, gain, key) = match through {
                     Through::Camera(c) => (&framing, params.cameras[c].gain, Key::OFF),
                     Through::Seed => (&square_on, [1.0; 3], params.input.key),
                 };
-                let rows = mirror.then(framing).rows();
+                let rows = mirror.then(sampled).rows();
                 taps[count] = Tap {
                     row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
                     row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],

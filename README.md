@@ -21,7 +21,7 @@ in.
 
 A "monitor" is one layer of an offscreen `Rgba16Float` texture array. A
 "camera" is a fullscreen pass that samples a layer through an affine transform
-— the slide and the turn of the shaft the rig stands on — multiplies by a
+— the slide and the turn of the shaft it stands on — multiplies by a
 per-channel gain and writes the result back. That output is the next frame's
 input, which is the whole trick: pull the camera back a little each pass and
 the image walks inward, turn it a little and it spirals.
@@ -52,9 +52,8 @@ at half each. The fifth monitor turns on a shaft of its own and shows camera
 B, always. **Camera 3** is fixed on that rotating monitor and sees nothing
 else.
 
-The cameras stand on **one shaft**. `zoom` and `rotation` are the rig's, one
-value each, and every camera samples through the same framing: turning the
-knob moves the whole rig. The Solo row picks a camera for its delay unit only.
+The cameras stand on **one shaft**: `zoom` and `rotation` are the rig's, one
+value each.
 
 Four **switchers**, the M/Es, each a crossfade between two feeds:
 
@@ -167,8 +166,8 @@ source bank, so nothing in the shader knows which kind of layer it sampled,
 and a monitor sums the cameras and the seed without being told which was
 which. It is not part of any loop: nothing draws to it and no camera watches
 it. It arrives square on and whole, because there is no lens between it and
-the switcher — framing, gain and glass are a camera's, and the seed passes
-none of them.
+the switcher — framing is the rig's, gain and glass a camera's, and the seed
+passes none of them.
 
 On its way in it meets the switcher's **luma key**: passing from mid-grey up
 and cutting to nothing a little below, which is a lit subject against an unlit
@@ -208,7 +207,7 @@ is listened to, so a surface set to some other MIDI channel still works.
 | faders 1–6 | the focused **monitor**'s front panel: hue, saturation, brightness, contrast, temperature, sharpness |
 | fader 7 | the focused **switcher**'s period: passes between reversals, 0 to 60, and 0 is the mode off |
 | fader 8 | the focused **switcher**'s crossfade — the lever the piece is played on, nearest the hand that is already on the select rows |
-| rotaries 1–2 | the **rig**: where it stands on its shaft (zoom, rotation), whatever camera is focused |
+| rotaries 1–2 | the **rig**: where it stands on its shaft (zoom, rotation) |
 | rotary 3 | the focused **camera**'s delay: how late its cable is |
 | rotary 4 | the focused **monitor**'s router-output frame rate: 60 at rest, then 30, then 24 |
 | rotaries 5–8 | dead |
@@ -232,8 +231,9 @@ is listened to, so a surface set to some other MIDI channel still works.
 | marker prev | **cut**: the switcher's foot pedal — the press throws the focused switcher end to end and the release puts it back |
 | \|◀ ▶\| track prev, track next, ▶ play | dead |
 
-So the left hand works one monitor and one switcher, the right hand one
-camera, and the three select rows point the knobs at a node, one kind each:
+So the left hand works one monitor and one switcher, the right hand the rig
+and one camera's delay, and the three select rows point the knobs at a node,
+one kind each:
 Solo the cameras, Mute the monitors, Record the switchers. Solo selects
 because that is what a hand off a mixer reaches for it to do, and the other
 two rows follow it downward in the order the light travels — the cameras that
@@ -282,11 +282,12 @@ that corrects itself. Every knob starts at its identity, so Stop and Rewind
 agree on where a knob goes.
 
 Named by having been turned rather than by a control of its own, because there
-are eleven of them across twelve nodes and no display to point at one with, and
-the knob a hand wants back is the one that hand was just on. Which stops being
-true the moment the panel moves without the hands, so a whole-panel reset and
-a change of focus onto another node of the same kind both clear the name —
-otherwise rewind after either would put back a knob nobody has touched.
+are twelve of them across twelve nodes and the rig, no display to point at one
+with, and the knob a hand wants back is the one that hand was just on. Which
+stops being true the moment the panel moves without the hands, so a
+whole-panel reset and a change of focus onto another node of the same kind
+both clear the name — otherwise rewind after either would put back a knob
+nobody has touched.
 
 ### The lit buttons
 
@@ -490,12 +491,12 @@ that an arrow from each monitor to the camera watching it and from each
 camera and the seed to the monitors they feed is short enough to follow; the
 brighter the larger the share, and the arrows are read off the same levers
 and glass the passes are built from. Every knob logs its new value on
-change, and the log line is the same readout: the focused camera, monitor and
-switcher, every knob on them, and whether that monitor is on program or
-direct. The glass shows one thing of the focus itself: in the tiled bank the
-focused monitor's tile is framed with a thin line, so a glance finds which
-glass the faders are on. A solo has nothing to pick out and draws neither the
-mark nor the arrows.
+change, and the log line is the same readout: the rig, then the focused
+camera, monitor and switcher, every knob on them, and whether that monitor is
+on program or direct. The glass shows one thing of the focus itself: in the
+tiled bank the focused monitor's tile is framed with a thin line, so a glance
+finds which glass the faders are on. A solo has nothing to pick out and draws
+neither the mark nor the arrows.
 
 The knobs act on the rig (where it stands on its shaft), the focused camera
 (its delay), the focused monitor (its front panel) and the focused switcher
@@ -510,8 +511,7 @@ loop does.
 
 Zoom is the sensitive one. A few thousandths either side of `zoom 1.000` is
 the difference between an image that walks inward, one that stands still, and
-one that blows outward — and since every camera stands on the one shaft, a
-thousandth there moves all three at once.
+one that blows outward.
 
 The **period** is the original's mode on a switcher column: every that many
 passes the switcher reverses itself, counted on one grid from the start of the
@@ -532,8 +532,8 @@ switchers say, the rotating monitor shows camera B whatever the setting, the
 seed reaches a B monitor only through the whole chain, a B monitor on program
 is that chain multiplied out, every feed sums to one at every setting of the
 eight levers, the identity matrix is these rows — written out rather than
-re-derived, so a wrong wire cannot agree with itself — and camera 3 moves with
-camera A and cannot be moved alone.
+re-derived, so a wrong wire cannot agree with itself — and the shaft starts
+square on.
 
 The tests in `tests/` render on a real GPU and read the pixels back: that the
 seed lights the monitor where it says it does, that the previous frame comes

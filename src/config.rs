@@ -9,7 +9,8 @@ pub fn instrument() -> Params {
     Rig::IDENTITY.params()
 }
 
-/// Every focus at which a knob on `side` names a value of its own.
+/// Every focus at which a knob on `side`, or the rig's for none, names a
+/// value of its own.
 ///
 /// Only the indices the side reads: a camera knob is one value per camera
 /// however many monitors there are, so walking whole focuses and dropping

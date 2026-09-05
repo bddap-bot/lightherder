@@ -68,9 +68,9 @@ impl Affine2 {
     }
 }
 
-/// Where the shaft stands: how the image a camera on it sees is magnified and
+/// Where the shaft stands: how the image every camera sees is magnified and
 /// turned on its way back onto the monitor. The rig's two freedoms and no
-/// others — a camera on a shaft slides and turns, and nothing on it pans.
+/// others — the shaft slides and turns, and nothing on it pans.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Framing {
     /// >1 magnifies the image once per pass.
@@ -80,7 +80,7 @@ pub struct Framing {
 }
 
 impl Framing {
-    /// A camera that reproduces its subject exactly: no zoom, no turn.
+    /// The rig square on: no zoom, no turn.
     pub fn identity() -> Framing {
         Framing {
             zoom: 1.0,

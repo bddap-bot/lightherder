@@ -1210,8 +1210,7 @@ fn the_focused_tile_is_framed_and_only_in_the_bank() {
 
 #[test]
 fn a_crossfade_delivers_the_fractions_it_names() {
-    // Two cameras on one monitor, crossfaded 3:1. One passes only red and the
-    // other only green, so each share can be read off its own channel.
+    // Two cameras on one monitor, crossfaded 3:1.
     let Some(mut h) = square() else { return };
     let mut p = blank();
     p.cameras[0].look = one_hot(SEEDED);
