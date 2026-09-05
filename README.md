@@ -251,13 +251,13 @@ fader sends where it is, and what the instrument reads off that is the
 distance since it was last heard from: a continuous knob moves by that
 fraction of its travel, scaled by the precision — a quarter by default, so a
 full throw covers a quarter of the knob and one step of the 127 covers a
-five-hundredth. Nothing
-jumps: a hot-plug, a change of focus, a reset, a cut or a beat of the period
-all leave every fader turning on from wherever the knob now is. The rails
-clamp — a step past one is dropped, not owed — and a fader that has run out of
-travel is brought back under the **clutch**: while S8 is held, every fader and
-rotary moves nothing, and letting go resumes from the new position. Rotation
-and hue wrap instead of clamping, a whole revolution end to end. Zoom is a
+five-hundredth. Nothing jumps: a hot-plug, a change of focus, a reset, a cut
+or a beat of the period all leave every fader turning on from wherever the
+knob now is, and a fresh cable, a select, a reset or a rewind forgives a
+count knob the part of a step it was owed. The rails clamp — a step past one
+is dropped, not owed — and a fader that has run out of travel is brought back
+under the **clutch**: while S8 is held, every fader and rotary moves nothing,
+and letting go resumes from the new position. Rotation and hue wrap instead of clamping, a whole revolution end to end. Zoom is a
 ratio and a step multiplies instead of adding: a throw doubles it from
 wherever it stands, one code moves it half a percent, and unity sits in the
 middle of the travel, so the thousandths either side of 1.0 get the same hand
@@ -587,9 +587,10 @@ not knobs. The turn against a fader's first word placing it and not moving
 anything, a full throw at every rung of the precision ladder, the clutch
 holding every control still and letting go without a jump, a whole-frame knob
 owed a frame at a time and deaf to the precision, and an unplug that throws
-nothing and lets go of every button a finger was on. The panel is asserted pair by pair — coverage alone let
-hue and brightness swap CCs and `blank` and `reset` swap buttons, a surface
-whose silkscreen lies with every behaviour test still green — and every select
+nothing and lets go of every button a finger was on. The panel is asserted
+pair by pair — coverage alone let hue and brightness swap CCs and `blank` and
+`reset` swap buttons, a surface whose silkscreen lies with every behaviour
+test still green — and every select
 row is checked to be exactly as wide as its kind, and every bound control to
 be on the panel exactly once. The card search runs against a
 `/proc/asound/cards` with two other cards that also have raw MIDI devices. And

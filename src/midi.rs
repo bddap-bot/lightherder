@@ -661,6 +661,7 @@ impl Midi {
         self.port = None;
         // The next surface plugged in is standing wherever it was left.
         self.standing = [None; 128];
+        self.owed = [0.0; Knob::ALL.len()];
         // A fresh cable is a fresh chance for whatever went wrong last time
         // to have been the old one.
         self.complaint = None;
@@ -1441,6 +1442,10 @@ mod tests {
         midi.coarser();
         midi.coarser();
         assert_eq!(delay(&mut midi, 127), Some(4.0));
+        assert_eq!(delay(&mut midi, 112), None);
+        midi.drop_port();
+        assert_eq!(delay(&mut midi, 112), None);
+        assert_eq!(delay(&mut midi, 111), None, "a fresh cable owes nothing");
     }
 
     #[test]

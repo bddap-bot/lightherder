@@ -469,6 +469,7 @@ impl App {
             return log::info!("no knob has been turned yet");
         };
         self.params.reset(knob, self.focus);
+        self.midi.forgive([knob]);
         log::info!(
             "{} reset: {}",
             knob.name(),
@@ -1609,5 +1610,11 @@ mod tests {
         assert_eq!(delays(&app), [0, 0, 0], "a reset owes nothing");
         surface(&mut app, &board, 18, 127);
         assert_eq!(delays(&app), [0, 1, 0]);
+        surface(&mut app, &board, 18, 100);
+        surface(&mut app, &board, 18, 110);
+        assert_eq!(delays(&app), [0, 0, 0]);
+        app.act(Action::ResetLastKnob);
+        surface(&mut app, &board, 18, 113);
+        assert_eq!(delays(&app), [0, 0, 0], "a rewind owes nothing");
     }
 }
