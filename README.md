@@ -34,7 +34,8 @@ handful of *taps* — (source layer, sampling transform, weight) — and each
 monitor is one render pass summing its taps. There is no intermediate blend
 texture because none is needed. All monitors step from the same previous
 frames, the simultaneous capture a rig of real cameras performs, and the
-window shows the whole bank tiled in a grid — or one monitor of it on the
+window shows the whole bank tiled in a grid, filled down before across so a
+structure's upper monitor stands over its lower — or one monitor of it on the
 whole display, which is the same tiling with one tile in it.
 
 Half-float keeps headroom above 1.0, so dozens of passes do not quantise into
@@ -484,11 +485,13 @@ under it. That number is the value the program holds for the focused node,
 never where the hardware sits: a fader turns its knob by how far it moves, so
 after a clutched throw the two differ, and the glass shows the truth the
 picture is made from. The lit buttons on the panel are the surface's lamps.
-In the tiled bank the panel is joined by the dataflow: the three cameras and
-the seed stand in the bank's spare cell, an arrow runs from each monitor to
-the camera watching it and from each camera and the seed to the monitors they
-feed, the brighter the larger the share, and the arrows are read off the same
-levers and glass the passes are built from. Every knob logs its new value on
+In the tiled bank the panel is joined by the dataflow: each camera stands on
+the seam between the rows beside the monitors it watches — between its
+structure's pair, as on the rig — and the seed beside the pair it enters, so
+that an arrow from each monitor to the camera watching it and from each camera
+and the seed to the monitors they feed is short enough to follow; the brighter
+the larger the share, and the arrows are read off the same levers and glass
+the passes are built from. Every knob logs its new value on
 change, and the log line is the same readout: the focused camera, monitor and
 switcher, every knob on them, and whether that monitor is on program or
 direct. The glass shows one thing of the focus itself: in the tiled bank the

@@ -30,17 +30,28 @@ pub struct Rect {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bank {
+    pub cell: (f32, f32),
     pub tiles: Vec<Rect>,
-    pub spare: Option<Rect>,
 }
 
-fn bank(solo: Option<usize>, monitors: usize, cells: Vec<Rect>) -> Option<Bank> {
-    if solo.is_some() || cells.len() < monitors {
-        return None;
-    }
+pub(crate) fn bank(target: (u32, u32), aspect: f32, tiles: usize) -> Option<Bank> {
+    let (cols, rows) = grid(tiles);
+    let cell = (target.0 / cols, target.1 / rows);
+    let (x, y, w, h) = fit(cell, aspect)?;
+    let tiles = (0..tiles)
+        .map(|i| {
+            let (col, row) = cell_of(tiles, i);
+            Rect {
+                x: x + (col * cell.0) as f32,
+                y: y + (row * cell.1) as f32,
+                w,
+                h,
+            }
+        })
+        .collect();
     Some(Bank {
-        spare: cells.get(monitors).copied(),
-        tiles: cells[..monitors].to_vec(),
+        cell: (cell.0 as f32, cell.1 as f32),
+        tiles,
     })
 }
 
@@ -63,6 +74,14 @@ pub(crate) fn mark_thickness(height: u32) -> f32 {
 pub fn grid(monitors: usize) -> (u32, u32) {
     let cols = (monitors as f32).sqrt().ceil() as u32;
     (cols, (monitors as u32).div_ceil(cols))
+}
+
+/// Tile `i` of `tiles` as `(column, row)`: the grid fills down before it
+/// fills across, so consecutive monitors stack — a structure's upper monitor
+/// over its lower, the way they stand on the rig.
+pub fn cell_of(tiles: usize, i: usize) -> (u32, u32) {
+    let (_, rows) = grid(tiles);
+    (i as u32 / rows, i as u32 % rows)
 }
 
 impl Present {
@@ -118,9 +137,10 @@ impl Present {
             View::Solo(m) => (Some(m), None),
         };
         let tiles = tiles(monitors.monitors(), solo);
-        let (cols, rows) = grid(tiles.len());
         let target_size = (target.width(), target.height());
-        let cell = (target_size.0 / cols, target_size.1 / rows);
+        let Some(tiling) = bank(target_size, monitors.aspect(), tiles.len()) else {
+            return;
+        };
         let target = &target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("present"),
@@ -142,21 +162,7 @@ impl Present {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // Every cell is the same size, so one fit serves them all — and
-            // cells too small to hold a viewport skip the lot.
-            let fitted = fit(cell, monitors.aspect());
-            let cell_at = |i: u32| {
-                fitted.map(|(x, y, w, h)| Rect {
-                    x: x + (i % cols * cell.0) as f32,
-                    y: y + (i / cols * cell.1) as f32,
-                    w,
-                    h,
-                })
-            };
-            for (tile, m) in tiles.enumerate() {
-                let Some(r) = cell_at(tile as u32) else {
-                    continue;
-                };
+            for (m, r) in tiles.zip(&tiling.tiles) {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_viewport(r.x, r.y, r.w, r.h, 0.0, 1.0);
                 pass.set_bind_group(0, monitors.bind_group(), &[monitors.uniform_offset(m)]);
@@ -172,9 +178,8 @@ impl Present {
                 }
             }
             if let Some((overlay, params)) = overlay {
-                let cells = (0..cols * rows).filter_map(cell_at).collect();
-                let bank = bank(solo, monitors.monitors(), cells);
-                overlay.draw(queue, &mut pass, target_size, params, bank.as_ref());
+                let bank = solo.is_none().then_some(&tiling);
+                overlay.draw(queue, &mut pass, target_size, params, bank);
             }
         }
         queue.submit([encoder.finish()]);
@@ -221,28 +226,32 @@ fn fit(target: (u32, u32), aspect: f32) -> Option<(f32, f32, f32, f32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bank, fit, grid, mark_strips, mark_thickness, tiles, Rect};
+    use super::{bank, cell_of, fit, grid, mark_strips, mark_thickness, tiles, Rect};
 
-    fn cells(n: usize) -> Vec<Rect> {
-        (0..n)
-            .map(|i| Rect {
-                x: i as f32,
-                y: 0.0,
-                w: 1.0,
-                h: 1.0,
-            })
-            .collect()
+    #[test]
+    fn the_bank_fills_down_before_across_so_a_structures_pair_stacks() {
+        let cells: Vec<_> = (0..5).map(|m| cell_of(5, m)).collect();
+        assert_eq!(cells, [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0)]);
+        assert_eq!(cell_of(1, 0), (0, 0));
+        assert_eq!(cell_of(4, 3), (1, 1));
     }
 
     #[test]
-    fn a_solo_has_no_bank_and_a_tiled_display_names_its_spare_cell() {
-        assert_eq!(bank(Some(2), 5, cells(1)), None);
-        assert_eq!(bank(Some(0), 5, cells(6)), None);
-        assert_eq!(bank(None, 5, cells(3)), None);
-        let tiled = bank(None, 5, cells(6)).unwrap();
-        assert_eq!(tiled.tiles, cells(5));
-        assert_eq!(tiled.spare, Some(cells(6)[5]));
-        assert_eq!(bank(None, 5, cells(5)).unwrap().spare, None);
+    fn a_bank_is_the_grids_cells_with_a_tile_letterboxed_in_each() {
+        let tiled = bank((1920, 1080), 16.0 / 9.0, 5).unwrap();
+        assert_eq!(tiled.cell, (640.0, 540.0));
+        assert_eq!(
+            tiled.tiles[1],
+            Rect {
+                x: 0.0,
+                y: 630.0,
+                w: 640.0,
+                h: 360.0
+            }
+        );
+        assert_eq!(tiled.tiles[4].x, 1280.0);
+        assert_eq!(bank((1920, 1080), 16.0 / 9.0, 1).unwrap().tiles.len(), 1);
+        assert_eq!(bank((2, 2), 16.0 / 9.0, 5), None);
     }
 
     #[test]

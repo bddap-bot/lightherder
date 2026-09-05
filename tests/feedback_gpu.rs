@@ -1022,7 +1022,7 @@ fn the_seed_sits_where_the_convention_says_it_does() {
 /// target sized as the grid times the monitor, which the graph tests use.
 fn tile(monitors: usize, m: usize, u: f32, v: f32) -> (f32, f32) {
     let (cols, rows) = lightherder::present::grid(monitors);
-    let (col, row) = (m as u32 % cols, m as u32 / cols);
+    let (col, row) = lightherder::present::cell_of(monitors, m);
     (
         (col as f32 + u) / cols as f32,
         (row as f32 + v) / rows as f32,

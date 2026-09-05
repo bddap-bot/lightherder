@@ -39,9 +39,20 @@ const ROTARY_SWEEP: f32 = 1.5 * std::f32::consts::PI;
 
 const SOURCE_W: i32 = 64;
 const SOURCE_H: i32 = 16;
-const SOURCE_GAP: i32 = 6;
 const SOURCES: usize = CAMERAS + 1;
-const SOURCES_H: i32 = SOURCES as i32 * (SOURCE_H + SOURCE_GAP) - SOURCE_GAP;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Seat {
+    col: f32,
+    row: f32,
+}
+
+const SEATS: [Seat; SOURCES] = [
+    Seat { col: 0.5, row: 1.0 },
+    Seat { col: 1.5, row: 1.0 },
+    Seat { col: 2.5, row: 1.0 },
+    Seat { col: 2.0, row: 1.0 },
+];
 
 const MAX_ARROWS: usize = 40;
 const _: () = assert!(MAX_ARROWS.is_multiple_of(4));
@@ -368,26 +379,33 @@ fn rasterize(readout: &Readout) -> Raster {
     c.raster()
 }
 
-fn source_box(row: usize) -> Rect {
-    Rect {
-        x: 0.0,
-        y: (row as i32 * (SOURCE_H + SOURCE_GAP)) as f32,
-        w: SOURCE_W as f32,
-        h: SOURCE_H as f32,
+fn source_name(i: usize) -> String {
+    if i < CAMERAS {
+        format!("{} {}", Node::Camera.short(), i + 1)
+    } else {
+        "seed".to_string()
     }
 }
 
-fn sources() -> Raster {
-    let mut c = Canvas::new(SOURCE_W, SOURCES_H);
-    let named = (0..CAMERAS)
-        .map(|i| format!("{} {}", Node::Camera.short(), i + 1))
-        .chain(["seed".to_string()]);
-    for (row, name) in named.enumerate() {
-        let b = source_box(row);
-        c.frame(b.x as i32, b.y as i32, b.w as i32, b.h as i32, LIT);
-        c.text_centred(SOURCE_W / 2, b.y as i32 + 4, &name, LIT);
-    }
+fn source(i: usize) -> Raster {
+    let mut c = Canvas::new(SOURCE_W, SOURCE_H);
+    c.frame(0, 0, SOURCE_W, SOURCE_H, LIT);
+    c.text_centred(SOURCE_W / 2, 4, &source_name(i), LIT);
     c.raster()
+}
+
+fn seat(i: usize, bank: &Bank, scale: f32) -> Rect {
+    let (w, h) = (SOURCE_W as f32 * scale, SOURCE_H as f32 * scale);
+    Rect {
+        x: SEATS[i].col * bank.cell.0 - w / 2.0,
+        y: SEATS[i].row * bank.cell.1 - h / 2.0,
+        w,
+        h,
+    }
+}
+
+fn seats(bank: &Bank, scale: f32) -> [Rect; SOURCES] {
+    std::array::from_fn(|i| seat(i, bank, scale))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -395,17 +413,6 @@ struct Placement {
     x: f32,
     y: f32,
     scale: f32,
-}
-
-impl Placement {
-    fn of(&self, r: Rect) -> Rect {
-        Rect {
-            x: self.x + r.x * self.scale,
-            y: self.y + r.y * self.scale,
-            w: r.w * self.scale,
-            h: r.h * self.scale,
-        }
-    }
 }
 
 fn scale_into(size: (u32, u32), room: (f32, f32)) -> Option<f32> {
@@ -421,19 +428,6 @@ fn panel_placement(size: (u32, u32), target: (u32, u32)) -> Option<Placement> {
     Some(Placement {
         x: (target.0 as f32 - size.0 as f32 * scale - MARGIN).max(0.0),
         y: (target.1 as f32 - size.1 as f32 * scale - MARGIN).max(0.0),
-        scale,
-    })
-}
-
-fn sources_placement(size: (u32, u32), spare: Rect, panel_top: f32) -> Option<Placement> {
-    let room = Rect {
-        h: (panel_top.min(spare.y + spare.h) - spare.y - MARGIN).max(0.0),
-        ..spare
-    };
-    let scale = scale_into(size, (room.w * 0.8, room.h * 0.8))?;
-    Some(Placement {
-        x: room.x + (room.w - size.0 as f32 * scale) / 2.0,
-        y: room.y + (room.h - size.1 as f32 * scale) / 2.0,
         scale,
     })
 }
@@ -615,7 +609,7 @@ pub struct Overlay {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     panel: Option<(Readout, Image)>,
-    sources: Image,
+    sources: [Image; SOURCES],
     arrows: wgpu::RenderPipeline,
     arrows_uniform: wgpu::Buffer,
     arrows_bind: wgpu::BindGroup,
@@ -648,7 +642,8 @@ impl Overlay {
             label: Some("overlay"),
             ..Default::default()
         });
-        let sources = Image::new(device, queue, &layout, &sampler, &sources());
+        let sources =
+            std::array::from_fn(|i| Image::new(device, queue, &layout, &sampler, &source(i)));
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/overlay.wgsl"));
         let blit = crate::fullscreen_pipeline(
             device,
@@ -744,29 +739,33 @@ impl Overlay {
         let Some(at) = panel_placement(panel.size, target_size) else {
             return;
         };
-        let spare = bank.and_then(|b| b.spare);
-        if let Some((bank, spare)) = bank.zip(spare) {
-            if let Some(placed) = sources_placement(self.sources.size, spare, at.y) {
-                let line = mark_thickness(target_size.1);
-                let boxes: [Rect; SOURCES] = std::array::from_fn(|i| placed.of(source_box(i)));
-                let arrows = arrows(params.flows(), &bank.tiles, &boxes, line);
-                queue.write_buffer(
-                    &self.arrows_uniform,
-                    0,
-                    bytemuck::bytes_of(&ArrowsUniform::of(&arrows, line)),
-                );
-                pass.set_viewport(
-                    0.0,
-                    0.0,
-                    target_size.0 as f32,
-                    target_size.1 as f32,
-                    0.0,
-                    1.0,
-                );
-                pass.set_pipeline(&self.arrows);
-                pass.set_bind_group(0, &self.arrows_bind, &[]);
-                pass.draw(0..3, 0..1);
-                self.sources.blit(pass, &self.blit, placed);
+        if let Some(bank) = bank {
+            let line = mark_thickness(target_size.1);
+            let boxes = seats(bank, at.scale);
+            let arrows = arrows(params.flows(), &bank.tiles, &boxes, line);
+            queue.write_buffer(
+                &self.arrows_uniform,
+                0,
+                bytemuck::bytes_of(&ArrowsUniform::of(&arrows, line)),
+            );
+            pass.set_viewport(
+                0.0,
+                0.0,
+                target_size.0 as f32,
+                target_size.1 as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_pipeline(&self.arrows);
+            pass.set_bind_group(0, &self.arrows_bind, &[]);
+            pass.draw(0..3, 0..1);
+            for (image, r) in self.sources.iter().zip(boxes) {
+                let placed = Placement {
+                    x: r.x,
+                    y: r.y,
+                    scale: at.scale,
+                };
+                image.blit(pass, &self.blit, placed);
             }
         }
         panel.blit(pass, &self.blit, at);
@@ -1066,16 +1065,8 @@ mod tests {
         assert_eq!(inside(&dark, x, y, SQUARE, SQUARE), 0);
     }
 
-    fn cells(n: usize) -> Vec<Rect> {
-        let (cols, _) = crate::present::grid(MONITORS);
-        (0..n)
-            .map(|i| Rect {
-                x: (i as u32 % cols * 640) as f32,
-                y: (i as u32 / cols * 360) as f32,
-                w: 640.0,
-                h: 360.0,
-            })
-            .collect()
+    fn tiled() -> Bank {
+        crate::present::bank((1920, 1080), 16.0 / 9.0, MONITORS).unwrap()
     }
 
     fn inside(p: [f32; 2], r: Rect, slack: f32) -> bool {
@@ -1085,26 +1076,17 @@ mod tests {
             && p[1] <= r.y + r.h + slack
     }
 
+    fn overlaps(a: Rect, b: Rect) -> bool {
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    }
+
     #[test]
     fn the_arrows_run_from_each_flows_source_to_its_sink() {
         let params = crate::config::instrument();
         let flows: Vec<Flow> = params.flows().collect();
-        let (cols, rows) = crate::present::grid(MONITORS);
-        let cells = cells((cols * rows) as usize);
-        assert!(
-            cells.len() > MONITORS,
-            "the bank has no spare cell for the sources"
-        );
-        let placed =
-            sources_placement((SOURCE_W as u32, SOURCES_H as u32), cells[MONITORS], 700.0).unwrap();
-        let boxes: [Rect; SOURCES] = std::array::from_fn(|i| placed.of(source_box(i)));
-        for b in boxes {
-            assert!(
-                inside([b.x, b.y], cells[MONITORS], 0.0) && b.y + b.h < 700.0,
-                "{b:?}"
-            );
-        }
-        let arrows = arrows(flows.iter().copied(), &cells[..MONITORS], &boxes, 2.0);
+        let bank = tiled();
+        let boxes = seats(&bank, 1.0);
+        let arrows = arrows(flows.iter().copied(), &bank.tiles, &boxes, 2.0);
         assert_eq!(arrows.len(), flows.len());
         let looks = flows
             .iter()
@@ -1118,7 +1100,7 @@ mod tests {
         assert_eq!((looks, feeds, seeds), (5, 3, 2), "{flows:?}");
         for (flow, arrow) in flows.iter().zip(&arrows) {
             let rect = |end: End| match end {
-                End::Monitor(m) => cells[m],
+                End::Monitor(m) => bank.tiles[m],
                 End::Camera(c) => boxes[c],
                 End::Seed => boxes[CAMERAS],
             };
@@ -1136,17 +1118,88 @@ mod tests {
         }
     }
 
+    fn crosses(a: &Arrow, b: &Arrow) -> bool {
+        let side = |p: [f32; 2], q: [f32; 2], r: [f32; 2]| {
+            (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        };
+        let (s1, s2) = (side(a.from, a.to, b.from), side(a.from, a.to, b.to));
+        let (s3, s4) = (side(b.from, b.to, a.from), side(b.from, b.to, a.to));
+        s1 * s2 < 0.0 && s3 * s4 < 0.0
+    }
+
+    fn crossings(arrows: &[Arrow]) -> usize {
+        arrows
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| arrows[i + 1..].iter().map(move |b| (a, b)))
+            .filter(|(a, b)| crosses(a, b))
+            .count()
+    }
+
+    fn length(arrows: &[Arrow], unit: f32) -> f32 {
+        arrows
+            .iter()
+            .map(|a| (a.to[0] - a.from[0]).hypot(a.to[1] - a.from[1]) / unit)
+            .sum()
+    }
+
+    #[test]
+    fn every_source_sits_beside_what_it_talks_to_so_the_arrows_are_short() {
+        let params = crate::config::instrument();
+        let bank = tiled();
+        let boxes = seats(&bank, 1.0);
+        for (i, b) in boxes.iter().enumerate() {
+            for t in &bank.tiles {
+                assert!(!overlaps(*b, *t), "{} sits on a tile", source_name(i));
+            }
+            for (j, o) in boxes.iter().enumerate().skip(i + 1) {
+                assert!(
+                    !overlaps(*b, *o),
+                    "{} sits on {}",
+                    source_name(i),
+                    source_name(j)
+                );
+            }
+        }
+        let arrows = arrows(params.flows(), &bank.tiles, &boxes, 2.0);
+        let (length, crossings) = (length(&arrows, bank.cell.0), crossings(&arrows));
+        println!("identity dataflow: {length:.2} tile widths of arrow, {crossings} crossings");
+        assert!(length < 2.5, "{length:.2} tile widths of arrow");
+        assert!(crossings <= 1, "{crossings} crossings");
+        for (a, flow) in arrows.iter().zip(params.flows()) {
+            for (i, b) in boxes.iter().enumerate() {
+                let end = |e: End| {
+                    matches!(e, End::Camera(c) if c == i) || (e == End::Seed && i == CAMERAS)
+                };
+                if end(flow.from) || end(flow.to) {
+                    continue;
+                }
+                let steps = 64;
+                let clear = (0..=steps).all(|k| {
+                    let t = k as f32 / steps as f32;
+                    let p = [
+                        a.from[0] + (a.to[0] - a.from[0]) * t,
+                        a.from[1] + (a.to[1] - a.from[1]) * t,
+                    ];
+                    !inside(p, *b, 2.0)
+                });
+                assert!(clear, "{flow:?} runs through {}", source_name(i));
+            }
+        }
+    }
+
     #[test]
     fn a_flow_to_a_tile_the_bank_lacks_draws_nothing() {
-        let boxes: [Rect; SOURCES] = std::array::from_fn(source_box);
+        let bank = tiled();
+        let boxes = seats(&bank, 1.0);
         let flows = [Flow {
             from: End::Seed,
             to: End::Monitor(3),
             share: 1.0,
         }];
-        assert!(arrows(flows.iter().copied(), &cells(2), &boxes, 2.0).is_empty());
+        assert!(arrows(flows.iter().copied(), &bank.tiles[..2], &boxes, 2.0).is_empty());
         assert_eq!(
-            arrows(flows.iter().copied(), &cells(5), &boxes, 2.0).len(),
+            arrows(flows.iter().copied(), &bank.tiles, &boxes, 2.0).len(),
             1
         );
     }
