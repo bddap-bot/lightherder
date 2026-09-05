@@ -218,33 +218,6 @@ impl Params {
     pub const MAX_DELAY: u32 = 30;
 }
 
-/// The rig with every stage doing nothing to the light — the graph
-/// [`Knob::identity`] reads each knob's neutral value out of: zoom 1, no
-/// turn, no delay, a neutral front panel and every switcher at In1.
-///
-/// A whole `Params` rather than the handful of constants it is made of, so a
-/// knob's identity is read by the same [`Params::knob`] the surface reads its
-/// value by: a knob that later moves to another field cannot be neutral here
-/// and live there.
-fn identity_graph() -> Params {
-    let mut params = crate::config::instrument();
-    params.shafts = [Framing::identity(); crate::rig::SHAFTS];
-    for camera in &mut params.cameras {
-        camera.gain = [1.0; 3];
-        camera.delay = 0;
-    }
-    for monitor in &mut params.monitors {
-        *monitor = Monitor::default();
-    }
-    // Every switcher on its In1 and every monitor on its own camera. A
-    // crossfade has no value that leaves the light alone — it is not a stage
-    // the light passes through but where a sum stands — so the reading is the
-    // end of its travel it started at. The picture visibly loses the mix and
-    // the fader puts it back, which is the error that corrects itself.
-    params.rig = Rig::IDENTITY;
-    params
-}
-
 /// The frame rate of a router output, as the cadence of passes it takes a
 /// fresh frame on. A cadence rather than a rate because the rig's clock is
 /// a pass, not a second.
@@ -542,17 +515,8 @@ impl Knob {
         }
     }
 
-    /// Where this knob stands with its stage doing nothing to the light:
-    /// zoom 1, no turn, no pan, unity gain, a clean path, the keys off and a
-    /// neutral front panel. This is what one knob is put back to
-    /// without the rest of the panel going with it.
-    ///
-    /// Read out of [`identity_graph`] rather than written here as a second
-    /// table of numbers: every value it holds is already a named constant a
-    /// config file defaults to, and a table beside them is a copy to keep in
-    /// step.
     pub fn identity(self) -> f32 {
-        identity_graph().knob(self, Focus::default())
+        crate::config::instrument().knob(self, Focus::default())
     }
 
     pub fn limit(self, params: &Params) -> Limit {
@@ -1064,10 +1028,6 @@ mod tests {
         },
     ];
 
-    /// Every knob's identity, written out as the number it is rather than as
-    /// the constant [`identity_graph`] is built from. Read off the same
-    /// constant the code reads and a knob wired to the wrong field would
-    /// agree with itself: this table is the independent word.
     const IDENTITIES: [(Knob, f32); 12] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
@@ -1079,10 +1039,7 @@ mod tests {
         (Knob::Temperature, 0.0),
         (Knob::Sharpness, 0.0),
         (Knob::FrameRate, 0.0),
-        // A crossfade has no setting that leaves the light alone, so its
-        // identity is the end of its travel it starts at — see
-        // [`identity_graph`].
-        (Knob::Switcher, 0.0),
+        (Knob::Switcher, 1.0),
         (Knob::Period, 0.0),
     ];
 
@@ -1118,7 +1075,7 @@ mod tests {
             assert_eq!(params.rig.switchers[0], expect, "pass {pass}");
             assert_eq!(
                 params.rig.switchers[1],
-                crate::rig::Rig::PERFORMANCE.switchers[1],
+                crate::rig::Rig::IDENTITY.switchers[1],
                 "pass {pass}: the other switcher"
             );
         }

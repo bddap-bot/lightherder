@@ -6,7 +6,7 @@ use crate::rig::{self, Rig};
 /// The instrument: Blair's rig at its performance setting — see [`Rig`].
 /// There is one, and nothing chooses it.
 pub fn instrument() -> Params {
-    Rig::PERFORMANCE.params()
+    Rig::IDENTITY.params()
 }
 
 /// Every focus at which a knob on `side` names a value of its own.
@@ -122,18 +122,6 @@ mod tests {
 
     #[test]
     fn the_instrument_is_contracting() {
-        // At the setting it plays, every loop is near unity: a trail that
-        // decays in a few passes is not worth seeing.
-        let played = instrument();
-        for m in 0..played.monitors.len() {
-            let sum: f32 = (0..played.cameras.len())
-                .map(|c| {
-                    let cam = &played.cameras[c];
-                    played.route(m, c) * cam.gain[1] * cam.look.iter().sum::<f32>()
-                })
-                .sum();
-            assert!(sum > 0.9, "monitor {m}: gain sum {sum} dies fast");
-        }
         // The light monitor `i` shows next frame is at most `sum` times the
         // brightest thing on any monitor this frame, so `sum < 1` means it
         // settles instead of blooming to white. Near 1, or the trail is not

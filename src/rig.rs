@@ -169,26 +169,9 @@ fn glass(cam: Cam, screen: Screen) -> f32 {
 }
 
 impl Rig {
-    /// Every structure monitor on its program — on Direct the switchers
-    /// would feed nothing — with both cross-links a quarter open, so each
-    /// structure is made of the other (Blair's "insanity mode") yet keeps
-    /// a shape of its own; switcher C half open and D a tenth, which puts
-    /// the seed on a B monitor at 0.0125 — an injection like `external`'s
-    /// 0.014, though these coupled loops sit farther from unity, so the seed
-    /// settles at about a third of its own brightness rather than nine
-    /// tenths.
-    pub const PERFORMANCE: Rig = Rig {
-        switchers: [0.25, 0.25, 0.5, 0.1],
-        selects: [Select::Program; SELECTS],
-        periods: [0; SWITCHERS],
-    };
-
-    /// Every switcher on its In1 and every monitor on its own camera: the
-    /// routing that does nothing, which is where the panel's crossfades are
-    /// put back to.
     pub const IDENTITY: Rig = Rig {
-        switchers: [0.0; SWITCHERS],
-        selects: [Select::Direct; SELECTS],
+        switchers: [1.0; SWITCHERS],
+        selects: [Select::Program; SELECTS],
         periods: [0; SWITCHERS],
     };
 
@@ -279,16 +262,7 @@ impl Rig {
         };
         Params {
             rig: *self,
-            shafts: [
-                Framing {
-                    zoom: 0.994,
-                    rotation: 0.05,
-                },
-                Framing {
-                    zoom: 0.994,
-                    rotation: 0.08,
-                },
-            ],
+            shafts: [Framing::identity(); SHAFTS],
             cameras: [
                 camera(Cam::A, [0.980, 0.986, 0.992]),
                 camera(Cam::B, [0.992, 0.986, 0.980]),
@@ -441,7 +415,7 @@ mod tests {
 
     #[test]
     fn the_seed_is_the_one_physical_camera_keyed_on_its_way_in() {
-        let params = Rig::PERFORMANCE.params();
+        let params = Rig::IDENTITY.params();
         let plug = &params.input;
         assert_eq!(
             plug.source,
@@ -455,14 +429,15 @@ mod tests {
     }
 
     #[test]
-    fn both_shafts_pull_back_and_turn_the_same_way_at_their_own_rates() {
-        let params = Rig::PERFORMANCE.params();
-        for shaft in params.shafts {
-            assert!(shaft.zoom < 1.0, "{shaft:?}");
+    fn the_shafts_start_square_on_and_the_cables_lose_a_little() {
+        let params = Rig::IDENTITY.params();
+        assert_eq!(params.shafts, [Framing::identity(); SHAFTS]);
+        for camera in &params.cameras {
+            assert!(
+                camera.gain.iter().all(|g| 0.9 < *g && *g < 1.0),
+                "{camera:?}"
+            );
         }
-        let [a, b] = params.shafts;
-        assert!(0.0 < a.rotation && a.rotation < b.rotation);
-        // A and B tinted opposite ways, so the structures stay distinct.
         let (a, b) = (&params.cameras[0], &params.cameras[1]);
         assert!(a.gain[0] < a.gain[2] && b.gain[0] > b.gain[2]);
     }
@@ -473,27 +448,24 @@ mod tests {
         // unison, and camera 3 is fixed watching that monitor — so what it
         // sees moves with camera A, off the one number they share. Turning
         // it moves both readings and cannot move only one.
-        let mut params = Rig::PERFORMANCE.params();
-        assert_eq!(params.framing(0), params.framing(2));
-        assert_ne!(params.framing(0), params.framing(1));
+        let mut params = Rig::IDENTITY.params();
         params.shafts[0].rotation += 0.3;
         assert_eq!(params.framing(0), params.framing(2));
-        assert_eq!(params.framing(1), Rig::PERFORMANCE.params().framing(1));
+        assert_ne!(params.framing(0), params.framing(1));
+        assert_eq!(params.framing(1), Framing::identity());
     }
 
     #[test]
-    fn the_performance_graph_is_these_rows() {
-        // Written out rather than re-derived through `shows`, so a wrong
-        // wire in the chain cannot agree with itself here.
-        let params = Rig::PERFORMANCE.params();
+    fn the_identity_graph_is_these_rows() {
+        let params = Rig::IDENTITY.params();
         let rows = [
-            [0.75, 0.25, 0.0],
-            [0.75, 0.25, 0.0],
-            [0.125, 0.75, 0.1125],
-            [0.125, 0.75, 0.1125],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
         ];
-        let seed = [0.0, 0.0, 0.0125, 0.0125, 0.0];
+        let seed = [0.0, 0.0, 1.0, 1.0, 0.0];
         for (m, (row, seed)) in rows.iter().zip(seed).enumerate() {
             for (c, want) in row.iter().enumerate() {
                 let have = params.route(m, c);

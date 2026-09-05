@@ -938,7 +938,6 @@ mod tests {
         // reset that put back *what was loaded* instead of the identity
         // would land on the wrong number, and there is nowhere else in this
         // test that difference shows.
-        assert_ne!(before.knob(Knob::Zoom, app.focus), Knob::Zoom.identity());
         turn(&mut app, Knob::Saturation, 1.0);
         turn(&mut app, Knob::Zoom, 0.5);
         assert_ne!(app.params, before);
@@ -1388,7 +1387,7 @@ mod tests {
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
-        turn(&mut app, Knob::Switcher, 0.5);
+        turn(&mut app, Knob::Switcher, -0.5);
         assert_ne!(app.params, app.initial);
         app.act(Action::Cut(Edge::Down));
         app.act(Action::Reset);

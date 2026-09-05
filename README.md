@@ -93,11 +93,15 @@ stored matrix would be a second state standing beside the levers that set it,
 free to drift from them. At every setting of the eight, on every monitor, the
 shares sum to exactly one: nothing on the rig's cabling amplifies.
 
-It starts with every monitor on its program — on Direct the switchers would
-feed nothing — both cross-links a quarter open, C half and D a tenth. So each
-structure is made of the other and still keeps a shape of its own, and the
-seed arrives on a B monitor at 0.0125. Structure A never takes the seed
-directly: it reaches A only as light already round B's loop.
+It starts at **identity**: every monitor on its program — on Direct the
+switchers would feed nothing — and every switcher run to In2, the end that
+hands on what the stage upstream made. So the seed walks the whole chain
+untouched: D passes it to C, C to B, B puts it on both B monitors whole,
+camera B sees that pair through the glass, and switcher A puts what camera B
+sees on both A monitors while the rotating monitor shows it too. Every screen
+shows the seed and no loop is closed yet; running any switcher back toward
+In1 lets its camera in, and that is where the feedback starts. Structure A
+never takes the seed directly: it reaches A only as light already through B.
 
 Each camera's gain is a per-channel loss down the cable and through the lens,
 just under unity, which is what makes a loop settle rather than run. A's blue
@@ -105,9 +109,9 @@ survives best and B's red does, so the two structures' trails cool and warm
 away from each other. Nothing on the rig turns one, so nothing here does
 either.
 
-Out of the box both shafts pull back — 0.6% a pass — and turn the same way at
-their own rates, 0.05 and 0.08 radians, so the structures stay distinct and no
-round trip cancels its own rotation.
+Out of the box both shafts stand square on — zoom 1, no turn — so a loop, once
+a switcher closes one, copies its monitor exactly until a hand pulls a camera
+back or turns it.
 
 ## The front panel
 
@@ -274,9 +278,10 @@ which its stage does nothing to the light: zoom 1, no turn, no delay, the
 full frame rate, a neutral front panel and no sharpening. The crossfade is the
 one knob with no such value — it is not a stage the light passes through but
 where a sum stands — so its identity is the end of its travel it started at,
-In1 whole.
-The picture visibly loses the mix and the fader puts it straight back, which
-is the error that corrects itself.
+In2 whole, the end that hands on what the stage upstream made. The picture
+visibly loses the mix and the fader puts it straight back, which is the error
+that corrects itself. Every knob starts at its identity, so Stop and Rewind
+agree on where a knob goes.
 
 Named by having been turned rather than by a control of its own, because there
 are eleven of them across twelve nodes and no display to point at one with, and
@@ -486,9 +491,11 @@ delay), the focused monitor (its front panel) and the focused switcher (its
 crossfade and its period). The three select rows pick a node of any of the
 three outright.
 
-The front panel starts neutral, so the instrument out of the box is the rig
-described above and nothing else. Turn one against it: the saturation fader
-swept is the quickest way to see what a stage inside the loop does.
+Every knob starts at its identity, so the instrument out of the box is the rig
+described above passing the seed through, and nothing else. Turn one against
+it: switcher B run toward In1 closes structure B's loop on the seed, and the
+saturation fader swept is the quickest way to see what a stage inside that
+loop does.
 
 Zoom is the sensitive one. A few thousandths either side of `zoom 1.000` is
 the difference between an image that walks inward, one that stands still, and
@@ -513,7 +520,7 @@ checked as arithmetic: a monitor on direct shows its own camera whatever the
 switchers say, the rotating monitor shows camera B whatever the setting, the
 seed reaches a B monitor only through the whole chain, a B monitor on program
 is that chain multiplied out, every feed sums to one at every setting of the
-eight levers, the performance matrix is these rows — written out rather than
+eight levers, the identity matrix is these rows — written out rather than
 re-derived, so a wrong wire cannot agree with itself — and camera 3 moves with
 camera A and cannot be moved alone.
 
