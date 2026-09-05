@@ -714,16 +714,16 @@ impl Midi {
                 return None;
             }
             let limit = fader.knob.limit(params);
-            let by = steps / 127.0 * self.precision.gain() * limit.travel();
+            let throw = steps / 127.0 * limit.travel();
             let paid = match limit {
                 Limit::Whole(_) => {
                     let owed = &mut self.owed[fader.knob as usize];
-                    *owed += by;
+                    *owed += throw;
                     let paid = owed.round();
                     *owed -= paid;
                     paid
                 }
-                Limit::Clamp(..) | Limit::Ratio(..) | Limit::Wrap => by,
+                Limit::Clamp(..) | Limit::Ratio(..) | Limit::Wrap => throw * self.precision.gain(),
             };
             return (paid != 0.0).then_some(Action::Turn(fader.knob, paid));
         }
@@ -1418,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn a_whole_frame_knob_is_turned_a_frame_at_a_time() {
+    fn a_count_knob_runs_its_whole_count_over_the_throw_a_step_at_a_time() {
         let mut params = crate::config::instrument();
         params.delay = 4;
         let mut midi = Midi::default();
@@ -1428,13 +1428,37 @@ mod tests {
             ref other => panic!("{other:?}"),
         };
         assert_eq!(delay(&mut midi, 0), None);
-        assert_eq!(delay(&mut midi, 63), None);
-        assert_eq!(delay(&mut midi, 64), Some(1.0));
-        assert_eq!(delay(&mut midi, 127), None);
-        assert_eq!(delay(&mut midi, 0), Some(-1.0));
+        assert_eq!(delay(&mut midi, 15), None);
+        assert_eq!(delay(&mut midi, 16), Some(1.0));
+        assert_eq!(delay(&mut midi, 127), Some(3.0));
+        midi.finer();
+        assert_eq!(delay(&mut midi, 0), Some(-4.0));
         midi.coarser();
         midi.coarser();
         assert_eq!(delay(&mut midi, 127), Some(4.0));
+    }
+
+    #[test]
+    fn rotaries_3_and_4_turn_delay_and_frame_rate_on_the_rig_as_launched() {
+        let mut params = crate::config::instrument();
+        let focus = Focus::default();
+        let mut midi = Midi::default();
+        for (control, knob) in [(18, Knob::Delay), (19, Knob::FrameRate)] {
+            let before = params.knob(knob, focus);
+            let mut wire = cc(control, 20);
+            wire.extend(cc(control, 127));
+            for action in feed(&mut midi, &params, &wire) {
+                match action {
+                    Action::Turn(turned, by) if turned == knob => params.nudge(knob, by, focus),
+                    other => panic!("{other:?}"),
+                }
+            }
+            let after = params.knob(knob, focus);
+            assert!(after > before, "{knob:?}: {before} -> {after}");
+            assert_ne!(knob.reads(after), knob.reads(before));
+        }
+        assert_eq!(params.cameras[0].delay, 2);
+        assert_eq!(params.monitors[0].cadence, crate::params::Cadence::ALL[2]);
     }
 
     #[test]

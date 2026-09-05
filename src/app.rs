@@ -1345,9 +1345,8 @@ mod tests {
         let board = plugged(&mut app);
         let started = app.params.clone();
         app.act(Action::Focus(Node::Switcher, 1));
-        // A quarter of sixty passes a throw: seventeen steps of it owe two.
         surface(&mut app, &board, 6, 0);
-        surface(&mut app, &board, 6, 17);
+        surface(&mut app, &board, 6, 4);
         assert_eq!(app.params.rig.periods[1], 2);
         surface(&mut app, &board, 7, 127);
         surface(&mut app, &board, 7, 76);
@@ -1556,5 +1555,29 @@ mod tests {
         app.act(Action::Flip(crate::affine::Axis::X));
         app.overlay_shown = true;
         proof(&app, "overlay-arrows", View::Bank { focus: None });
+    }
+
+    #[test]
+    fn rotaries_3_and_4_move_the_delay_and_the_frame_rate_the_overlay_reads() {
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        app.overlay_shown = true;
+        for (rotary, knob, name) in [
+            (18, Knob::Delay, "delay"),
+            (19, Knob::FrameRate, "frame-rate"),
+        ] {
+            let before = app.readout().reads(knob);
+            proof(&app, &format!("{name}-before"), View::Solo(0));
+            surface(&mut app, &board, rotary, 20);
+            assert_eq!(app.readout().reads(knob), before, "the first word places");
+            surface(&mut app, &board, rotary, 127);
+            let after = app.readout().reads(knob);
+            assert_ne!(after, before, "{knob:?}");
+            proof(&app, &format!("{name}-after"), View::Solo(0));
+        }
+        assert_eq!(app.readout().reads(Knob::Delay), "2");
+        assert_eq!(app.readout().reads(Knob::FrameRate), "24");
     }
 }
