@@ -248,9 +248,10 @@ instrument, and a slipped finger on the surface must not be able to.
 
 **A fader turns its knob by how far it moves, never to where it stands.** A
 fader sends where it is, and what the instrument reads off that is the
-distance since it was last heard from: a knob moves by that fraction of its
-travel, scaled by the precision — a quarter by default, so a full throw covers
-a quarter of the knob and one step of the 127 covers a five-hundredth. Nothing
+distance since it was last heard from: a continuous knob moves by that
+fraction of its travel, scaled by the precision — a quarter by default, so a
+full throw covers a quarter of the knob and one step of the 127 covers a
+five-hundredth. Nothing
 jumps: a hot-plug, a change of focus, a reset, a cut or a beat of the period
 all leave every fader turning on from wherever the knob now is. The rails
 clamp — a step past one is dropped, not owed — and a fader that has run out of
@@ -261,8 +262,9 @@ ratio and a step multiplies instead of adding: a throw doubles it from
 wherever it stands, one code moves it half a percent, and unity sits in the
 middle of the travel, so the thousandths either side of 1.0 get the same hand
 as the doublings above. The three whole-number knobs — the delay, the period
-and the frame rate — run their whole count over the throw whatever the precision,
-and are turned a step at a time, ticking over at the half like a detent.
+and the frame rate — run their whole count over the throw, deaf to the
+precision, and are turned a step at a time, ticking over at the half like a
+detent.
 
 The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior. A
@@ -585,8 +587,7 @@ not knobs. The turn against a fader's first word placing it and not moving
 anything, a full throw at every rung of the precision ladder, the clutch
 holding every control still and letting go without a jump, a whole-frame knob
 owed a frame at a time and deaf to the precision, and an unplug that throws
-nothing and lets go of every
-button a finger was on. The panel is asserted pair by pair — coverage alone let
+nothing and lets go of every button a finger was on. The panel is asserted pair by pair — coverage alone let
 hue and brightness swap CCs and `blank` and `reset` swap buttons, a surface
 whose silkscreen lies with every behaviour test still green — and every select
 row is checked to be exactly as wide as its kind, and every bound control to

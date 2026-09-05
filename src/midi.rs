@@ -386,9 +386,9 @@ impl Stream {
     }
 }
 
-/// How much of a knob's travel one full throw of a fader moves: a power of
-/// two from the whole travel down to a sixteenth; a quarter is where it
-/// starts.
+/// How much of a continuous knob's travel one full throw moves: a power
+/// of two from the whole travel down to a sixteenth, a quarter to start.
+/// A count knob runs its whole count over the throw and does not listen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Precision {
     halvings: u8,
@@ -398,7 +398,6 @@ impl Precision {
     const FINEST: u8 = 4;
     pub const DEFAULT: Precision = Precision { halvings: 2 };
 
-    /// The fraction of the travel a full throw covers.
     pub fn gain(self) -> f32 {
         1.0 / f32::from(1u8 << self.halvings)
     }
@@ -515,6 +514,12 @@ impl Midi {
 
     pub fn finer(&mut self) {
         self.precision = self.precision.finer();
+    }
+
+    pub fn forgive(&mut self, knobs: impl IntoIterator<Item = Knob>) {
+        for knob in knobs {
+            self.owed[knob as usize] = 0.0;
+        }
     }
 
     pub fn coarser(&mut self) {
@@ -1418,7 +1423,7 @@ mod tests {
     }
 
     #[test]
-    fn a_count_knob_runs_its_whole_count_over_the_throw_a_step_at_a_time() {
+    fn a_count_knob_runs_its_whole_count_over_the_throw_a_step_at_a_time_deaf_to_the_precision() {
         let mut params = crate::config::instrument();
         params.delay = 4;
         let mut midi = Midi::default();

@@ -383,6 +383,7 @@ impl App {
         // and so was the knob "the last knob turned" names.
         self.cut = None;
         self.last_knob = None;
+        self.midi.forgive(Knob::ALL);
         log::info!("reset: {}", self.params.describe(self.focus));
     }
 
@@ -422,10 +423,13 @@ impl App {
         // The index and not the value: two monitors may sit on the same hue,
         // and a rewind after a select between them owes the monitor the hand
         // was on rather than the one it is on now.
-        let moved_under = |knob: Knob| knob.node() == Some(node) && index != self.focus.at(node);
+        let focus = self.focus;
+        let moved_under = |knob: Knob| knob.node() == Some(node) && index != focus.at(node);
         if self.last_knob.is_some_and(moved_under) {
             self.last_knob = None;
         }
+        self.midi
+            .forgive(Knob::ALL.into_iter().filter(|knob| moved_under(*knob)));
         self.focus = self.focus.with(node, index);
         log::info!("{}", self.params.describe(self.focus));
     }
@@ -1558,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    fn rotaries_3_and_4_move_the_delay_and_the_frame_rate_the_overlay_reads() {
+    fn rotaries_3_and_4_turn_what_the_overlay_reads() {
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
@@ -1579,5 +1583,31 @@ mod tests {
         }
         assert_eq!(app.readout().reads(Knob::Delay), "2");
         assert_eq!(app.readout().reads(Knob::FrameRate), "24");
+    }
+
+    #[test]
+    fn a_select_and_a_reset_forgive_the_half_step_a_count_knob_was_owed() {
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        let delays = |app: &App| app.params.cameras.map(|cam| cam.delay);
+        surface(&mut app, &board, 18, 20);
+        surface(&mut app, &board, 18, 50);
+        assert_eq!(delays(&app), [0, 0, 0]);
+        app.act(Action::Focus(Node::Camera, 1));
+        surface(&mut app, &board, 18, 60);
+        assert_eq!(
+            delays(&app),
+            [0, 0, 0],
+            "camera 2 is not paid camera 1's debt"
+        );
+        surface(&mut app, &board, 18, 80);
+        assert_eq!(delays(&app), [0, 0, 0]);
+        app.act(Action::Reset);
+        surface(&mut app, &board, 18, 90);
+        assert_eq!(delays(&app), [0, 0, 0], "a reset owes nothing");
+        surface(&mut app, &board, 18, 127);
+        assert_eq!(delays(&app), [0, 1, 0]);
     }
 }
