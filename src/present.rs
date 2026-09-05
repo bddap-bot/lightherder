@@ -19,6 +19,14 @@ pub enum View {
     Solo(usize),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
 pub struct Present {
     pipeline: wgpu::RenderPipeline,
     mark: wgpu::RenderPipeline,
@@ -29,7 +37,7 @@ pub struct Present {
 /// small one still shows a texel.
 const LINE_AT_1080: f32 = 2.0;
 
-fn mark_thickness(height: u32) -> f32 {
+pub(crate) fn mark_thickness(height: u32) -> f32 {
     (LINE_AT_1080 * height as f32 / 1080.0).max(1.0)
 }
 
@@ -119,23 +127,29 @@ impl Present {
             });
             // Every cell is the same size, so one fit serves them all — and
             // cells too small to hold a viewport skip the lot.
-            let fitted = fit(cell, monitors.aspect());
+            let cells: Vec<Rect> = match fit(cell, monitors.aspect()) {
+                Some((x, y, w, h)) => (0..cols * rows)
+                    .map(|i| Rect {
+                        x: x + (i % cols * cell.0) as f32,
+                        y: y + (i / cols * cell.1) as f32,
+                        w,
+                        h,
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
             for (tile, m) in tiles.enumerate() {
-                let Some((x, y, width, height)) = fitted else {
+                let Some(r) = cells.get(tile) else {
                     continue;
                 };
-                let (col, row) = (tile as u32 % cols, tile as u32 / cols);
-                let (x, y) = (x + (col * cell.0) as f32, y + (row * cell.1) as f32);
                 pass.set_pipeline(&self.pipeline);
-                pass.set_viewport(x, y, width, height, 0.0, 1.0);
-                // The dynamic offset picks the monitor: its uniform slot
-                // carries its own layer index for fs_present.
+                pass.set_viewport(r.x, r.y, r.w, r.h, 0.0, 1.0);
                 pass.set_bind_group(0, monitors.bind_group(), &[monitors.uniform_offset(m)]);
                 pass.draw(0..3, 0..1);
                 if marked == Some(m) {
                     pass.set_pipeline(&self.mark);
                     for (sx, sy, sw, sh) in
-                        mark_strips((x, y, width, height), mark_thickness(target_size.1))
+                        mark_strips((r.x, r.y, r.w, r.h), mark_thickness(target_size.1))
                     {
                         pass.set_viewport(sx, sy, sw, sh, 0.0, 1.0);
                         pass.draw(0..3, 0..1);
@@ -143,7 +157,11 @@ impl Present {
                 }
             }
             if let Some(overlay) = overlay {
-                overlay.draw(&mut pass, target_size);
+                let bank = match solo {
+                    None => cells.as_slice(),
+                    Some(_) => &[],
+                };
+                overlay.draw(queue, &mut pass, target_size, bank);
             }
         }
         queue.submit([encoder.finish()]);

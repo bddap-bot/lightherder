@@ -28,3 +28,42 @@ fn fs_overlay(in: VsOut) -> @location(0) vec4<f32> {
     // Straight alpha out; the pipeline's blend state does the compositing.
     return textureSample(panel_tex, panel_samp, in.uv);
 }
+
+struct Arrows {
+    count: vec4<u32>,
+    line: vec4<f32>,
+    segments: array<vec4<f32>, 40>,
+    shares: array<vec4<f32>, 40>,
+};
+
+@group(0) @binding(2) var<uniform> arrows: Arrows;
+
+fn cover(p: vec2<f32>, s: vec4<f32>, widen: f32) -> f32 {
+    let a = s.xy;
+    let ab = s.zw - a;
+    let len = length(ab);
+    let d = ab / len;
+    let ap = p - a;
+    let t = dot(ap, d);
+    let perp = abs(ap.x * d.y - ap.y * d.x);
+    let half = arrows.line.x * 0.5 + widen;
+    let head = arrows.line.y;
+    let shaft = step(0.0, t) * step(t, len - head) * (1.0 - smoothstep(-0.5, 0.5, perp - half));
+    let u = (len - t) / head;
+    let tip = step(0.0, u) * step(u, 1.0)
+        * (1.0 - smoothstep(-0.5, 0.5, perp - (arrows.line.z * u + widen)));
+    return max(shaft, tip);
+}
+
+@fragment
+fn fs_arrows(in: VsOut) -> @location(0) vec4<f32> {
+    let p = in.pos.xy;
+    var inner = 0.0;
+    var outer = 0.0;
+    for (var i = 0u; i < arrows.count.x; i++) {
+        let share = arrows.shares[i].x;
+        inner = max(inner, cover(p, arrows.segments[i], 0.0) * share);
+        outer = max(outer, cover(p, arrows.segments[i], 1.0) * share);
+    }
+    return vec4<f32>(vec3<f32>(inner / max(outer, 1e-4)), outer);
+}

@@ -18,7 +18,7 @@
 use bytemuck::Zeroable;
 
 use crate::affine::{flip_uv, sample_transform, Framing};
-use crate::params::{Camera, Key, Params};
+use crate::params::{Camera, Flow, Key, Params};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
@@ -170,27 +170,39 @@ pub(crate) fn taps_of(
     newest: usize,
 ) -> impl Iterator<Item = (Through, usize, f32)> + '_ {
     let shape = Shape::of(params);
-    let feed = params.rig.feed(m);
-    let through_cameras = params
-        .cameras
-        .iter()
-        .enumerate()
-        .filter(move |(c, _)| feed.cameras[*c] > 0.0)
-        .flat_map(move |(c, camera)| {
-            camera
-                .look
-                .iter()
-                .enumerate()
-                .filter(|(_, look)| **look > 0.0)
-                .map(move |(src, look)| {
-                    let layer = shape.monitor(shape.read(newest, camera), src);
-                    (Through::Camera(c), layer, feed.cameras[c] * look)
-                })
-        });
-    let straight_in = (feed.seed > 0.0)
-        .then(move || (Through::Seed, shape.seed(), feed.seed))
-        .into_iter();
-    through_cameras.chain(straight_in)
+    params.flows().flat_map(move |into| {
+        let mut taps = Vec::new();
+        match into {
+            Flow::Feed {
+                camera,
+                monitor,
+                share,
+            } if monitor == m => {
+                let slab = shape.read(newest, &params.cameras[camera]);
+                for seen in params.flows() {
+                    if let Flow::Look {
+                        camera: c,
+                        monitor: src,
+                        share: look,
+                    } = seen
+                    {
+                        if c == camera {
+                            taps.push((
+                                Through::Camera(camera),
+                                shape.monitor(slab, src),
+                                share * look,
+                            ));
+                        }
+                    }
+                }
+            }
+            Flow::Seed { monitor, share } if monitor == m => {
+                taps.push((Through::Seed, shape.seed(), share));
+            }
+            Flow::Feed { .. } | Flow::Seed { .. } | Flow::Look { .. } => {}
+        }
+        taps
+    })
 }
 
 /// What a tap came through: one of the graph's cameras, or an input on its

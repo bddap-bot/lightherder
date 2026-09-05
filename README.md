@@ -478,10 +478,20 @@ since neither the resolution nor the depth alone is what went wrong.
 
 **The control surface is the instrument.** There is no keyboard: if a control
 is not on the board it does not exist. The surface's cycle button shows the
-panel above on the glass, each control captioned in a couple of words. Every
-knob logs its new value on change, and the log line is the numeric readout: the
-focused camera, monitor and switcher, every knob on them, and whether that
-monitor is on program or direct. The glass shows one thing of the focus
+panel above on the glass, each control captioned in a couple of words, and
+each fader and rotary drawn where the knob it points at stands, the number
+under it. That number is the value the program holds for the focused node,
+never where the hardware sits: a fader turns its knob by how far it moves, so
+after a change of focus, a rewind or a clutched throw the two differ, and the
+glass shows the truth the picture is made from. The lit buttons on the panel
+are the surface's lamps. In the tiled bank the panel is joined by the
+dataflow: the three cameras and the seed stand in the bank's spare cell, an
+arrow runs from each monitor to the camera watching it and from each camera
+and the seed to the monitors they feed, the heavier the larger the share, and
+the arrows are read off the same taps the passes are built from. A solo draws
+none. Every knob logs its new value on change, and the log line is the same
+readout: the focused camera, monitor and switcher, every knob on them, and
+whether that monitor is on program or direct. The glass shows one thing of the focus
 itself: in the tiled bank the focused monitor's tile is framed with a thin
 line, so a glance finds which glass the faders are on. A solo has nothing to
 pick out and draws none.

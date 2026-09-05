@@ -334,6 +334,24 @@ impl Default for Params {
 
 /// A kind of node the focus points at, and so one of the surface's three
 /// rows of select buttons.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Flow {
+    Look {
+        camera: usize,
+        monitor: usize,
+        share: f32,
+    },
+    Feed {
+        camera: usize,
+        monitor: usize,
+        share: f32,
+    },
+    Seed {
+        monitor: usize,
+        share: f32,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Node {
     Camera,
@@ -433,6 +451,14 @@ impl Limit {
         self.stepped(high) - self.stepped(low)
     }
 
+    pub fn fraction(self, value: f32) -> f32 {
+        let travel = self.travel();
+        if travel == 0.0 {
+            return 0.0;
+        }
+        ((self.stepped(value) - self.stepped(self.ends().0)) / travel).clamp(0.0, 1.0)
+    }
+
     /// Nepers on a ratio, so that one step is one factor wherever the knob
     /// stands.
     fn stepped(self, value: f32) -> f32 {
@@ -501,6 +527,18 @@ impl Knob {
 
     /// Which node the knob's value belongs to, and so which of a [`Focus`]'s
     /// indices it reads.
+    pub fn readout(self, value: f32) -> String {
+        match self {
+            Knob::Zoom | Knob::Saturation | Knob::Contrast | Knob::Sharpness | Knob::Switcher => {
+                format!("{value:.3}")
+            }
+            Knob::Rotation | Knob::Hue | Knob::Brightness => format!("{value:+.3}"),
+            Knob::Temperature => format!("{value:+.1}"),
+            Knob::Delay | Knob::Period => format!("{}", value as u32),
+            Knob::FrameRate => format!("{}", Cadence::ALL[value as usize].fps()),
+        }
+    }
+
     pub const fn node(self) -> Node {
         match self {
             Knob::Zoom | Knob::Rotation | Knob::Delay => Node::Camera,
@@ -571,6 +609,35 @@ impl Params {
 
     pub fn send(&self, m: usize) -> f32 {
         self.rig.feed(m).seed
+    }
+
+    pub fn flows(&self) -> impl Iterator<Item = Flow> + '_ {
+        let looks = self.cameras.iter().enumerate().flat_map(|(camera, cam)| {
+            cam.look
+                .iter()
+                .enumerate()
+                .filter(|(_, share)| **share > 0.0)
+                .map(move |(monitor, share)| Flow::Look {
+                    camera,
+                    monitor,
+                    share: *share,
+                })
+        });
+        let feeds = (0..self.monitors.len()).flat_map(move |monitor| {
+            let feed = self.rig.feed(monitor);
+            let cameras = (0..self.cameras.len())
+                .filter(move |c| feed.cameras[*c] > 0.0)
+                .map(move |camera| Flow::Feed {
+                    camera,
+                    monitor,
+                    share: feed.cameras[camera],
+                });
+            cameras.chain((feed.seed > 0.0).then_some(Flow::Seed {
+                monitor,
+                share: feed.seed,
+            }))
+        });
+        looks.chain(feeds)
     }
 
     /// Through [`Params::place`] rather than by writing the field, so the
@@ -668,29 +735,28 @@ impl Params {
     /// The focused nodes and every knob's value: the only readout the
     /// instrument has.
     pub fn describe(&self, focus: Focus) -> String {
-        let cam = &self.cameras[focus.camera];
-        let mon = &self.monitors[focus.monitor];
+        let reads = |knob: Knob| knob.readout(self.knob(knob, focus));
         format!(
-            "cam {}/{}: zoom {:.3}  rot {:+.3}  delay {}/{}\n\
-             mon {}/{}: hue {:+.3}  sat {:.3}  bright {:+.3}  contrast {:.3}  \
-             temp {:+.1}  sharp {:.3}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}\n\
-             sw {}/{}: switcher {:.3}  period {}",
+            "cam {}/{}: zoom {}  rot {}  delay {}/{}\n\
+             mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \
+             temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}\n\
+             sw {}/{}: switcher {}  period {}",
             focus.camera + 1,
             self.cameras.len(),
-            self.framing(focus.camera).zoom,
-            self.framing(focus.camera).rotation,
-            cam.delay,
+            reads(Knob::Zoom),
+            reads(Knob::Rotation),
+            reads(Knob::Delay),
             self.delay,
             focus.monitor + 1,
             self.monitors.len(),
-            mon.colour.hue,
-            mon.colour.saturation,
-            mon.colour.brightness,
-            mon.colour.contrast,
-            mon.colour.temperature,
-            mon.sharpness,
-            mon.flip,
-            mon.cadence.fps(),
+            reads(Knob::Hue),
+            reads(Knob::Saturation),
+            reads(Knob::Brightness),
+            reads(Knob::Contrast),
+            reads(Knob::Temperature),
+            reads(Knob::Sharpness),
+            self.monitors[focus.monitor].flip,
+            reads(Knob::FrameRate),
             Cadence::SECOND,
             match self.rig.on_program(focus.monitor) {
                 true => "program",
@@ -700,8 +766,8 @@ impl Params {
             focus.camera + 1,
             focus.switcher + 1,
             self.rig.switchers.len(),
-            self.rig.switchers[focus.switcher],
-            self.rig.periods[focus.switcher],
+            reads(Knob::Switcher),
+            reads(Knob::Period),
         )
     }
 }

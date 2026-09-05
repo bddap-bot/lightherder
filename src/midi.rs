@@ -523,6 +523,11 @@ impl Midi {
 
     /// Whether a hand is holding the clutch, read off the buttons themselves
     /// so that there is no second flag to fall out of step with them.
+    #[cfg(test)]
+    pub(crate) fn standing(&self, cc: u8) -> Option<u8> {
+        self.standing[usize::from(cc)]
+    }
+
     fn clutched(&self) -> bool {
         self.held[usize::from(CLUTCH)]
     }
@@ -630,7 +635,7 @@ impl Midi {
 
     /// The panel [`Midi::show`] would ask for, apart from whether there is a
     /// surface to ask.
-    fn wanted(&self, focus: Focus, shown: Shown) -> Lamplight {
+    pub(crate) fn wanted(&self, focus: Focus, shown: Shown) -> Lamplight {
         let when = |on: bool, action| if on { self.lamp_of(action) } else { 0 };
         let mut want = Node::ALL.into_iter().fold(0, |want, node| {
             want | self.lamp_of(Action::Focus(node, focus.at(node)))

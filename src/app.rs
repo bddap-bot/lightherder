@@ -17,7 +17,7 @@ use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::midi::{Midi, Shown};
-use crate::overlay::Overlay;
+use crate::overlay::{Overlay, Readout};
 use crate::params::{Focus, Knob, Node, Params};
 use crate::present::{Present, View};
 
@@ -585,15 +585,27 @@ impl App {
     /// and is a different size on every window. Solo and the overlay are the
     /// display's, so a capture is framed the way the display is — but not
     /// the focus mark, which guides the hand and is no part of the picture.
-    fn grab(&self, capture: &mut Capture) -> Result<(), String> {
+    fn readout(&self) -> Readout {
+        Readout::of(
+            &self.params,
+            self.focus,
+            self.midi.wanted(self.focus, self.shown()),
+        )
+    }
+
+    fn grab(&mut self, capture: &mut Capture) -> Result<(), String> {
         let view = match self.view() {
             View::Bank { .. } => View::Bank { focus: None },
             solo => solo,
         };
+        let readout = self.readout();
         let live = self
             .live
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| "there is no picture yet".to_string())?;
+        if self.overlay_shown {
+            live.overlay.show(&self.gpu.queue, &self.params, readout);
+        }
         capture.frame(
             &self.gpu.device,
             &self.gpu.queue,
@@ -780,6 +792,7 @@ impl ApplicationHandler for App {
                 // the window's.
                 let view = self.view();
                 let overlay = self.overlay_shown;
+                let (focus, lit) = (self.focus, self.midi.wanted(self.focus, self.shown()));
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
@@ -797,6 +810,10 @@ impl ApplicationHandler for App {
                 // all, which the chain below would spin on, or stops handing
                 // them out and leaves a second per frame inside the acquire.
                 // The piece plays on through either; only the picture waits.
+                if overlay {
+                    let readout = Readout::of(&self.params, focus, lit);
+                    live.overlay.show(&self.gpu.queue, &self.params, readout);
+                }
                 let shown = !self.covered && live.show(&self.gpu, view, overlay);
                 // Under Fifo the present waits for the blank, so a frame that
                 // went out is the one thing that can ask for the next at the
@@ -1394,5 +1411,92 @@ mod tests {
         assert_eq!(app.params, app.initial);
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, app.initial);
+    }
+    fn proof(app: &App, name: &str, view: View) {
+        let Some(dir) = std::env::var_os("LIGHTHERDER_PROOF_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let (device, queue) = (&app.gpu.device, &app.gpu.queue);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let size = (640, 360);
+        let mut source = pollster::block_on(Source::open(
+            &crate::input::Input::Pattern(crate::input::Pattern::Bars),
+            size,
+        ))
+        .unwrap();
+        let mut feedback = Feedback::new(device, size.0, size.1, &app.params);
+        feedback.write_seed(queue, source.frame().unwrap());
+        for _ in 0..3 {
+            feedback.step(device, queue, &app.params);
+        }
+        let present = Present::new(device, &feedback, format);
+        let mut overlay = Overlay::new(device, queue, format);
+        overlay.show(queue, &app.params, app.readout());
+        let mut capture = Capture::still(device, &dir, (1920, 1080), format).unwrap();
+        capture
+            .frame(device, queue, &present, &feedback, view, Some(&overlay))
+            .unwrap();
+        let path = capture.finish().unwrap();
+        std::fs::rename(&path, dir.join(format!("{name}.png"))).unwrap();
+    }
+
+    #[test]
+    fn the_overlay_reads_the_knob_the_program_holds_and_not_where_the_fader_stands() {
+        use crate::midi::CLUTCH;
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        let fader = 7;
+        let reads = |app: &App| app.readout().reads(Knob::Switcher);
+        assert_eq!(reads(&app), "1.000");
+
+        surface(&mut app, &board, fader, 127);
+        surface(&mut app, &board, fader, 64);
+        let moved = app.params.knob(Knob::Switcher, app.focus);
+        assert!((moved - (1.0 - 63.0 / 127.0 / 4.0)).abs() < 1e-5, "{moved}");
+        assert_eq!(reads(&app), Knob::Switcher.readout(moved));
+
+        app.act(Action::Focus(Node::Switcher, 1));
+        assert_eq!(app.midi.standing(fader), Some(64));
+        assert_eq!(reads(&app), "1.000", "a page flip: the fader stands at 64");
+        app.act(Action::Focus(Node::Switcher, 0));
+        assert_eq!(reads(&app), Knob::Switcher.readout(moved));
+
+        surface(&mut app, &board, CLUTCH, 127);
+        surface(&mut app, &board, fader, 0);
+        assert_eq!(app.midi.standing(fader), Some(0));
+        assert_eq!(app.params.knob(Knob::Switcher, app.focus), moved);
+        assert_eq!(
+            reads(&app),
+            Knob::Switcher.readout(moved),
+            "a clutched fader: the fader stands at 0"
+        );
+        surface(&mut app, &board, CLUTCH, 0);
+
+        surface(&mut app, &board, fader, 20);
+        app.act(Action::ResetLastKnob);
+        assert_eq!(app.midi.standing(fader), Some(20));
+        assert_eq!(app.params.knob(Knob::Switcher, app.focus), 1.0);
+        assert_eq!(reads(&app), "1.000", "a rewind: the fader stands at 20");
+        app.overlay_shown = true;
+        proof(&app, "overlay-true-value", View::Bank { focus: None });
+        proof(&app, "overlay-solo", View::Solo(0));
+    }
+
+    #[test]
+    fn the_overlay_shows_the_dataflow_of_the_graph_being_played() {
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        app.act(Action::Focus(Node::Switcher, 1));
+        turn(&mut app, Knob::Switcher, -0.5);
+        app.act(Action::Focus(Node::Monitor, 2));
+        app.act(Action::Flip(crate::affine::Axis::X));
+        app.overlay_shown = true;
+        let flows: Vec<_> = app.params.flows().collect();
+        assert_eq!(flows.len(), 12, "{flows:?}");
+        proof(&app, "overlay-arrows", View::Bank { focus: None });
     }
 }

@@ -2422,7 +2422,7 @@ fn assert_shows_the_seed(img: &Image, monitors: usize, m: usize, what: &str) {
 fn the_startup_graph_carries_the_seed_to_the_last_pair_of_screens() {
     let p = lightherder::config::instrument();
     let n = p.monitors.len();
-    let monitor = (256, 144);
+    let monitor = (512, 288);
     let Some(mut h) = graph_harness(monitor, (3 * monitor.0, 2 * monitor.1), &p) else {
         return;
     };
