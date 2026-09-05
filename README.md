@@ -98,11 +98,10 @@ switchers would feed nothing — and every switcher run to In2, the end away
 from its own structure's camera: the seed on D, the stage before on C and B,
 camera B on A. So no loop is closed and the seed walks the whole chain
 untouched: D passes it to C, C to B, B puts it on both B monitors whole,
-camera B sees that pair through the glass, and switcher A puts what camera B
-sees on both A monitors while the rotating monitor shows it too. Every screen
-shows the seed and no loop is closed yet; running any switcher back toward
-In1 lets its camera in, and that is where the feedback starts. Structure A
-never takes the seed directly: it reaches A only as light already through B.
+camera B sees that pair through the glass a pass later, and switcher A puts
+what camera B sees on both A monitors while the rotating monitor shows it
+too. Every screen shows the seed; running any switcher back toward In1 lets
+its camera in, and that is where the feedback starts.
 
 Each camera's gain is a per-channel loss down the cable and through the lens,
 just under unity, which is what makes a loop settle rather than run. A's blue
@@ -483,19 +482,19 @@ panel above on the glass, each control captioned in a couple of words, and
 each fader and rotary drawn where the knob it points at stands, the number
 under it. That number is the value the program holds for the focused node,
 never where the hardware sits: a fader turns its knob by how far it moves, so
-after a change of focus, a rewind or a clutched throw the two differ, and the
-glass shows the truth the picture is made from. The lit buttons on the panel
-are the surface's lamps. In the tiled bank the panel is joined by the
-dataflow: the three cameras and the seed stand in the bank's spare cell, an
-arrow runs from each monitor to the camera watching it and from each camera
-and the seed to the monitors they feed, the heavier the larger the share, and
-the arrows are read off the same levers and glass the passes are built from.
-A solo draws none. Every knob logs its new value on change, and the log line is the same
-readout: the focused camera, monitor and switcher, every knob on them, and
-whether that monitor is on program or direct. The glass shows one thing of the focus
-itself: in the tiled bank the focused monitor's tile is framed with a thin
-line, so a glance finds which glass the faders are on. A solo has nothing to
-pick out and draws none.
+after a clutched throw the two differ, and the glass shows the truth the
+picture is made from. The lit buttons on the panel are the surface's lamps.
+In the tiled bank the panel is joined by the dataflow: the three cameras and
+the seed stand in the bank's spare cell, an arrow runs from each monitor to
+the camera watching it and from each camera and the seed to the monitors they
+feed, the brighter the larger the share, and the arrows are read off the same
+levers and glass the passes are built from. Every knob logs its new value on
+change, and the log line is the same readout: the focused camera, monitor and
+switcher, every knob on them, and whether that monitor is on program or
+direct. The glass shows one thing of the focus itself: in the tiled bank the
+focused monitor's tile is framed with a thin line, so a glance finds which
+glass the faders are on. A solo has nothing to pick out and draws neither the
+mark nor the arrows.
 
 The knobs act on the focused camera (where it stands on its shaft, and its
 delay), the focused monitor (its front panel) and the focused switcher (its

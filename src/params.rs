@@ -1071,6 +1071,8 @@ mod tests {
         },
     ];
 
+    /// The independent word on where identity is, beside the instrument
+    /// [`Knob::identity`] reads it from: the two must agree or one lies.
     const IDENTITIES: [(Knob, f32); 12] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),

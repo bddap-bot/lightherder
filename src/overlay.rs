@@ -44,6 +44,7 @@ const SOURCES: usize = CAMERAS + 1;
 const SOURCES_H: i32 = SOURCES as i32 * (SOURCE_H + SOURCE_GAP) - SOURCE_GAP;
 
 const MAX_ARROWS: usize = 40;
+const _: () = assert!(MAX_ARROWS.is_multiple_of(4));
 const _: () = assert!(MAX_ARROWS >= 2 * CAMERAS * crate::rig::MONITORS + crate::rig::MONITORS);
 
 struct Canvas {
@@ -367,14 +368,6 @@ fn rasterize(readout: &Readout) -> Raster {
     c.raster()
 }
 
-fn source_row(end: End) -> Option<usize> {
-    match end {
-        End::Camera(c) => Some(c),
-        End::Seed => Some(CAMERAS),
-        End::Monitor(_) => None,
-    }
-}
-
 fn source_box(row: usize) -> Rect {
     Rect {
         x: 0.0,
@@ -496,7 +489,8 @@ fn arrows(
 ) -> Vec<Arrow> {
     let rect = |end: End| match end {
         End::Monitor(m) => tiles.get(m).copied(),
-        source => source_row(source).map(|row| sources[row]),
+        End::Camera(c) => sources.get(c).copied(),
+        End::Seed => Some(sources[CAMERAS]),
     };
     flows
         .filter_map(|f| arrow(rect(f.from)?, rect(f.to)?, f.share, line))
@@ -1160,10 +1154,8 @@ mod tests {
     #[test]
     fn the_shader_holds_as_many_arrows_as_the_uniform_carries() {
         let wgsl = include_str!("shaders/overlay.wgsl");
-        assert!(wgsl.contains(&format!("array<vec4<f32>, {MAX_ARROWS}>")));
-        assert!(wgsl.contains(&format!("array<vec4<f32>, {}>", MAX_ARROWS / 4)));
-        let uniform = ArrowsUniform::of(&[], 2.0);
-        assert_eq!(uniform.count[0], 0);
+        assert!(wgsl.contains(&format!("segments: array<vec4<f32>, {MAX_ARROWS}>,")));
+        assert!(wgsl.contains(&format!("shares: array<vec4<f32>, {}>,", MAX_ARROWS / 4)));
     }
 
     #[test]

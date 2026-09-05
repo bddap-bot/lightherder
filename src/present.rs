@@ -144,19 +144,17 @@ impl Present {
             });
             // Every cell is the same size, so one fit serves them all — and
             // cells too small to hold a viewport skip the lot.
-            let cells: Vec<Rect> = match fit(cell, monitors.aspect()) {
-                Some((x, y, w, h)) => (0..cols * rows)
-                    .map(|i| Rect {
-                        x: x + (i % cols * cell.0) as f32,
-                        y: y + (i / cols * cell.1) as f32,
-                        w,
-                        h,
-                    })
-                    .collect(),
-                None => Vec::new(),
+            let fitted = fit(cell, monitors.aspect());
+            let cell_at = |i: u32| {
+                fitted.map(|(x, y, w, h)| Rect {
+                    x: x + (i % cols * cell.0) as f32,
+                    y: y + (i / cols * cell.1) as f32,
+                    w,
+                    h,
+                })
             };
             for (tile, m) in tiles.enumerate() {
-                let Some(r) = cells.get(tile) else {
+                let Some(r) = cell_at(tile as u32) else {
                     continue;
                 };
                 pass.set_pipeline(&self.pipeline);
@@ -174,6 +172,7 @@ impl Present {
                 }
             }
             if let Some((overlay, params)) = overlay {
+                let cells = (0..cols * rows).filter_map(cell_at).collect();
                 let bank = bank(solo, monitors.monitors(), cells);
                 overlay.draw(queue, &mut pass, target_size, params, bank.as_ref());
             }

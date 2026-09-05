@@ -169,6 +169,8 @@ fn glass(cam: Cam, screen: Screen) -> f32 {
 }
 
 impl Rig {
+    /// Every switcher at In2 and every monitor on its program: the routing
+    /// that hands the seed the length of the chain with no loop closed.
     pub const IDENTITY: Rig = Rig {
         switchers: [1.0; SWITCHERS],
         selects: [Select::Program; SELECTS],
@@ -249,10 +251,8 @@ impl Rig {
         }
     }
 
-    /// The rig at this setting, as the graph the instrument runs. Both shafts
-    /// pull back a little and turn the same way at their own rates, so the
-    /// structures stay distinct and no round trip cancels its own rotation.
-    /// The seed is the one physical camera, and the monitors are dark: on
+    /// The rig at this setting, as the graph the instrument runs: both shafts
+    /// square on, every knob at its identity. The seed is the one physical camera, and the monitors are dark: on
     /// this rig the seed input is what sparks the loops.
     pub fn params(&self) -> Params {
         let camera = |cam: Cam, gain: [f32; 3]| Camera {

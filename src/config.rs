@@ -124,8 +124,7 @@ mod tests {
     fn the_instrument_is_contracting() {
         // The light monitor `i` shows next frame is at most `sum` times the
         // brightest thing on any monitor this frame, so `sum < 1` means it
-        // settles instead of blooming to white. Near 1, or the trail is not
-        // worth seeing. The seed is left out: it is light entering the graph,
+        // settles instead of blooming to white. The seed is left out: it is light entering the graph,
         // so it belongs to what the loop is driven *by*, not to what it
         // multiplies.
         //
@@ -155,6 +154,9 @@ mod tests {
                             })
                             .fold(0.0, f32::max);
                         assert!(sum < 1.0, "monitor {m}: gain sum {sum} blooms");
+                        if a == 0.0 && b == 0.0 {
+                            assert!(sum > 0.9, "monitor {m}: gain sum {sum} dies fast");
+                        }
                     }
                 }
             }

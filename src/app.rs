@@ -591,12 +591,12 @@ impl App {
             View::Bank { .. } => View::Bank { focus: None },
             solo => solo,
         };
-        let readout = self.readout();
+        let readout = self.overlay_shown.then(|| self.readout());
         let live = self
             .live
             .as_mut()
             .ok_or_else(|| "there is no picture yet".to_string())?;
-        if self.overlay_shown {
+        if let Some(readout) = readout {
             live.overlay
                 .show(&self.gpu.device, &self.gpu.queue, readout);
         }
@@ -786,7 +786,7 @@ impl ApplicationHandler for App {
                 // the window's.
                 let view = self.view();
                 let overlay = self.overlay_shown;
-                let (focus, lit) = (self.focus, self.midi.wanted(self.focus, self.shown()));
+                let readout = overlay.then(|| self.readout());
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
@@ -804,8 +804,7 @@ impl ApplicationHandler for App {
                 // all, which the chain below would spin on, or stops handing
                 // them out and leaves a second per frame inside the acquire.
                 // The piece plays on through either; only the picture waits.
-                if overlay {
-                    let readout = Readout::of(&self.params, focus, lit);
+                if let Some(readout) = readout {
                     live.overlay
                         .show(&self.gpu.device, &self.gpu.queue, readout);
                 }
@@ -845,8 +844,7 @@ mod tests {
         // one: a test apiece opened its own, and a headless Vulkan stack
         // does not survive that many being created and dropped at once —
         // it takes the binary down with a SIGSEGV once there are enough of
-        // them. None of these tests renders, so there is nothing for them
-        // to share wrongly.
+        // them.
         static GPU: std::sync::OnceLock<Option<Gpu>> = std::sync::OnceLock::new();
         let gpu = GPU
             .get_or_init(|| match pollster::block_on(Gpu::open(None, "app test")) {
@@ -1410,14 +1408,10 @@ mod tests {
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, app.initial);
     }
-    fn proof(app: &App, name: &str, view: View) {
-        let Some(dir) = std::env::var_os("LIGHTHERDER_PROOF_DIR") else {
-            return;
-        };
-        let dir = std::path::PathBuf::from(dir);
+    const PROOF_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+    fn overlaid(app: &App, size: (u32, u32)) -> (Feedback, Present, Overlay) {
         let (device, queue) = (&app.gpu.device, &app.gpu.queue);
-        let format = wgpu::TextureFormat::Rgba8Unorm;
-        let size = (640, 360);
         let mut source = pollster::block_on(Source::open(
             &crate::input::Input::Pattern(crate::input::Pattern::Bars),
             size,
@@ -1428,10 +1422,57 @@ mod tests {
         for _ in 0..3 {
             feedback.step(device, queue, &app.params);
         }
-        let present = Present::new(device, &feedback, format);
-        let mut overlay = Overlay::new(device, queue, format);
+        let present = Present::new(device, &feedback, PROOF_FORMAT);
+        let mut overlay = Overlay::new(device, queue, PROOF_FORMAT);
         overlay.show(device, queue, app.readout());
-        let mut capture = Capture::still(device, &dir, (1920, 1080), format).unwrap();
+        (feedback, present, overlay)
+    }
+
+    #[test]
+    fn the_overlay_draws_its_panel_sources_and_arrows_on_the_gpu() {
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        app.overlay_shown = true;
+        let (feedback, present, overlay) = overlaid(&app, (64, 64));
+        let (device, queue) = (&app.gpu.device, &app.gpu.queue);
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("overlay test"),
+            size: wgpu::Extent3d {
+                width: 192,
+                height: 128,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: PROOF_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        for view in [View::Bank { focus: Some(0) }, View::Solo(0)] {
+            present.draw(
+                device,
+                queue,
+                &target,
+                &feedback,
+                view,
+                Some((&overlay, &app.params)),
+            );
+        }
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the overlay's passes ran");
+    }
+
+    fn proof(app: &App, name: &str, view: View) {
+        let Some(dir) = std::env::var_os("LIGHTHERDER_PROOF_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let (device, queue) = (&app.gpu.device, &app.gpu.queue);
+        let (feedback, present, overlay) = overlaid(app, (640, 360));
+        let mut capture = Capture::still(device, &dir, (1920, 1080), PROOF_FORMAT).unwrap();
         capture
             .frame(
                 device,

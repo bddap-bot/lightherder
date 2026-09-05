@@ -15,7 +15,7 @@ use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Cadence, Camera, Colour, Key, Monitor, Params, Plug};
 use lightherder::present::{Present, View};
-use lightherder::rig::{Rig, Select, MONITORS};
+use lightherder::rig::{Rig, Select, MONITORS, SELECTS, SWITCHERS};
 
 /// Where the spot this suite lights sits, in screen units — off-centre on
 /// purpose: a radially symmetric spot at the centre is a fixed point of
@@ -1053,16 +1053,15 @@ fn silent_monitor() -> Monitor {
 }
 
 /// The rig with every camera blind and every monitor silent: the blank the
-/// wiring tests below build on. The switchers stand at their identity, so
-/// each structure monitor is on its own camera direct and the seed reaches
-/// none of them — what a test wants of the matrix it says with the switchers,
+/// wiring tests below build on. Every switcher at In1 and every monitor on
+/// its own camera direct, so the seed reaches none of them — what a test wants of the matrix it says with the switchers,
 /// and what it wants each camera to see it says with `look`.
 fn blank() -> Params {
     let mut p = lightherder::config::instrument();
     p.rig = Rig {
-        switchers: [0.0; 4],
-        selects: [Select::Direct; 4],
-        periods: [0; 4],
+        switchers: [0.0; SWITCHERS],
+        selects: [Select::Direct; SELECTS],
+        periods: [0; SWITCHERS],
     };
     p.delay = 0;
     p.shafts = [Framing::identity(); 2];
