@@ -1,12 +1,11 @@
-//! The control surface: a MIDI device read off ALSA on a thread of its own,
-//! its messages turned into [`Action`]s. It is the whole of what plays this
-//! instrument — there is no keyboard.
+//! The control surface: a Korg nanoKONTROL2 read off ALSA on a thread of its
+//! own, its messages turned into [`Action`]s. It is the whole of what plays
+//! this instrument — there is no keyboard.
 //!
 //! Two kinds of control, because a surface has two kinds of thing on it. A
 //! fader or a rotary names a [`Knob`] and turns it by how far it has moved,
 //! never to where it stands — the README says why. A button sends that it
-//! was pushed, so it names a command by the two words [`crate::command`]
-//! spells it with.
+//! was pushed, so it names an [`Action`].
 //!
 //! ALSA raw MIDI and no library: a USB controller is `/dev/snd/midiC<card>D0`
 //! and reading it gives the wire bytes. Nothing here needs the sequencer's
@@ -25,11 +24,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
-use serde::Deserialize;
 use web_time::Instant;
 
 use crate::affine::Axis;
-use crate::command::{action_for_name, names, Action, Edge};
+use crate::command::{Action, Edge};
 use crate::lamps::{lamp, Lamplight, Lamps};
 use crate::params::{Focus, Knob, Limit, Node, Params};
 
@@ -39,6 +37,11 @@ const DEV_SND: &str = "/dev/snd";
 /// The one file that says which card is which. `/dev/snd` names a card by
 /// number and nothing else, so a surface cannot be recognised without it.
 const CARDS: &str = "/proc/asound/cards";
+
+/// Matched, case-insensitively, against the lines of [`CARDS`]: the first
+/// sound card whose line contains it is the surface. A substring because the
+/// line carries the driver and the bus as well as the name.
+pub(crate) const DEVICE: &str = "nanoKONTROL";
 
 /// How often an absent surface is looked for. Hot-plug with no netlink
 /// socket and no inotify: one small `/proc` read and a handful of stats once a
@@ -62,179 +65,51 @@ pub struct ControlChange {
     value: u8,
 }
 
-/// What the surface's controls are wired to.
-///
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Map {
-    /// Matched, case-insensitively, against the lines of [`CARDS`]: the
-    /// first sound card whose line contains it is the surface. A substring
-    /// because the line carries the driver and the bus as well as the name.
-    pub device: String,
-    /// Continuous controls. Every channel is listened to: a surface with a
-    /// global MIDI channel setting should work whatever it is set to, and
-    /// nothing else is going to be plugged into this instrument.
-    #[serde(default)]
-    pub fader: Vec<Fader>,
-    /// Buttons, by the command each one runs.
-    #[serde(default)]
-    pub button: Vec<Button>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Fader {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Fader {
     pub(crate) cc: u8,
     pub(crate) knob: Knob,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Button {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Button {
     pub(crate) cc: u8,
-    /// A command, spelled the way the panel captions it — `"reset"`,
-    /// `"blank"`, `"mon 1"`.
-    pub(crate) command: String,
+    pub(crate) action: Action,
 }
 
 const fn fader(cc: u8, knob: Knob) -> Fader {
     Fader { cc, knob }
 }
 
-/// A relative `XDG_CONFIG_HOME` is ignored the way the spec says to.
-pub fn map_path() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|dir| dir.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .unwrap_or_else(|| PathBuf::from(".config"))
-        .join("lightherder")
-        .join("midi.toml")
+const fn button(cc: u8, action: Action) -> Button {
+    Button { cc, action }
 }
 
-impl Map {
-    /// The factory CC layout of a Korg nanoKONTROL2, which is what this
-    /// instrument is played from.
-    ///
-    /// The eight faders are the left hand's: the focused monitor's front
-    /// panel, then the focused switcher's period and its crossfade — the
-    /// lever the piece is played on, on the fader nearest the hand that is
-    /// already on the select rows. The rotaries above them are the right
-    /// hand's: the focused camera — where it stands on its shaft and how
-    /// late its cable is — and then the focused monitor's frame rate, the
-    /// one router-output setting a knob turns. Twelve handles on sixteen
-    /// controls, so there is no second page and the four rotaries past the
-    /// fourth are dead — free for a `midi.toml`, and no hand throws one by
-    /// accident. The select rows are as wide as the rig — see
-    /// [`nano_buttons`].
-    pub(crate) fn nano_kontrol2() -> Map {
-        Map {
-            device: "nanoKONTROL".into(),
-            fader: [
-                fader(0, Knob::Hue),
-                fader(1, Knob::Saturation),
-                fader(2, Knob::Brightness),
-                fader(3, Knob::Contrast),
-                fader(4, Knob::Temperature),
-                fader(5, Knob::Sharpness),
-                fader(6, Knob::Period),
-                fader(7, Knob::Switcher),
-                fader(16, Knob::Zoom),
-                fader(17, Knob::Rotation),
-                fader(18, Knob::Delay),
-                fader(19, Knob::FrameRate),
-            ]
-            .into(),
-            button: nano_buttons(),
-        }
-    }
+/// The eight faders are the left hand's: the focused monitor's front panel,
+/// then the focused switcher's period and its crossfade — the lever the
+/// piece is played on, on the fader nearest the hand that is already on the
+/// select rows. The rotaries above them are the right hand's: the focused
+/// camera — where it stands on its shaft and how late its cable is — and
+/// then the focused monitor's frame rate, the one router-output setting a
+/// knob turns. Twelve handles on sixteen controls, so there is no second
+/// page and the four rotaries past the fourth are dead.
+pub(crate) const FADERS: [Fader; 12] = [
+    fader(0, Knob::Hue),
+    fader(1, Knob::Saturation),
+    fader(2, Knob::Brightness),
+    fader(3, Knob::Contrast),
+    fader(4, Knob::Temperature),
+    fader(5, Knob::Sharpness),
+    fader(6, Knob::Period),
+    fader(7, Knob::Switcher),
+    fader(16, Knob::Zoom),
+    fader(17, Knob::Rotation),
+    fader(18, Knob::Delay),
+    fader(19, Knob::FrameRate),
+];
 
-    /// The surface as it is actually mapped, one control a line, for the
-    /// card a performer keeps beside the instrument. Generated from the map
-    /// in force rather than written out beside it, so a `midi.toml` that
-    /// moves a knob moves it on the card too.
-    pub fn card(&self) -> String {
-        let mut out = format!(
-            "surface: the first card named {:?}, on any MIDI channel\n",
-            self.device
-        );
-        for f in &self.fader {
-            let control = silkscreen(&self.device, f.cc);
-            out.push_str(&format!("  {control:<12} {}\n", f.knob.name()));
-        }
-        for b in &self.button {
-            let control = silkscreen(&self.device, b.cc);
-            // The name as well as the sentence: the name is what a
-            // `midi.toml` writes, so a performer reading the card has read
-            // the vocabulary too.
-            let what = crate::command::describes(&b.command).unwrap_or_default();
-            out.push_str(&format!("  {control:<12} {what} ({})\n", b.command));
-        }
-        out
-    }
-
-    /// The performer's map if there is one, the factory layout if there is
-    /// not. A file that is there and will not parse is an error rather than
-    /// a silent fall back to the default: a surface that quietly plays the
-    /// wrong knobs is worse than one that will not start.
-    pub fn load(path: &Path) -> Result<Map, String> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            // No file, or nowhere a file could be — a browser has no
-            // filesystem at all, and "there is no map" is the same answer.
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::Unsupported
-                ) =>
-            {
-                return Ok(Map::nano_kontrol2())
-            }
-            Err(e) => return Err(format!("{}: {e}", path.display())),
-        };
-        let map: Map = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        map.validate()
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(map)
-    }
-
-    /// Everything about a map that has to be true before a note of it is
-    /// played, checked once at load — the surface is read inside the frame
-    /// loop and there is nothing to report an error to there.
-    fn validate(&self) -> Result<(), String> {
-        if self.device.is_empty() {
-            return Err("device is empty, which every card's line contains".into());
-        }
-        let mut seen: Vec<u8> = Vec::new();
-        let faders = self.fader.iter().map(|f| f.cc);
-        for cc in faders.chain(self.button.iter().map(|b| b.cc)) {
-            if cc > 127 {
-                return Err(format!("cc {cc} is not a control number; they stop at 127"));
-            }
-            if seen.contains(&cc) {
-                return Err(format!("cc {cc} is bound twice"));
-            }
-            seen.push(cc);
-        }
-        for b in &self.button {
-            if action_for_name(&b.command).is_none() {
-                let known: Vec<String> = names().collect();
-                return Err(format!(
-                    "cc {}: no command called {:?}; there are {}",
-                    b.cc,
-                    b.command,
-                    known.join(", ")
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Where a control number sits on a nanoKONTROL2's panel: the one copy of
-/// the device's physical facts. [`silkscreen`] names a spot and the overlay
-/// places one, both off this table, so the card and the picture cannot call
-/// the same number two different controls.
+/// Where a control number sits on the panel: the one copy of the device's
+/// physical facts, which the overlay draws off.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Spot {
     Fader(u8),
@@ -245,12 +120,11 @@ pub(crate) enum Spot {
     Transport(&'static TransportButton),
 }
 
-/// One button of the transport strip: what is printed on it, and where it
-/// sits in the strip's grid of three rows.
+/// One button of the transport strip, and where it sits in the strip's grid
+/// of three rows.
 #[derive(Debug)]
 pub(crate) struct TransportButton {
     cc: u8,
-    pub(crate) name: &'static str,
     pub(crate) row: u8,
     pub(crate) col: u8,
     /// The name the silkscreen prints above this button's group, for the
@@ -260,16 +134,9 @@ pub(crate) struct TransportButton {
     pub(crate) group: Option<&'static str>,
 }
 
-const fn transport(
-    cc: u8,
-    name: &'static str,
-    row: u8,
-    col: u8,
-    group: Option<&'static str>,
-) -> TransportButton {
+const fn transport(cc: u8, row: u8, col: u8, group: Option<&'static str>) -> TransportButton {
     TransportButton {
         cc,
-        name,
         row,
         col,
         group,
@@ -281,59 +148,58 @@ const fn transport(
 /// the last three columns; the tape row of five underneath. TRACK and
 /// MARKER are printed above the groups they name.
 pub(crate) const TRANSPORT: &[TransportButton] = &[
-    transport(58, "track prev", 0, 0, Some("TRACK")),
-    transport(59, "track next", 0, 1, Some("TRACK")),
-    transport(46, "cycle", 1, 0, None),
-    transport(60, "marker set", 1, 2, Some("MARKER")),
-    transport(61, "marker prev", 1, 3, Some("MARKER")),
-    transport(62, "marker next", 1, 4, Some("MARKER")),
-    transport(43, "rewind", 2, 0, None),
-    transport(44, "forward", 2, 1, None),
-    transport(42, "stop", 2, 2, None),
-    transport(41, "play", 2, 3, None),
-    transport(45, "record", 2, 4, None),
+    transport(58, 0, 0, Some("TRACK")),
+    transport(59, 0, 1, Some("TRACK")),
+    transport(46, 1, 0, None),
+    transport(60, 1, 2, Some("MARKER")),
+    transport(61, 1, 3, Some("MARKER")),
+    transport(62, 1, 4, Some("MARKER")),
+    transport(43, 2, 0, None),
+    transport(44, 2, 1, None),
+    transport(42, 2, 2, None),
+    transport(41, 2, 3, None),
+    transport(45, 2, 4, None),
 ];
 
 /// The control number the first strip's control carries, one per block. The
 /// panel is eight strips wide and each block is that eight in a run, so a
 /// block is named by where it starts.
-const FADERS: u8 = 0;
-const ROTARIES: u8 = 16;
+const FADER_ROW: u8 = 0;
+const ROTARY_ROW: u8 = 16;
 const S_ROW: u8 = 32;
 const M_ROW: u8 = 48;
 const R_ROW: u8 = 64;
 
-/// How many buttons a select row has, and so how deep any graph may go: the
-/// panel is eight channel strips wide, so a node past this would have no
-/// button.
-pub const ROW_BUTTONS: usize = 8;
+/// How many channel strips the panel has, and so how wide a select row is
+/// and how deep any graph may go: a node past this would have no button.
+pub(crate) const STRIPS: usize = 8;
 
 const _: () = assert!(
-    crate::rig::count(Node::Camera) <= ROW_BUTTONS
-        && crate::rig::count(Node::Monitor) <= ROW_BUTTONS
-        && crate::rig::count(Node::Switcher) <= ROW_BUTTONS,
-    "a count past the select row would name selects no button can carry"
+    crate::rig::count(Node::Camera) <= STRIPS
+        && crate::rig::count(Node::Monitor) <= STRIPS
+        && crate::rig::count(Node::Switcher) <= STRIPS,
+    "a count past the strips would name selects no button can carry"
 );
 
 /// The tails of the Record and Solo rows, which the rig leaves dead — the
 /// switchers and the cameras stop short of them — so they are the select
 /// buttons no rig can claim, and these seven cost the transport nothing.
-pub(crate) const SELECT: u8 = R_ROW + ROW_BUTTONS as u8 - 1;
+pub(crate) const SELECT: u8 = R_ROW + STRIPS as u8 - 1;
 pub(crate) const FLIP_X: u8 = SELECT - 2;
 pub(crate) const FLIP_Y: u8 = SELECT - 1;
 pub(crate) const REVERSE: u8 = FLIP_X - 1;
 const _: () = assert!(crate::rig::count(Node::Switcher) as u8 + R_ROW <= REVERSE);
-pub(crate) const CLUTCH: u8 = S_ROW + ROW_BUTTONS as u8 - 1;
+pub(crate) const CLUTCH: u8 = S_ROW + STRIPS as u8 - 1;
 pub(crate) const COARSER: u8 = CLUTCH - 1;
 pub(crate) const FINER: u8 = COARSER - 1;
 const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= FINER);
 
 pub(crate) fn spot(cc: u8) -> Option<Spot> {
-    let block = |first: u8| (cc >= first && cc < first + ROW_BUTTONS as u8).then(|| cc - first);
-    if let Some(i) = block(FADERS) {
+    let block = |first: u8| (cc >= first && cc < first + STRIPS as u8).then(|| cc - first);
+    if let Some(i) = block(FADER_ROW) {
         return Some(Spot::Fader(i));
     }
-    if let Some(i) = block(ROTARIES) {
+    if let Some(i) = block(ROTARY_ROW) {
         return Some(Spot::Rotary(i));
     }
     if let Some(i) = block(S_ROW) {
@@ -348,48 +214,11 @@ pub(crate) fn spot(cc: u8) -> Option<Spot> {
     TRANSPORT.iter().find(|t| t.cc == cc).map(Spot::Transport)
 }
 
-/// What is printed beside control `cc` on the surface named `device`. Off the
-/// nanoKONTROL2's factory CC layout, the same one [`Map::nano_kontrol2`] is
-/// written against — so a map that moves a knob to another control still
-/// names the control a hand reaches for.
-///
-/// Any other surface gets numbers: these names are one instrument's
-/// silkscreen, and a card that invents a control a performer cannot find is
-/// worse than one that prints the number they can. A number no silkscreen
-/// claims prints as itself for the same reason.
-pub fn silkscreen(device: &str, cc: u8) -> String {
-    if !nano_kontrol2(device) {
-        return format!("cc {cc}");
-    }
-    match spot(cc) {
-        Some(Spot::Fader(i)) => format!("fader {}", i + 1),
-        Some(Spot::Rotary(i)) => format!("rotary {}", i + 1),
-        Some(Spot::S(i)) => format!("S{}", i + 1),
-        Some(Spot::M(i)) => format!("M{}", i + 1),
-        Some(Spot::R(i)) => format!("R{}", i + 1),
-        Some(Spot::Transport(t)) => t.name.into(),
-        None => format!("cc {cc}"),
-    }
-}
-
-/// Whether `device` is the surface whose silkscreen and physical layout this
-/// crate knows. One test, shared by the card's names and the overlay's
-/// geometry: the two must agree on which surface they are drawing.
-pub(crate) fn nano_kontrol2(device: &str) -> bool {
-    device.to_lowercase().contains("nanokontrol")
-}
-
-fn button(cc: u8, command: impl Into<String>) -> Button {
-    Button {
-        cc,
-        command: command.into(),
-    }
-}
-
 /// Which of the three select rows a kind of node is on. Solo selects because
 /// that is what a hand off a mixer reaches for it to do; the other two rows
 /// follow it downward in the order the light travels — the cameras that film
 /// the glass, the glass, then what arrives from outside.
+#[cfg(test)]
 pub(crate) const fn row_of(node: Node) -> u8 {
     match node {
         Node::Camera => S_ROW,
@@ -398,55 +227,50 @@ pub(crate) const fn row_of(node: Node) -> u8 {
     }
 }
 
-/// The nanoKONTROL2's buttons for the rig: the three select rows, and the
-/// transport strip.
-///
-/// **A row is exactly as wide as its kind of node.** The buttons past a
-/// kind's count are dead: dark, silent, and free for a `midi.toml` to claim.
-///
-/// Off [`crate::command`]'s own names rather than a second copy of them, so a
-/// row cannot run past the buttons and a renamed command takes its button
-/// with it.
-fn nano_buttons() -> Vec<Button> {
-    let mut out = Vec::new();
-    for node in Node::ALL {
-        for (index, name) in crate::command::select_names(node).enumerate() {
-            out.push(button(row_of(node) + index as u8, name));
-        }
-    }
-    out.extend([
-        button(62, "blank"),
-        // The tape row's left half is the reset ladder, in the order of how
-        // much it takes back: rewind puts the last knob turned back, stop
-        // puts the whole panel back.
-        button(43, "reset 1"),
-        button(42, "reset"),
-        // Cycle shows and hides the overlay that explains all of the above —
-        // the one button whose job survives not knowing what any button does.
-        button(46, "help"),
-        button(44, "solo"),
-        // The tempo, on the one pair the silkscreen groups. A step and not a
-        // fader, so `--rate` stays where the piece starts rather than being
-        // thrown to wherever a cap was left standing.
-        button(58, "rate -"),
-        button(59, "rate +"),
-        // The capture pair, on the two buttons whose silkscreen already says
-        // what they do: marker set takes a still of the display, and record
-        // records it for as long as a hand stays on it.
-        button(60, "snap"),
-        button(45, "record"),
-        button(61, "cut"),
-        button(REVERSE, "reverse"),
-        button(FLIP_X, "flip x"),
-        button(FLIP_Y, "flip y"),
-        button(SELECT, "select"),
-        button(FINER, "precision -"),
-        button(COARSER, "precision +"),
-        // The corner, findable by feel while the other hand is on the fader
-        // it is freeing.
-        button(CLUTCH, "clutch"),
-    ]);
-    out
+/// The three select rows, each exactly as wide as its kind of node — the
+/// buttons past a kind's count are dead — then the transport strip and the
+/// rows' tails. The tape row's left half is the reset ladder, in the order
+/// of how much it takes back: rewind puts the last knob turned back, stop
+/// puts the whole panel back. Cycle shows and hides the overlay that
+/// explains all of the above — the one button whose job survives not
+/// knowing what any button does. Marker set takes a still of the display,
+/// and record records it for as long as a hand stays on it. The clutch is
+/// the corner, findable by feel while the other hand is on the fader it is
+/// freeing. The track pair and play are dead.
+pub(crate) const BUTTONS: [Button; 27] = [
+    button(S_ROW, Action::Focus(Node::Camera, 0)),
+    button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
+    button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
+    button(M_ROW, Action::Focus(Node::Monitor, 0)),
+    button(M_ROW + 1, Action::Focus(Node::Monitor, 1)),
+    button(M_ROW + 2, Action::Focus(Node::Monitor, 2)),
+    button(M_ROW + 3, Action::Focus(Node::Monitor, 3)),
+    button(M_ROW + 4, Action::Focus(Node::Monitor, 4)),
+    button(R_ROW, Action::Focus(Node::Switcher, 0)),
+    button(R_ROW + 1, Action::Focus(Node::Switcher, 1)),
+    button(R_ROW + 2, Action::Focus(Node::Switcher, 2)),
+    button(R_ROW + 3, Action::Focus(Node::Switcher, 3)),
+    button(62, Action::Clear),
+    button(43, Action::ResetLastKnob),
+    button(42, Action::Reset),
+    button(46, Action::Overlay),
+    button(44, Action::Solo),
+    button(60, Action::Screencap),
+    button(45, Action::Record(Edge::Down)),
+    button(61, Action::Cut(Edge::Down)),
+    button(REVERSE, Action::Reverse),
+    button(FLIP_X, Action::Flip(Axis::X)),
+    button(FLIP_Y, Action::Flip(Axis::Y)),
+    button(SELECT, Action::Select),
+    button(FINER, Action::Finer),
+    button(COARSER, Action::Coarser),
+    button(CLUTCH, Action::Clutch(Edge::Down)),
+];
+
+/// Every control number a button answers to, which is the whole of what the
+/// surface may ever be told to light.
+fn lamps() -> Lamplight {
+    BUTTONS.iter().fold(0, |mask, b| mask | lamp(b.cc))
 }
 
 /// What the lamps say that the focus alone cannot. The caller owns every
@@ -563,8 +387,8 @@ impl Stream {
 }
 
 /// How much of a knob's travel one full throw of a fader moves: a power of
-/// two from the whole travel down to a sixteenth. The ladder is given,
-/// and a quarter is where it starts.
+/// two from the whole travel down to a sixteenth; a quarter is where it
+/// starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Precision {
     halvings: u8,
@@ -608,12 +432,6 @@ pub(crate) fn change(control: u8, value: u8) -> ControlChange {
 
 /// The surface, connected or not.
 pub struct Midi {
-    map: Map,
-    /// The button labels resolved once. `map.button` is the file's spelling
-    /// and this is what a press does; `Midi::new` is the only door and it
-    /// refuses a map with a label no key answers to, so the frame loop
-    /// neither looks a string up nor has an `Option` to swallow.
-    action: Vec<Action>,
     /// Where ALSA is looked for. Constant in the instrument; a parameter so
     /// that discovery, the open and the decode can be run against a directory
     /// the tests wrote.
@@ -628,12 +446,12 @@ pub struct Midi {
     /// half a step either way.
     owed: [f32; Knob::ALL.len()],
     precision: Precision,
-    /// One per entry of `map.button`: whether it is being held. A button is
-    /// acted on when it goes down, so a surface whose buttons latch — the
+    /// Which buttons are being held, by control number. A button is acted on
+    /// when it goes down, so a surface whose buttons latch — the
     /// nanoKONTROL2 can be set either way — plays every other press. Cleared
     /// only by a release passing through [`Midi::action_for`], which is why
     /// an unplug hands the caller one for every button.
-    held: Vec<bool>,
+    held: [bool; 128],
     next_scan: Instant,
     /// The last thing that went wrong looking for the surface, so a device
     /// that is there and will not open is said once rather than sixty times a
@@ -674,38 +492,23 @@ impl TestSurface {
     }
 }
 
-impl Midi {
-    /// The one door: a `Midi` cannot exist over a map the instrument would
-    /// refuse, so nothing downstream has to handle one.
-    pub fn new(map: Map) -> Result<Midi, String> {
-        map.validate()?;
-        let action: Vec<Action> = map
-            .button
-            .iter()
-            .map(|b| action_for_name(&b.command).expect("validate checked every command"))
-            .collect();
-        Ok(Midi {
-            action,
+impl Default for Midi {
+    fn default() -> Midi {
+        Midi {
             standing: [None; 128],
             owed: [0.0; Knob::ALL.len()],
             precision: Precision::DEFAULT,
-            held: vec![false; map.button.len()],
-            map,
+            held: [false; 128],
             snd: PathBuf::from(DEV_SND),
             cards: PathBuf::from(CARDS),
             port: None,
             next_scan: Instant::now(),
             complaint: None,
-        })
+        }
     }
+}
 
-    /// The map in force, which is what the on-screen overlay draws: the
-    /// overlay must show the surface as it is actually wired, not as the
-    /// factory shipped it.
-    pub fn map(&self) -> &Map {
-        &self.map
-    }
-
+impl Midi {
     pub fn precision(&self) -> Precision {
         self.precision
     }
@@ -721,10 +524,7 @@ impl Midi {
     /// Whether a hand is holding the clutch, read off the buttons themselves
     /// so that there is no second flag to fall out of step with them.
     fn clutched(&self) -> bool {
-        self.action
-            .iter()
-            .zip(&self.held)
-            .any(|(action, held)| *held && *action == Action::Clutch(Edge::Down))
+        self.held[usize::from(CLUTCH)]
     }
 
     /// Look somewhere other than the real ALSA for the surface. Tests only.
@@ -745,8 +545,7 @@ impl Midi {
     /// and the port is what says there is one.
     #[cfg(test)]
     pub(crate) fn plug_in_a_test_surface(&mut self) -> TestSurface {
-        let buttons = self.map.button.iter().fold(0, |mask, b| mask | lamp(b.cc));
-        let (lamps, wire) = crate::lamps::over_a_socket(buttons);
+        let (lamps, wire) = crate::lamps::over_a_socket(lamps());
         let (controls, rx) = std::sync::mpsc::channel();
         self.port = Some(Port {
             path: PathBuf::from("a test's surface"),
@@ -791,7 +590,7 @@ impl Midi {
         // is on is nothing.
         if gone {
             self.drop_port();
-            messages.extend(self.map.button.iter().map(|b| ControlChange {
+            messages.extend(BUTTONS.iter().map(|b| ControlChange {
                 control: b.cc,
                 value: 0,
             }));
@@ -819,22 +618,14 @@ impl Midi {
         }
     }
 
-    /// The lamp of the first button whose press is `action`, and nothing at
-    /// all when no button of the map in force does it.
-    ///
-    /// One question — "which button *is* this action?" — asked of the map in
-    /// force rather than of the factory layout, so a `midi.toml` that moves a
-    /// binding moves its lamp with it. Every property the panel needs falls
-    /// out of that one lookup rather than being arranged: the first button
-    /// wins, a kind the graph has none of lights nothing rather than the
-    /// nearest button, and a mode the map binds nowhere lights nothing
-    /// rather than the wrong thing. All three are the same `None`.
+    /// The lamp of the button whose press is `action`, and nothing at all
+    /// when no button does it: a node the rig has none of lights nothing
+    /// rather than the nearest button.
     fn lamp_of(&self, action: Action) -> Lamplight {
-        self.action
+        BUTTONS
             .iter()
-            .zip(&self.map.button)
-            .find(|(bound, _)| **bound == action)
-            .map_or(0, |(_, button)| lamp(button.cc))
+            .find(|button| button.action == action)
+            .map_or(0, |button| lamp(button.cc))
     }
 
     /// The panel [`Midi::show`] would ask for, apart from whether there is a
@@ -849,10 +640,8 @@ impl Midi {
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
-        for (button, held) in self.map.button.iter().zip(&self.held) {
-            if *held {
-                want |= lamp(button.cc);
-            }
+        for button in BUTTONS.iter().filter(|b| self.held[usize::from(b.cc)]) {
+            want |= lamp(button.cc);
         }
         want
     }
@@ -882,14 +671,11 @@ impl Midi {
             // in for the whole session.
             Err(e) => return self.complain(format!("{}: {e}", self.cards.display())),
         };
-        // Every control number a button of the map answers to, which is the
-        // whole of what the surface may ever be told to light.
-        let buttons = self.map.button.iter().fold(0, |mask, b| mask | lamp(b.cc));
         let mut last = None;
-        for path in find(&self.snd, &cards, &self.map.device) {
-            match open(&path, buttons) {
+        for path in find(&self.snd, &cards) {
+            match open(&path, lamps()) {
                 Ok(port) => {
-                    log::info!("surface: {} on {}", self.map.device, port.path.display());
+                    log::info!("surface: {DEVICE} on {}", port.path.display());
                     self.complaint = None;
                     self.port = Some(port);
                     return;
@@ -919,7 +705,7 @@ impl Midi {
         // its page is hidden has still moved, and the knob it turns on the
         // other page must not be charged for that when the page comes back.
         let from = self.standing[usize::from(message.control)].replace(message.value);
-        if let Some(fader) = self.map.fader.iter().find(|f| f.cc == message.control) {
+        if let Some(fader) = FADERS.iter().find(|f| f.cc == message.control) {
             let steps = f32::from(message.value) - f32::from(from?);
             if self.clutched() {
                 return None;
@@ -938,16 +724,12 @@ impl Midi {
             };
             return (paid != 0.0).then_some(Action::Turn(fader.knob, paid));
         }
-        let i = self
-            .map
-            .button
-            .iter()
-            .position(|b| b.cc == message.control)?;
+        let button = BUTTONS.iter().find(|b| b.cc == message.control)?;
         let down = message.value >= PUSHED;
-        let was = std::mem::replace(&mut self.held[i], down);
+        let was = std::mem::replace(&mut self.held[usize::from(message.control)], down);
         match (down, was) {
-            (true, false) => Some(self.action[i]),
-            (false, true) => crate::command::released(self.action[i]),
+            (true, false) => Some(button.action),
+            (false, true) => crate::command::released(button.action),
             _ => None,
         }
     }
@@ -964,17 +746,13 @@ fn cards(text: &str) -> impl Iterator<Item = (u32, &str)> {
     })
 }
 
-/// Every raw MIDI endpoint of every card whose line names `device`, in the
-/// order to try them. All of them, not the first: two cards can match one
-/// name, and the lowest endpoint of a card can be the one that is busy or
-/// output-only — so the caller opens down the list rather than committing to
-/// a candidate it cannot get past.
-fn find<'a>(
-    snd: &'a Path,
-    cards_text: &'a str,
-    device: &str,
-) -> impl Iterator<Item = PathBuf> + 'a {
-    let wanted = device.to_lowercase();
+/// Every raw MIDI endpoint of every card whose line names [`DEVICE`], in
+/// the order to try them. All of them, not the first: two cards can match
+/// one name, and the lowest endpoint of a card can be the one that is busy
+/// or output-only — so the caller opens down the list rather than committing
+/// to a candidate it cannot get past.
+fn find<'a>(snd: &'a Path, cards_text: &'a str) -> impl Iterator<Item = PathBuf> + 'a {
+    let wanted = DEVICE.to_lowercase();
     cards(cards_text)
         .filter(move |(_, line)| line.to_lowercase().contains(&wanted))
         .flat_map(|(card, _)| (0..8).map(move |d| (card, d)))
@@ -1063,42 +841,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn the_silkscreen_is_the_one_printed_on_a_nano_kontrol2() {
-        // The four blocks and both ends of each, since an off-by-one in
-        // either the first number or the width mislabels every control on
-        // the card and nothing on the surface would say so.
-        let nano = |cc| silkscreen("nanoKONTROL", cc);
-        assert_eq!(nano(0), "fader 1");
-        assert_eq!(nano(7), "fader 8");
-        assert_eq!(nano(16), "rotary 1");
-        assert_eq!(nano(23), "rotary 8");
-        assert_eq!(nano(32), "S1");
-        assert_eq!(nano(39), "S8");
-        assert_eq!(nano(48), "M1");
-        assert_eq!(nano(55), "M8");
-        assert_eq!(nano(64), "R1");
-        assert_eq!(nano(71), "R8");
-        assert_eq!(nano(41), "play");
-        assert_eq!(nano(43), "rewind");
-        assert_eq!(nano(59), "track next");
-        // The gaps between the blocks are numbers, not the nearest name.
-        assert_eq!(nano(8), "cc 8");
-        assert_eq!(nano(15), "cc 15");
-        assert_eq!(nano(72), "cc 72");
-        // And another surface entirely gets numbers throughout: these names
-        // are one instrument's, and a card naming a control the performer
-        // cannot find is worse than one naming the number they can.
-        assert_eq!(silkscreen("Launchpad", 0), "cc 0");
-        assert_eq!(silkscreen("Launchpad", 41), "cc 41");
-    }
-
-    #[test]
     fn the_transport_grid_is_arranged_the_way_the_device_is() {
-        // The names are pinned above; the geometry is the rest of what the
-        // table carries, and the overlay draws its left cluster off it —
-        // so a swapped row, column or group prints a caption over a button
-        // the performer's hand will not be on. Whole rather than sampled:
-        // the row nobody thought to check is the one that drifts.
         assert_eq!(
             TRANSPORT
                 .iter()
@@ -1108,9 +851,6 @@ mod tests {
                 (58, 0, 0, Some("TRACK")),
                 (59, 0, 1, Some("TRACK")),
                 (46, 1, 0, None),
-                // Cycle sits alone: the markers start two columns right of
-                // it rather than beside it, and column 1 of that row is
-                // bare on the surface.
                 (60, 1, 2, Some("MARKER")),
                 (61, 1, 3, Some("MARKER")),
                 (62, 1, 4, Some("MARKER")),
@@ -1124,36 +864,31 @@ mod tests {
     }
 
     #[test]
-    fn the_card_names_every_binding_in_the_map() {
-        let map = Map::nano_kontrol2();
-        let card = map.card();
-        // A line for the device and one for each control, no more and no
-        // fewer: a card that quietly leaves a fader off is a fader the
-        // performer does not know they have.
-        assert_eq!(card.lines().count(), 1 + map.fader.len() + map.button.len());
-        for f in &map.fader {
-            let line = format!("  {:<12} {}", silkscreen(&map.device, f.cc), f.knob.name());
-            assert!(card.contains(&line), "missing: {line}");
-        }
-        for b in &map.button {
-            let what = crate::command::describes(&b.command).expect("every command is described");
-            let line = format!(
-                "  {:<12} {what} ({})",
-                silkscreen(&map.device, b.cc),
-                b.command
-            );
-            assert!(card.contains(&line), "missing: {line}");
-        }
+    fn the_spots_are_the_four_blocks_and_the_strip() {
+        let spot = |cc| spot(cc).map(|s| format!("{s:?}"));
+        assert_eq!(spot(0).as_deref(), Some("Fader(0)"));
+        assert_eq!(spot(7).as_deref(), Some("Fader(7)"));
+        assert_eq!(spot(16).as_deref(), Some("Rotary(0)"));
+        assert_eq!(spot(23).as_deref(), Some("Rotary(7)"));
+        assert_eq!(spot(32).as_deref(), Some("S(0)"));
+        assert_eq!(spot(39).as_deref(), Some("S(7)"));
+        assert_eq!(spot(48).as_deref(), Some("M(0)"));
+        assert_eq!(spot(55).as_deref(), Some("M(7)"));
+        assert_eq!(spot(64).as_deref(), Some("R(0)"));
+        assert_eq!(spot(71).as_deref(), Some("R(7)"));
         assert!(
-            card.contains("nanoKONTROL"),
-            "the card does not name the surface"
+            spot(41).unwrap().contains("row: 2, col: 3"),
+            "{:?}",
+            spot(41)
         );
         assert!(
-            card.contains(
-                "  marker prev  the focused switcher runs to its other source while this is held down (cut)"
-            ),
-            "the cut is not on marker prev"
+            spot(59).unwrap().contains("row: 0, col: 1"),
+            "{:?}",
+            spot(59)
         );
+        for gap in [8, 15, 24, 31, 40, 47, 56, 57, 63, 72, 127] {
+            assert_eq!(spot(gap), None, "cc {gap}");
+        }
     }
 
     fn cc(control: u8, value: u8) -> Vec<u8> {
@@ -1200,10 +935,6 @@ mod tests {
 
     #[test]
     fn running_status_is_how_a_sweep_arrives() {
-        // One status byte and then pairs: a surface drops the status on every
-        // message after the first of a sweep. The control is not zero, so a
-        // decoder that latched the pair's first byte from the run's first
-        // message would show.
         let mut bytes = cc(5, 1);
         bytes.extend([5, 2, 5, 3]);
         assert_eq!(
@@ -1214,51 +945,33 @@ mod tests {
 
     #[test]
     fn a_clock_byte_in_the_middle_of_a_message_is_not_part_of_it() {
-        // Real time is interleaved anywhere, including between a control
-        // number and its value, and must not disturb what it lands in.
         let bytes = [0xB0, 0x07, 0xF8, 0x40, 0xFE, 0x07, 0x41];
         assert_eq!(decode(&bytes), [message(7, 0x40), message(7, 0x41)]);
     }
 
     #[test]
     fn a_scene_dump_is_not_a_hundred_knob_moves() {
-        // Sysex holds arbitrary 7-bit data, and the nanoKONTROL2 sends one on
-        // request. It has to arrive with running status in force, which is
-        // the only state in which its payload could be read as knob moves —
-        // a dump on its own is data under no status, which nothing decodes.
         let dump = [0xF0, 0x42, 0x40, 0x00, 0x01, 0x13, 0x00, 0x7F, 0xF7];
         let mut bytes = cc(1, 9);
         bytes.extend(dump);
-        // And no status survives the dump, so the pair after it belongs to
-        // nothing rather than to the fader that moved before it.
         bytes.extend([0x02, 0x05]);
         assert_eq!(decode(&bytes), [message(1, 9)]);
-        // The frame itself comes out whole, `F0` and `F7` and all: it is the
-        // surface's answer about itself, and the lights are read out of it.
         assert_eq!(sysex(&bytes), [dump.to_vec()]);
     }
 
     #[test]
     fn a_frame_that_never_ends_is_dropped_rather_than_kept() {
-        // A cable pulled mid-dump, and then the surface plugged back in and
-        // played. Without a cap the frame grows for as long as the
-        // instrument runs; without an end on a status byte the knob moves
-        // after it are swallowed by it.
         let mut bytes = vec![0xF0, 0x42];
         bytes.extend(std::iter::repeat_n(0x00, SYSEX_MAX * 2));
         bytes.extend(cc(7, 64));
         assert_eq!(decode(&bytes), [message(7, 64)]);
         assert!(sysex(&bytes).is_empty(), "an endless frame came out");
 
-        // A frame cut short by the next status byte rather than by length.
         let mut cut = vec![0xF0, 0x42, 0x40];
         cut.extend(cc(7, 65));
         assert_eq!(decode(&cut), [message(7, 65)]);
         assert!(sysex(&cut).is_empty(), "a frame with no end came out");
 
-        // And one exactly at the cap still arrives: a scene dump is 402
-        // bytes and a cap that clipped it would be a handshake that never
-        // completes.
         let mut whole = vec![0xF0];
         whole.extend(std::iter::repeat_n(0x01, SYSEX_MAX - 2));
         whole.push(0xF7);
@@ -1268,14 +981,10 @@ mod tests {
 
     #[test]
     fn a_real_time_byte_inside_a_frame_is_not_part_of_it() {
-        // Clock is interleaved anywhere at all, and a scene dump takes long
-        // enough on the wire to catch several.
         let bytes = [0xF0, 0x42, 0xF8, 0x40, 0xFE, 0xF7];
         assert_eq!(sysex(&bytes), [vec![0xF0, 0x42, 0x40, 0xF7]]);
     }
 
-    /// The focus a test means, spelled out — `Focus::default()` says nothing
-    /// about which index is which, and a swapped pair would still compile.
     fn at(camera: usize, monitor: usize) -> Focus {
         Focus {
             camera,
@@ -1286,10 +995,7 @@ mod tests {
 
     #[test]
     fn the_lamp_of_each_node_is_the_button_that_selects_it() {
-        // Off the map, so the factory rows and a `midi.toml` that moved them
-        // both light the button a hand actually reaches for. One row per
-        // kind, so a focus lights one lamp on each of the three.
-        let midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        let midi = Midi::default();
         for index in 0..crate::rig::count(Node::Camera) {
             let focus = Focus {
                 camera: index,
@@ -1298,82 +1004,30 @@ mod tests {
             };
             assert_eq!(
                 midi.wanted(focus, Shown::default()),
-                crate::lamps::lamp(S_ROW + index as u8)
-                    | crate::lamps::lamp(M_ROW + index as u8)
-                    | crate::lamps::lamp(R_ROW + index as u8),
+                lamp(S_ROW + index as u8) | lamp(M_ROW + index as u8) | lamp(R_ROW + index as u8),
                 "node {index}"
             );
         }
-
-        // A map that moves the select rows takes the lights with it, and one
-        // that binds only some of them lights only those.
-        let mut map = Map::nano_kontrol2();
-        map.button
-            .retain(|b| !matches!(action_for_name(&b.command), Some(Action::Focus(..))));
-        map.button.push(button(90, "cam 2"));
-        map.button.push(button(91, "mon 3"));
-        let midi = Midi::new(map).unwrap();
-        assert_eq!(
-            midi.wanted(at(1, 2), Shown::default()),
-            crate::lamps::lamp(90) | crate::lamps::lamp(91)
-        );
-        // A node no button of the map names has no lamp rather than the
-        // nearest one: a graph may run deeper than the surface, and the same
-        // `None` answers both.
-        assert_eq!(
-            midi.wanted(at(0, 2), Shown::default()),
-            crate::lamps::lamp(91)
-        );
-        assert_eq!(
-            midi.wanted(at(1, 0), Shown::default()),
-            crate::lamps::lamp(90)
-        );
-        assert_eq!(midi.wanted(at(7, 7), Shown::default()), 0);
-
-        // The first button that names a node wins, rather than the last.
-        let mut map = Map::nano_kontrol2();
-        map.button.push(button(90, "cam 1"));
-        let midi = Midi::new(map).unwrap();
-        assert_eq!(
-            midi.wanted(at(0, 0), Shown::default()),
-            crate::lamps::lamp(S_ROW) | crate::lamps::lamp(M_ROW) | crate::lamps::lamp(R_ROW)
-        );
     }
 
     #[test]
     fn the_panel_is_the_focused_pair_and_whatever_is_under_a_finger() {
-        // Taking the surface's LED mode takes every button's light, so a held
-        // button has to be lit here or it goes dark for good — and the focus
-        // lamps have to survive alongside it rather than instead of it.
         let (mut midi, params) = surface();
-        // Camera 3 is S3, monitor 2 is M2 and the first input is R1: one
-        // lamp per row, all lit.
         let focus = at(2, 1);
-        let pair = crate::lamps::lamp(S_ROW + 2)
-            | crate::lamps::lamp(M_ROW + 1)
-            | crate::lamps::lamp(R_ROW);
+        let pair = lamp(S_ROW + 2) | lamp(M_ROW + 1) | lamp(R_ROW);
         assert_eq!(midi.wanted(focus, Shown::default()), pair);
-        // A finger down on a button whose light nothing else would give
-        // back: all three lamps, not one.
         assert_eq!(feed(&mut midi, &params, &cc(62, 127)), [Action::Clear]);
-        assert_eq!(
-            midi.wanted(focus, Shown::default()),
-            pair | crate::lamps::lamp(62)
-        );
-        // And out again when the finger comes off, which is a message that
-        // does nothing else at all.
+        assert_eq!(midi.wanted(focus, Shown::default()), pair | lamp(62));
         assert_eq!(feed(&mut midi, &params, &cc(62, 0)), []);
         assert_eq!(midi.wanted(focus, Shown::default()), pair);
-        // A node no row reaches lights nothing of its own, one kind at a
-        // time so none can cover for another.
-        let switcher = crate::lamps::lamp(R_ROW);
+        let switcher = lamp(R_ROW);
         assert_eq!(
             midi.wanted(at(99, 1), Shown::default()),
-            crate::lamps::lamp(M_ROW + 1) | switcher
+            lamp(M_ROW + 1) | switcher
         );
         assert_eq!(
             midi.wanted(at(2, 99), Shown::default()),
-            crate::lamps::lamp(S_ROW + 2) | switcher
+            lamp(S_ROW + 2) | switcher
         );
         assert_eq!(midi.wanted(at(99, 99), Shown::default()), switcher);
         let lost = Focus {
@@ -1386,108 +1040,68 @@ mod tests {
 
     #[test]
     fn a_latched_mode_lights_the_button_that_holds_it() {
-        // The one thing that says a mode is on to a performer looking at a
-        // fullscreen display. Off the button's *action*, so a `midi.toml`
-        // that moves a mode moves its lamp with it.
-        let midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        let midi = Midi::default();
         let focus = at(0, 0);
         let base = midi.wanted(focus, Shown::default());
+        let lit = |shown: Shown| midi.wanted(focus, shown) & !base;
         assert_eq!(
-            midi.wanted(
-                focus,
-                Shown {
-                    overlay: true,
-                    ..Shown::default()
-                }
-            ) & !base,
-            crate::lamps::lamp(46),
+            lit(Shown {
+                overlay: true,
+                ..Shown::default()
+            }),
+            lamp(46),
             "the overlay is cycle"
         );
         assert_eq!(
-            midi.wanted(
-                focus,
-                Shown {
-                    solo: true,
-                    ..Shown::default()
-                }
-            ) & !base,
-            crate::lamps::lamp(44),
+            lit(Shown {
+                solo: true,
+                ..Shown::default()
+            }),
+            lamp(44),
             "the display's solo is forward"
         );
-
-        // A map that binds the mode's key nowhere lights nothing extra,
-        // rather than the button that number used to be.
-        let mut map = Map::nano_kontrol2();
-        map.button.retain(|b| b.cc != 46);
-        let midi = Midi::new(map).unwrap();
-        let base = midi.wanted(focus, Shown::default());
         assert_eq!(
-            midi.wanted(
-                focus,
-                Shown {
-                    overlay: true,
-                    ..Shown::default()
-                }
-            ),
-            base
+            lit(Shown {
+                program: true,
+                ..Shown::default()
+            }),
+            lamp(SELECT),
+            "the select is the record row's last button"
         );
-    }
-
-    #[test]
-    fn the_select_lamp_says_which_input_the_focused_monitor_is_on() {
-        // The panel is the only thing that says it: which of the two a
-        // monitor is on is a question a hand asks before it presses, and a
-        // latch that answers only by changing the picture answers too late.
-        let midi = Midi::new(Map::nano_kontrol2()).unwrap();
-        let focus = at(0, 0);
-        let base = midi.wanted(focus, Shown::default());
         assert_eq!(
-            midi.wanted(
-                focus,
-                Shown {
-                    program: true,
-                    ..Shown::default()
-                }
-            ) & !base,
-            crate::lamps::lamp(SELECT),
-            "the select is the record row's last button on the factory map"
+            lit(Shown {
+                flipped: [true, false],
+                ..Shown::default()
+            }),
+            lamp(FLIP_X)
         );
-        // And a map that binds the select nowhere lights nothing extra.
-        let mut map = Map::nano_kontrol2();
-        map.button.retain(|b| b.cc != SELECT);
-        let midi = Midi::new(map).unwrap();
-        let base = midi.wanted(focus, Shown::default());
         assert_eq!(
-            midi.wanted(
-                focus,
-                Shown {
-                    program: true,
-                    ..Shown::default()
-                }
-            ),
-            base
+            lit(Shown {
+                flipped: [false, true],
+                ..Shown::default()
+            }),
+            lamp(FLIP_Y)
+        );
+        assert_eq!(
+            lit(Shown {
+                flipped: [true, true],
+                ..Shown::default()
+            }),
+            lamp(FLIP_X) | lamp(FLIP_Y)
         );
     }
 
     #[test]
     fn only_a_control_change_comes_out() {
-        // A surface sends notes and a pitch bend too, and none of them is a
-        // knob. Their data bytes look exactly like a control change's, so the
-        // status they arrived under is the only thing keeping them out.
-        let mut bytes = vec![0x90, 0x40, 0x7F]; // note on
-        bytes.extend([0xC0, 0x05]); // program change
-        bytes.extend([0xE0, 0x00, 0x40]); // pitch bend
+        let mut bytes = vec![0x90, 0x40, 0x7F];
+        bytes.extend([0xC0, 0x05]);
+        bytes.extend([0xE0, 0x00, 0x40]);
         bytes.extend(cc(3, 11));
         assert_eq!(decode(&bytes), [message(3, 11)]);
     }
 
     #[test]
     fn a_message_this_decoder_pairs_up_wrongly_does_not_eat_the_next_one() {
-        // Channel pressure carries one data byte where this pairs up two, so
-        // it is left half-finished — and the control change straight after it,
-        // with nothing in between to absorb the odd byte, must still arrive
-        // whole. Read wrongly it is CC 32, which is S1: a surface's touch
-        // strip would be throwing the camera knobs onto camera 1.
         assert_eq!(decode(&[0xD0, 0x20, 0xB0, 0x07, 0x40]), [message(7, 0x40)]);
         assert_eq!(decode(&[0xC0, 0x05, 0xB0, 0x07, 0x41]), [message(7, 0x41)]);
     }
@@ -1501,8 +1115,6 @@ mod tests {
                       KORG INC. nanoKONTROL2 at usb-0000:00:14.0-2, full speed
 ";
 
-    /// A directory of this test's own. The suite runs in one process, so the
-    /// pid alone would have every test here sharing one.
     fn scratch(what: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("lightherder-midi-{}-{what}", std::process::id()));
@@ -1511,59 +1123,45 @@ mod tests {
         dir
     }
 
-    fn found(dir: &Path, cards: &str, device: &str) -> Vec<PathBuf> {
-        find(dir, cards, device).collect()
+    fn found(dir: &Path, cards: &str) -> Vec<PathBuf> {
+        find(dir, cards).collect()
     }
 
     #[test]
     fn the_surface_is_found_by_name_among_the_cards_that_are_not_it() {
         let dir = scratch("find");
-        // The card numbers in the fixture are 1, 2 and 5 — not 0, 1, 2 — so a
-        // search that took a line's place in the file instead of the number
-        // printed on it lands on the wrong card.
         for card in [1, 2, 5] {
             std::fs::write(dir.join(format!("midiC{card}D0")), "").unwrap();
         }
+        assert_eq!(found(&dir, SAMPLE_CARDS), [dir.join("midiC5D0")]);
         assert_eq!(
-            found(&dir, SAMPLE_CARDS, "nanoKONTROL"),
+            found(&dir, &SAMPLE_CARDS.to_uppercase()),
             [dir.join("midiC5D0")]
         );
-        // Case, because a card's line spells it however the vendor did.
-        assert_eq!(
-            found(&dir, SAMPLE_CARDS, "nanokontrol2"),
-            [dir.join("midiC5D0")]
-        );
-        assert!(found(&dir, SAMPLE_CARDS, "Launchpad").is_empty());
-        // Named, but not plugged in: the card is gone from the file too.
-        assert!(found(&dir, " 1 [NVidia ]: x\n", "nanoKONTROL").is_empty());
+        assert!(found(&dir, " 1 [NVidia ]: x\n 2 [Launchpad ]: y\n").is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_card_with_no_raw_midi_device_is_not_a_surface() {
-        // Every card is in the file whether or not it has a MIDI endpoint.
         let dir = scratch("no-device");
-        assert!(found(&dir, SAMPLE_CARDS, "nanoKONTROL").is_empty());
+        assert!(found(&dir, SAMPLE_CARDS).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn every_endpoint_of_every_matching_card_is_offered_in_turn() {
-        // The lowest endpoint of a card can be output-only or busy, and two
-        // cards can answer to one name — so discovery hands over candidates
-        // rather than committing to one it cannot get past.
         let dir = scratch("candidates");
         std::fs::write(dir.join("midiC5D3"), "").unwrap();
         assert_eq!(
-            found(&dir, SAMPLE_CARDS, "nanoKONTROL"),
+            found(&dir, SAMPLE_CARDS),
             [dir.join("midiC5D3")],
             "an endpoint above D0 is still the surface"
         );
-        // Two cards matching a loose name, the first of them without a node.
         let two = format!("{SAMPLE_CARDS} 6 [nanoKONTROL2_1 ]: USB-Audio - nanoKONTROL2\n");
         std::fs::write(dir.join("midiC6D0"), "").unwrap();
         assert_eq!(
-            found(&dir, &two, "nanoKONTROL"),
+            found(&dir, &two),
             [dir.join("midiC5D3"), dir.join("midiC6D0")]
         );
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1576,13 +1174,9 @@ mod tests {
     }
 
     #[test]
-    fn the_factory_map_is_wired_the_way_the_readme_says() {
-        // Every pair, literally. Coverage alone let Hue and Brightness swap
-        // CCs, and "blank" and "reset" swap buttons — a surface whose
-        // silkscreen lies, and every behaviour test still green.
-        let map = Map::nano_kontrol2();
+    fn the_panel_is_wired_the_way_the_readme_says() {
         assert_eq!(
-            map.fader,
+            FADERS,
             [
                 fader(0, Knob::Hue),
                 fader(1, Knob::Saturation),
@@ -1598,243 +1192,134 @@ mod tests {
                 fader(19, Knob::FrameRate),
             ]
         );
-
-        // The three select rows, one kind of node each and each as wide as
-        // the graph. Written out rather than generated, so a row that slides
-        // by one — or two kinds landing on one row — fails here rather than
-        // under a hand mid-piece. This map is built for [`full`], so every
-        // row runs its whole width.
         assert_eq!(
-            map.button[..12],
+            BUTTONS,
             [
-                button(32, "cam 1"),
-                button(33, "cam 2"),
-                button(34, "cam 3"),
-                button(48, "mon 1"),
-                button(49, "mon 2"),
-                button(50, "mon 3"),
-                button(51, "mon 4"),
-                button(52, "mon 5"),
-                button(64, "sw 1"),
-                button(65, "sw 2"),
-                button(66, "sw 3"),
-                button(67, "sw 4"),
+                button(32, Action::Focus(Node::Camera, 0)),
+                button(33, Action::Focus(Node::Camera, 1)),
+                button(34, Action::Focus(Node::Camera, 2)),
+                button(48, Action::Focus(Node::Monitor, 0)),
+                button(49, Action::Focus(Node::Monitor, 1)),
+                button(50, Action::Focus(Node::Monitor, 2)),
+                button(51, Action::Focus(Node::Monitor, 3)),
+                button(52, Action::Focus(Node::Monitor, 4)),
+                button(64, Action::Focus(Node::Switcher, 0)),
+                button(65, Action::Focus(Node::Switcher, 1)),
+                button(66, Action::Focus(Node::Switcher, 2)),
+                button(67, Action::Focus(Node::Switcher, 3)),
+                button(62, Action::Clear),
+                button(43, Action::ResetLastKnob),
+                button(42, Action::Reset),
+                button(46, Action::Overlay),
+                button(44, Action::Solo),
+                button(60, Action::Screencap),
+                button(45, Action::Record(Edge::Down)),
+                button(61, Action::Cut(Edge::Down)),
+                button(68, Action::Reverse),
+                button(69, Action::Flip(Axis::X)),
+                button(70, Action::Flip(Axis::Y)),
+                button(71, Action::Select),
+                button(37, Action::Finer),
+                button(38, Action::Coarser),
+                button(39, Action::Clutch(Edge::Down)),
             ]
         );
-        assert_eq!(
-            map.button[12..],
-            [
-                button(62, "blank"),
-                button(43, "reset 1"),
-                button(42, "reset"),
-                button(46, "help"),
-                button(44, "solo"),
-                button(58, "rate -"),
-                button(59, "rate +"),
-                button(60, "snap"),
-                button(45, "record"),
-                button(61, "cut"),
-                button(68, "reverse"),
-                button(69, "flip x"),
-                button(70, "flip y"),
-                button(71, "select"),
-                button(37, "precision -"),
-                button(38, "precision +"),
-                button(39, "clutch"),
-            ]
-        );
-        // The four rotaries past the fourth are dead: twelve handles on
-        // sixteen controls, so nothing is owed a second page.
-        for cc in 20..24 {
-            assert!(!map.fader.iter().any(|f| f.cc == cc), "rotary cc {cc}");
+        for cc in [20, 21, 22, 23, 41, 58, 59] {
+            assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
+            assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
         }
     }
 
     #[test]
     fn every_select_row_is_exactly_as_wide_as_its_kind() {
-        // A button is owed to equipment: the rig has three cameras, five
-        // monitors and four switchers, and the buttons past each are dead.
-        let selects = |map: &Map| -> Vec<(u8, String)> {
-            map.button
+        for node in Node::ALL {
+            let row: Vec<u8> = BUTTONS
                 .iter()
-                .filter(|b| matches!(action_for_name(&b.command), Some(Action::Focus(..))))
-                .map(|b| (b.cc, b.command.clone()))
-                .collect()
-        };
-        assert_eq!(
-            selects(&Map::nano_kontrol2()),
-            [
-                (32, "cam 1".to_string()),
-                (33, "cam 2".to_string()),
-                (34, "cam 3".to_string()),
-                (48, "mon 1".to_string()),
-                (49, "mon 2".to_string()),
-                (50, "mon 3".to_string()),
-                (51, "mon 4".to_string()),
-                (52, "mon 5".to_string()),
-                (64, "sw 1".to_string()),
-                (65, "sw 2".to_string()),
-                (66, "sw 3".to_string()),
-                (67, "sw 4".to_string()),
-            ]
-        );
-        // The transport strip is not a select row, so it is whole beside
-        // them — a row rule that swallowed it would take the blank, the
-        // resets and the overlay toggle with it.
-        let map = Map::nano_kontrol2();
-        for name in crate::command::command_names() {
-            assert!(
-                map.button.iter().any(|b| b.command == name),
-                "{name} left the board with the select rows"
+                .filter(|b| matches!(b.action, Action::Focus(kind, _) if kind == node))
+                .map(|b| b.cc)
+                .collect();
+            let want: Vec<u8> = (0..crate::rig::count(node))
+                .map(|i| row_of(node) + i as u8)
+                .collect();
+            assert_eq!(row, want, "{}", node.short());
+        }
+    }
+
+    #[test]
+    fn every_press_has_exactly_one_button_and_every_knob_a_fader() {
+        for action in [
+            Action::Clear,
+            Action::Reset,
+            Action::ResetLastKnob,
+            Action::Overlay,
+            Action::Solo,
+            Action::Screencap,
+            Action::Record(Edge::Down),
+            Action::Cut(Edge::Down),
+            Action::Reverse,
+            Action::Flip(Axis::X),
+            Action::Flip(Axis::Y),
+            Action::Select,
+            Action::Finer,
+            Action::Coarser,
+            Action::Clutch(Edge::Down),
+        ] {
+            let on = BUTTONS.iter().filter(|b| b.action == action).count();
+            assert_eq!(on, 1, "{action:?} is on {on} buttons");
+        }
+        let missing: Vec<&str> = Knob::ALL
+            .into_iter()
+            .filter(|knob| !FADERS.iter().any(|f| f.knob == *knob))
+            .map(Knob::name)
+            .collect();
+        assert_eq!(missing, [""; 0]);
+    }
+
+    #[test]
+    fn every_caption_is_two_words_at_most_and_names_one_control() {
+        let mut captions: Vec<String> = FADERS
+            .iter()
+            .map(|f| f.knob.name().to_string())
+            .chain(BUTTONS.iter().map(|b| b.action.caption()))
+            .collect();
+        for caption in &captions {
+            assert!(caption.split_whitespace().count() <= 2, "{caption:?}");
+        }
+        let all = captions.len();
+        captions.sort();
+        captions.dedup();
+        assert_eq!(captions.len(), all, "two controls share a caption");
+    }
+
+    #[test]
+    fn every_bound_button_is_a_lamp_and_nothing_else_is() {
+        for cc in 0..128u8 {
+            assert_eq!(
+                lamps() & lamp(cc) != 0,
+                BUTTONS.iter().any(|b| b.cc == cc),
+                "cc {cc}"
             );
         }
     }
 
     #[test]
-    fn the_factory_map_covers_the_surface_it_names() {
-        let map = Map::nano_kontrol2();
-        // Naming the ones that are missing is what makes a knob added later
-        // show up as a failure rather than as a knob nobody can reach.
-        let missing: Vec<&str> = Knob::ALL
-            .into_iter()
-            .filter(|knob| !map.fader.iter().any(|f| f.knob == *knob))
-            .map(Knob::name)
-            .collect();
-        assert_eq!(missing, [""; 0]);
-        // And every control the map names is one the surface has. The rows
-        // are eight-wide blocks of control numbers, so a select row grown
-        // past eight walks off the end of its block into numbers no button
-        // is printed beside.
-        for cc in map
-            .fader
+    fn every_control_is_on_the_panel_once() {
+        let mut ccs: Vec<u8> = FADERS
             .iter()
             .map(|f| f.cc)
-            .chain(map.button.iter().map(|b| b.cc))
-        {
-            assert!(spot(cc).is_some(), "cc {cc} is nowhere on the panel");
-        }
-        Midi::new(map).unwrap();
-    }
-
-    #[test]
-    fn every_command_has_a_button() {
-        // The board is the whole instrument, so a command with no button on
-        // it is one nobody can play — there is no keyboard to carve one out
-        // onto.
-        let map = Map::nano_kontrol2();
-        let missing: Vec<&str> = crate::command::command_names()
-            .filter(|name| !map.button.iter().any(|b| b.command == *name))
+            .chain(BUTTONS.iter().map(|b| b.cc))
             .collect();
-        assert!(missing.is_empty(), "{missing:?}");
-    }
-
-    #[test]
-    fn a_map_that_would_play_the_wrong_thing_is_refused() {
-        // Within one list...
-        let mut map = Map::nano_kontrol2();
-        map.button.push(button(S_ROW, "reset"));
-        assert!(map.validate().unwrap_err().contains("bound twice"));
-
-        // ...and across the two, which matters more: `action_for` looks at
-        // the faders first, so a button sharing a fader's number is silently
-        // dead rather than ambiguous.
-        let mut map = Map::nano_kontrol2();
-        map.button.push(button(1, "reset"));
-        assert!(map.validate().unwrap_err().contains("bound twice"));
-
-        let mut map = Map::nano_kontrol2();
-        map.fader.push(fader(200, Knob::Hue));
-        let why = map.validate().unwrap_err();
-        assert!(why.contains("200") && why.contains("127"), "{why}");
-
-        let mut map = Map::nano_kontrol2();
-        map.button.push(button(90, "wiggle"));
-        let why = map.validate().unwrap_err();
-        assert!(why.contains("wiggle"), "{why}");
-        // The error lists what a command may be, because a config file is
-        // written by hand and there are thirty-odd of them.
-        assert!(why.contains("blank") && why.contains("cam 1"), "{why}");
-
-        let mut map = Map::nano_kontrol2();
-        map.device = String::new();
-        assert!(map.validate().is_err());
-
-        // And the one door refuses all of it, so a `Midi` over a bad map is
-        // unconstructable rather than quietly inert.
-        let mut map = Map::nano_kontrol2();
-        map.button.push(button(90, "wiggle"));
-        assert!(Midi::new(map).is_err());
-    }
-
-    #[test]
-    fn a_map_file_is_read_the_way_it_is_written() {
-        // A literal file at the literal name the README documents — not a
-        // round trip, which agrees with itself whatever serde was told these
-        // fields are called and wherever `map_path` decides to look.
-        let dir = scratch("map-file");
-        assert_eq!(map_path().file_name().unwrap(), "midi.toml");
-        std::fs::write(
-            dir.join("midi.toml"),
-            "device = \"nanoKONTROL\"\n\
-             [[fader]]\ncc = 0\nknob = \"hue\"\n\
-             [[button]]\ncc = 41\ncommand = \"mon 2\"\n",
-        )
-        .unwrap();
-        let map = Map::load(&dir.join("midi.toml")).unwrap();
-        assert_eq!(map.fader, [fader(0, Knob::Hue)]);
-        assert_eq!(map.button, [button(41, "mon 2")]);
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn a_flip_button_is_lit_while_the_focused_camera_is_mirrored_that_way() {
-        let (midi, _) = surface();
-        let focus = at(2, 1);
-        let base = midi.wanted(focus, Shown::default());
-        let x = crate::lamps::lamp(FLIP_X);
-        let y = crate::lamps::lamp(FLIP_Y);
-        assert_eq!(base & (x | y), 0);
-        let lit = |flipped| {
-            midi.wanted(
-                focus,
-                Shown {
-                    flipped,
-                    ..Shown::default()
-                },
-            ) & !base
-        };
-        assert_eq!(lit([true, false]), x);
-        assert_eq!(lit([false, true]), y);
-        assert_eq!(lit([true, true]), x | y);
-    }
-
-    #[test]
-    fn no_map_file_is_the_factory_map_and_a_broken_one_is_an_error() {
-        let dir = scratch("map-absent");
-        let path = dir.join("midi.toml");
-        assert_eq!(Map::load(&path).unwrap(), Map::nano_kontrol2());
-        std::fs::write(
-            dir.join("midi.toml"),
-            "device = \"x\"\n[[fader]]\ncc = 0\nknob = \"wobble\"\n",
-        )
-        .unwrap();
-        let why = Map::load(&path).unwrap_err();
-        assert!(why.contains("wobble"), "{why}");
-        // A file that parses but would misplay is caught by the same door.
-        std::fs::write(
-            dir.join("midi.toml"),
-            "device = \"x\"\n[[button]]\ncc = 1\ncommand = \"nope\"\n",
-        )
-        .unwrap();
-        assert!(Map::load(&path).unwrap_err().contains("nope"));
-        std::fs::remove_dir_all(&dir).unwrap();
+        for cc in &ccs {
+            assert!(spot(*cc).is_some(), "cc {cc} is nowhere on the panel");
+        }
+        let all = ccs.len();
+        ccs.sort_unstable();
+        ccs.dedup();
+        assert_eq!(ccs.len(), all, "a control is bound twice");
     }
 
     fn surface() -> (Midi, Params) {
-        (
-            Midi::new(Map::nano_kontrol2()).unwrap(),
-            crate::config::instrument(),
-        )
+        (Midi::default(), crate::config::instrument())
     }
 
     fn feed(midi: &mut Midi, params: &Params, bytes: &[u8]) -> Vec<Action> {
@@ -1844,7 +1329,6 @@ mod tests {
             .collect()
     }
 
-    /// What one message on fader 3 — saturation, a travel of 4 — turns.
     fn turned(midi: &mut Midi, params: &Params, value: u8) -> Option<f32> {
         match feed(midi, params, &cc(1, value))[..] {
             [] => None,
@@ -1856,19 +1340,13 @@ mod tests {
     #[test]
     fn a_fader_turns_its_knob_by_how_far_it_moved_and_not_to_where_it_stands() {
         let (mut midi, params) = surface();
-        // The first message says only where the fader is: nothing has moved
-        // yet, so nothing turns — whatever the knob reads, wherever the fader
-        // was left. That is what makes a hot-plug throw nothing.
         assert_eq!(turned(&mut midi, &params, 127), None);
-        // From there a full throw is a quarter of the travel, by default.
         let by = turned(&mut midi, &params, 0).unwrap();
         assert!((by + 1.0).abs() < 1e-6, "{by}");
         let by = turned(&mut midi, &params, 127).unwrap();
         assert!((by - 1.0).abs() < 1e-6, "{by}");
-        // One step is one 127th of that, whichever way.
         let by = turned(&mut midi, &params, 126).unwrap();
         assert!((by + 1.0 / 127.0).abs() < 1e-6, "{by}");
-        // A fader standing still turns nothing.
         assert_eq!(turned(&mut midi, &params, 126), None);
     }
 
@@ -1914,8 +1392,6 @@ mod tests {
             feed(&mut midi, &params, &cc(CLUTCH, 127)),
             [Action::Clutch(Edge::Down)]
         );
-        // The fader is brought back from its rail under the clutch, and the
-        // rotaries are as still as the faders.
         assert_eq!(turned(&mut midi, &params, 64), None);
         assert_eq!(turned(&mut midi, &params, 0), None);
         assert_eq!(feed(&mut midi, &params, &cc(16, 50)), []);
@@ -1924,16 +1400,12 @@ mod tests {
             feed(&mut midi, &params, &cc(CLUTCH, 0)),
             [Action::Clutch(Edge::Up)]
         );
-        // Let go, the fader turns on from where the clutch left it, by how
-        // far it moved since — not by the whole way it was carried. The zoom
-        // is a ratio, so the travel a code is a 127th of is the rails' log.
         let by = turned(&mut midi, &params, 10).unwrap();
         assert!((by - 10.0 / 127.0).abs() < 1e-6, "{by}");
         assert!(matches!(
             feed(&mut midi, &params, &cc(16, 91))[..],
             [Action::Turn(Knob::Zoom, by)] if (by - 16f32.ln() / 4.0 / 127.0).abs() < 1e-6
         ));
-        // And the clutch is lit while a hand is on it.
         let lit = |midi: &Midi| midi.wanted(at(0, 0), Shown::default()) & lamp(CLUTCH) != 0;
         assert!(!lit(&midi));
         feed(&mut midi, &params, &cc(CLUTCH, 127));
@@ -1944,12 +1416,9 @@ mod tests {
 
     #[test]
     fn a_whole_frame_knob_is_turned_a_frame_at_a_time() {
-        // The delay counts frames, and at a quarter a full throw over a
-        // reach of four is one frame: the knob ticks over at the half, like
-        // a detent, and the fader is never more than half a frame in credit.
         let mut params = crate::config::instrument();
         params.delay = 4;
-        let mut midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        let mut midi = Midi::default();
         let delay = |midi: &mut Midi, value: u8| match feed(midi, &params, &cc(18, value))[..] {
             [] => None,
             [Action::Turn(Knob::Delay, by)] => Some(by),
@@ -1969,46 +1438,13 @@ mod tests {
     fn an_unplug_throws_nothing() {
         let (mut midi, params) = surface();
         assert_eq!(turned(&mut midi, &params, 40), None);
-        // Unplugged, nothing can vouch for where the next surface's faders
-        // stand, so its first word is where and not how far.
         midi.drop_port();
         assert_eq!(turned(&mut midi, &params, 0), None);
         assert!((turned(&mut midi, &params, 127).unwrap() - 1.0).abs() < 1e-6);
     }
 
     #[test]
-    fn an_unknown_command_is_refused_with_the_list_of_the_real_ones() {
-        // A `midi.toml` is written by hand, so a typo has to say what the
-        // vocabulary is rather than only that this was not in it.
-        let refuse = |name: &str| {
-            Midi::new(Map {
-                device: "x".into(),
-                fader: Vec::new(),
-                button: vec![button(90, name)],
-            })
-            .err()
-            .expect("a map the instrument would refuse")
-        };
-        for name in ["shift num9", "cam 9", "zzz"] {
-            let why = refuse(name);
-            assert!(why.contains("no command called"), "{name}: {why}");
-            assert!(
-                why.contains("cam 1"),
-                "{name} was not given the list: {why}"
-            );
-            assert!(
-                why.contains("blank"),
-                "{name} was not given the list: {why}"
-            );
-        }
-    }
-
-    #[test]
     fn unplugging_the_surface_lets_go_of_every_button_a_finger_was_on() {
-        // A held mode must end with the surface holding it, and end the way
-        // a release would have — after whatever the surface had already
-        // sent — rather than leaving the instrument cut or recording with
-        // nothing to let go of it, and the next press swallowed.
         let (mut midi, params) = surface();
         let surface = midi.plug_in_a_test_surface();
         surface.press(45);
@@ -2021,10 +1457,7 @@ mod tests {
         };
         assert_eq!(
             play(&mut midi),
-            [
-                Action::Record(crate::command::Edge::Down),
-                Action::Cut(crate::command::Edge::Down)
-            ]
+            [Action::Record(Edge::Down), Action::Cut(Edge::Down)]
         );
         surface.press(60);
         drop(surface);
@@ -2032,8 +1465,8 @@ mod tests {
             play(&mut midi),
             [
                 Action::Screencap,
-                Action::Record(crate::command::Edge::Up),
-                Action::Cut(crate::command::Edge::Up)
+                Action::Record(Edge::Up),
+                Action::Cut(Edge::Up)
             ]
         );
         assert!(midi.held.iter().all(|held| !held));
@@ -2042,9 +1475,6 @@ mod tests {
     #[test]
     fn a_button_acts_when_it_goes_down_and_not_when_it_comes_up() {
         let (mut midi, params) = surface();
-        // The select is a latch, so a surface that repeats while a finger
-        // rests on it would flip a monitor back and forth under a hand that
-        // pressed once.
         assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), [Action::Select]);
         assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), []);
         assert_eq!(feed(&mut midi, &params, &cc(SELECT, 0)), []);
@@ -2053,14 +1483,9 @@ mod tests {
 
     #[test]
     fn the_capture_buttons_are_a_press_and_a_hold() {
-        use crate::command::Edge;
         let (mut midi, params) = surface();
-        // Marker set is a press like every other button: a still, and
-        // nothing at all on the way up.
         assert_eq!(feed(&mut midi, &params, &cc(60, 127)), [Action::Screencap]);
         assert_eq!(feed(&mut midi, &params, &cc(60, 0)), []);
-        // Record is the one button both edges of which reach the
-        // instrument, so a recording lasts exactly as long as the finger.
         assert_eq!(
             feed(&mut midi, &params, &cc(45, 127)),
             [Action::Record(Edge::Down)]
@@ -2076,9 +1501,6 @@ mod tests {
     #[test]
     fn the_buttons_reach_the_nodes_and_the_transport() {
         let (mut midi, params) = surface();
-        // Both ends of every row: the rows are three eight-wide blocks of
-        // control numbers, and a block written from the wrong first number
-        // lands whole on the wrong row.
         for (row, node, width) in [
             (S_ROW, Node::Camera, crate::rig::count(Node::Camera)),
             (M_ROW, Node::Monitor, crate::rig::count(Node::Monitor)),
@@ -2089,7 +1511,7 @@ mod tests {
                     feed(&mut midi, &params, &cc(row + index as u8, 127)),
                     [Action::Focus(node, index)],
                     "{} {index}",
-                    node.name()
+                    node.short()
                 );
             }
         }
@@ -2115,35 +1537,25 @@ mod tests {
             feed(&mut midi, &params, &cc(CLUTCH, 127)),
             [Action::Clutch(Edge::Down)]
         );
-        // The transport strip: rewind puts one knob back, stop the whole
-        // panel, cycle lifts the overlay, the track pair moves the tempo.
         assert_eq!(
             feed(&mut midi, &params, &cc(43, 127)),
             [Action::ResetLastKnob]
         );
         assert_eq!(feed(&mut midi, &params, &cc(42, 127)), [Action::Reset]);
         assert_eq!(feed(&mut midi, &params, &cc(46, 127)), [Action::Overlay]);
-        assert_eq!(
-            feed(&mut midi, &params, &cc(58, 127)),
-            [Action::Tempo(crate::tempo::Step::Slower)]
-        );
-        assert_eq!(
-            feed(&mut midi, &params, &cc(59, 127)),
-            [Action::Tempo(crate::tempo::Step::Faster)]
-        );
     }
 
     #[test]
-    fn a_control_nothing_is_bound_to_does_nothing() {
+    fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        assert_eq!(feed(&mut midi, &params, &cc(100, 127)), []);
+        for dead in [20, 41, 58, 59, 100] {
+            assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
+            assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
+        }
     }
 
     #[test]
     fn a_surface_on_another_channel_is_still_the_surface() {
-        // Not just decoded — *played*. A channel filter anywhere would leave
-        // a nanoKONTROL2 set to channel 10 dead, and the decoder test alone
-        // cannot see one added in `action_for`.
         let (mut midi, params) = surface();
         assert_eq!(feed(&mut midi, &params, &[0xB9, 62, 127]), [Action::Clear]);
         assert_eq!(decode(&[0xB9, 0x07, 0x64]), [message(7, 0x64)]);
@@ -2151,27 +1563,16 @@ mod tests {
 
     #[test]
     fn the_whole_path_runs_off_a_device_that_appears_and_goes_away_and_comes_back() {
-        // Discovery, the open, the thread, the decode and the map, driven by
-        // bytes down a pipe that is not there when the instrument starts —
-        // which is what hot-plug is.
         let dir = scratch("hotplug");
         let cards = dir.join("cards");
         std::fs::write(&cards, SAMPLE_CARDS).unwrap();
-        let mut midi = Midi::new(Map::nano_kontrol2())
-            .unwrap()
-            .looking_in(dir.clone(), cards);
+        let mut midi = Midi::default().looking_in(dir.clone(), cards);
         let params = Params::default();
 
-        // Nothing plugged in: no device node, and no waiting for one.
         assert!(drain(&mut midi, &params).is_empty());
 
         let node = dir.join("midiC5D0");
         let mut pipe = plug(&node);
-        // A sweep, in running status, split across two writes mid-message —
-        // a `read` lands wherever it lands, and a three-byte message
-        // routinely arrives as two. The first message only places the
-        // fader; the two after it turn saturation down by a quarter of its
-        // travel and back up by half of that.
         pipe.write_all(&[0xB0, 0x01, 0x7F, 0x01]).unwrap();
         pipe.flush().unwrap();
         std::thread::sleep(Duration::from_millis(50));
@@ -2187,12 +1588,10 @@ mod tests {
             ),
             "{acted:?}"
         );
-        // A button held down at the moment the cable comes out.
         pipe.write_all(&[0xB0, 62, 127]).unwrap();
         pipe.flush().unwrap();
         assert_eq!(wait_for(&mut midi, &params), [Action::Clear]);
 
-        // Unplug: the last writer goes, so the reader's `read` returns 0.
         drop(pipe);
         std::fs::remove_file(&node).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -2202,8 +1601,6 @@ mod tests {
         }
         assert!(midi.port.is_none(), "the surface never went away");
 
-        // Plug it back in. It has to be looked for again — and the button
-        // that was down when the cable went must count as a fresh press.
         let mut pipe = plug(&node);
         pipe.write_all(&[0xB0, 62, 127]).unwrap();
         pipe.flush().unwrap();
@@ -2212,8 +1609,6 @@ mod tests {
             [Action::Clear],
             "the surface did not come back"
         );
-        // And a fader's first word is where it is, not how far it came:
-        // where this one stood before the unplug is nothing to it now.
         pipe.write_all(&[0xB0, 0x02, 0x7F]).unwrap();
         pipe.flush().unwrap();
         std::thread::sleep(Duration::from_millis(100));
@@ -2227,16 +1622,9 @@ mod tests {
 
     #[test]
     fn the_focused_node_s_lamp_reaches_the_wire() {
-        // The app test that this lamp survives a redraw needs a GPU, because
-        // an `App` holds one — and it skips where there is no adapter. This
-        // is the half of that claim which needs nothing but a descriptor, so
-        // a machine with no display still fails a lamp that never leaves the
-        // instrument.
-        let mut midi = Midi::new(Map::nano_kontrol2()).unwrap();
+        let mut midi = Midi::default();
         let mut surface = midi.plug_in_a_test_surface();
         surface.wire.handshake(0);
-        // One row per kind: the first of each is S1, M1 and R1, which are
-        // controls 32, 48 and 64.
         let home = lamp(S_ROW) | lamp(M_ROW) | lamp(R_ROW);
         midi.show(Focus::default(), Shown::default());
         assert!(
@@ -2256,11 +1644,6 @@ mod tests {
         );
     }
 
-    /// A fifo standing in for the device node, opened read *and* write so
-    /// neither end blocks waiting for the other — a reader's open returns at
-    /// once because this handle is already a writer, and dropping it is the
-    /// unplug. A write-only writer thread would deadlock the suite rather
-    /// than fail it if it ever failed to arrive.
     fn plug(node: &Path) -> std::fs::File {
         if !node.exists() {
             let status = std::process::Command::new("mkfifo")
@@ -2283,8 +1666,6 @@ mod tests {
             .collect()
     }
 
-    /// Poll until the surface has said something, or give up. The device is
-    /// read on a thread, so how many frames it takes is not ours to say.
     fn wait_for(midi: &mut Midi, params: &Params) -> Vec<Action> {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {

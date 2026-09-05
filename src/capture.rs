@@ -14,10 +14,10 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 
 use web_time::Instant;
 
+use crate::clock::Clock;
 use crate::feedback::Feedback;
 use crate::overlay::Overlay;
 use crate::present::{Present, View};
-use crate::tempo::Tempo;
 
 /// The most a capture is. A 4K display read back frame by frame is a
 /// gigabyte a second over the bus and more than a real-time encoder takes;
@@ -57,7 +57,7 @@ pub struct Capture {
     frames: u64,
     /// A recording's clock. `None` is a still, which is one frame the moment
     /// it is asked for.
-    clock: Option<Tempo>,
+    clock: Option<Clock>,
     child: Child,
     stdin: Option<ChildStdin>,
     path: PathBuf,
@@ -98,7 +98,7 @@ impl Capture {
                 "-pix_fmt",
                 "yuv420p",
             ],
-            Some(Tempo::new(RATE)),
+            Some(Clock::new(RATE)),
         )
     }
 
@@ -109,7 +109,7 @@ impl Capture {
         format: wgpu::TextureFormat,
         ext: &str,
         encode: &[&str],
-        clock: Option<Tempo>,
+        clock: Option<Clock>,
     ) -> Result<Capture, String> {
         let pix = pix_fmt(format)?;
         let size = fitted(size);
@@ -174,7 +174,7 @@ impl Capture {
     /// fast one skips. Two costs ride on that, both the recording's and
     /// neither the piece's: the read back below waits for the GPU, and a
     /// write waits for ffmpeg — so a display that would rather not be held
-    /// up should not be recorded. And a stall longer than [`Tempo`]'s
+    /// up should not be recorded. And a stall longer than [`Clock`]'s
     /// backlog is dropped rather than owed, exactly as the piece's own
     /// passes are, which leaves a recording made through one shorter than
     /// the hand was on the button.

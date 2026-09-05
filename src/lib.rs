@@ -7,6 +7,7 @@ pub mod app;
 pub mod bench;
 pub mod capture;
 pub mod cli;
+pub mod clock;
 pub mod command;
 pub mod config;
 pub mod feedback;
@@ -20,7 +21,6 @@ pub mod overlay;
 pub mod params;
 pub mod present;
 pub mod rig;
-pub mod tempo;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 

@@ -1,18 +1,15 @@
-//! The on-screen controls overlay: the surface as it is actually mapped,
-//! drawn as the panel under the performer's hands so a glance maps hand to
-//! screen — a fader row, the rotaries above it, the S/M/R grid and the
-//! transport strip, each control captioned with what it does in two words at
-//! most.
+//! The on-screen controls overlay: the surface drawn as the panel under the
+//! performer's hands so a glance maps hand to screen — a fader row, the
+//! rotaries above it, the S/M/R grid and the transport strip, each control
+//! captioned with what it does in two words at most.
 //!
-//! Drawn from the [`Map`] in force, the way [`Map::card`] prints its card —
-//! never from a picture kept beside it, so a `midi.toml` that moves a knob
-//! moves it here too. The image is rasterized
-//! once on the CPU into a texture, and the present pass blits it over a
-//! corner: a dozen captions do not justify a text-shaping stack or a second
-//! render architecture, and a texture built at startup works the same in a
-//! browser as on the deployed display.
+//! Drawn from [`FADERS`] and [`BUTTONS`], never from a picture kept beside
+//! them. The image is rasterized once on the CPU into a texture, and the
+//! present pass blits it over a corner: a dozen captions do not justify a
+//! text-shaping stack or a second render architecture, and a texture built
+//! at startup works the same in a browser as on the deployed display.
 
-use crate::midi::{nano_kontrol2, spot, Map, Spot, TRANSPORT};
+use crate::midi::{spot, Spot, BUTTONS, FADERS, TRANSPORT};
 
 /// The image, `width * height` RGBA texels, row 0 at the top.
 struct Raster {
@@ -25,9 +22,8 @@ struct Raster {
 /// underneath the help rather than stopping for it.
 const BACK: [u8; 4] = [0, 0, 0, 200];
 /// Everything that is not a binding: the panel's own chrome and printing,
-/// and the controls the map leaves unbound. Those are still drawn — the
-/// panel should look like the device, absences included — but visibly
-/// asleep.
+/// and the dead controls. Those are still drawn — the panel should look like
+/// the device, absences included — but visibly asleep.
 const DIM: [u8; 4] = [255, 255, 255, 70];
 const LIT: [u8; 4] = [255, 255, 255, 255];
 
@@ -35,13 +31,11 @@ const LIT: [u8; 4] = [255, 255, 255, 255];
 /// scales whole; the font is 8x8, so 8 is the unit everything else is
 /// spaced around.
 const GLYPH: i32 = 8;
-/// One channel strip's width: room for the widest single word a knob's name
-/// carries ("saturation", ten glyphs) with a texel of air either side.
+/// One channel strip's width. "temperature", eleven glyphs, overhangs it by
+/// two texels either side and still clears both neighbours' captions.
 const STRIP_W: i32 = 84;
 /// A transport button and the pitch between them. Seven glyphs and a texel
-/// each side — a ceiling, not a fit: a map may bind any key to any button,
-/// and the axes' captions carry a knob's whole name ("green gain -"),
-/// which is what the wider [`STRIP_W`] is for. A caption past seven clips.
+/// each side. A caption past seven clips.
 const BUTTON_W: i32 = 60;
 const BUTTON_H: i32 = 16;
 const BUTTON_PITCH: i32 = 64;
@@ -59,9 +53,6 @@ const PANEL_W: i32 = STRIPS_X + 8 * STRIP_W + PAD;
 const ROWS_Y: [i32; 3] = [66, 84, 102];
 const SQUARE: i32 = 14;
 const PANEL_H: i32 = 152;
-/// The pitch of the plain text lines: overflow bindings under the panel, and
-/// the whole listing for a surface whose shape this crate does not know.
-const LINE: i32 = 10;
 
 /// An RGBA image being drawn. Every mark goes through [`Canvas::set`], which
 /// drops texels outside the image — so a caption longer than the room it was
@@ -124,9 +115,8 @@ impl Canvas {
         }
     }
 
-    /// `text` left-aligned at `(x, y)`, stopping at `max_x`: a caption from a
-    /// hand-written map can outgrow its control, and clipping it beats
-    /// writing over the next one.
+    /// `text` left-aligned at `(x, y)`, stopping at `max_x`: a caption that
+    /// outgrows its control clips rather than writing over the next one.
     fn text(&mut self, x: i32, y: i32, text: &str, max_x: i32, colour: [u8; 4]) {
         for (i, ch) in text.chars().enumerate() {
             let at = x + i as i32 * GLYPH;
@@ -151,30 +141,6 @@ impl Canvas {
     fn text_centred(&mut self, cx: i32, y: i32, text: &str, colour: [u8; 4]) {
         let w = text.chars().count() as i32 * GLYPH;
         self.text(cx - w / 2, y, text, self.width, colour);
-    }
-
-    /// A caption under a strip-wide control, wrapped greedily to the strip:
-    /// as many words a line as fit, so even a knob named past the two-word
-    /// ceiling by a hand-written map stays within the rows below it.
-    fn caption(&mut self, cx: i32, y: i32, text: &str, colour: [u8; 4]) {
-        let fits = |line: &str| line.chars().count() as i32 * GLYPH <= STRIP_W - 4;
-        let mut line = String::new();
-        let mut row = 0;
-        for word in text.split_whitespace() {
-            let joined = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            if fits(&joined) {
-                line = joined;
-                continue;
-            }
-            self.text_centred(cx, y + row * (GLYPH + 2), &line, colour);
-            row += 1;
-            line = word.into();
-        }
-        self.text_centred(cx, y + row * (GLYPH + 2), &line, colour);
     }
 }
 
@@ -257,13 +223,13 @@ fn place(c: &mut Canvas, spot: Spot, label: &str) {
     match spot {
         Spot::Fader(i) => {
             fader_track(c, i, LIT);
-            c.caption(strip_x(i) + STRIP_W / 2, 124, label, LIT);
+            c.text_centred(strip_x(i) + STRIP_W / 2, 124, label, LIT);
         }
         Spot::Rotary(i) => {
             let cx = strip_x(i) + STRIP_W / 2;
             c.ring(cx, 24, 12, LIT);
             c.fill(cx, 14, 1, 6, LIT);
-            c.caption(cx, 42, label, LIT);
+            c.text_centred(cx, 42, label, LIT);
         }
         Spot::S(i) => beside(c, i, 0, label),
         Spot::M(i) => beside(c, i, 1, label),
@@ -283,40 +249,16 @@ fn place(c: &mut Canvas, spot: Spot, label: &str) {
     }
 }
 
-/// A button is captioned with the very name a `midi.toml` binds it by, so the
-/// panel and the file say one thing.
-///
-/// Every binding the map has, with nothing filtered out: a select row is
-/// built as wide as the rig, so a button that exists is a node that exists.
-/// What the panel draws dim is what the map left unbound.
-fn labels(map: &Map) -> impl Iterator<Item = (u8, String)> + '_ {
-    let faders = map.fader.iter().map(|f| (f.cc, f.knob.name().to_string()));
-    let buttons = map.button.iter().map(|b| (b.cc, b.command.clone()));
+/// Every bound control and its caption. What the panel draws dim is what is
+/// dead.
+fn labels() -> impl Iterator<Item = (u8, String)> {
+    let faders = FADERS.iter().map(|f| (f.cc, f.knob.name().to_string()));
+    let buttons = BUTTONS.iter().map(|b| (b.cc, b.action.caption()));
     faders.chain(buttons)
 }
 
-/// The whole image for the map in force. The map
-/// is built for the graph being played, so the graph itself is not wanted
-/// here: the buttons a rig has are the buttons its map binds.
-///
-/// A surface this crate knows the shape of is drawn as that panel; any other
-/// is a listing, because a drawn panel the performer's hands cannot find is
-/// worse than the list they can read — the same retreat
-/// [`crate::midi::silkscreen`] makes to numbers.
-fn rasterize(map: &Map) -> Raster {
-    if !nano_kontrol2(&map.device) {
-        return listing(map);
-    }
-    // Bindings off the panel — control numbers no silkscreen names — still
-    // exist and must not vanish from the help: they get lines below it.
-    let spare: Vec<(u8, String)> = labels(map).filter(|(cc, _)| spot(*cc).is_none()).collect();
-    let height = PANEL_H
-        + if spare.is_empty() {
-            0
-        } else {
-            spare.len() as i32 * LINE + 6
-        };
-    let mut c = Canvas::new(PANEL_W, height);
+fn rasterize() -> Raster {
+    let mut c = Canvas::new(PANEL_W, PANEL_H);
     for i in 0..8 {
         strip_chrome(&mut c, i);
     }
@@ -324,36 +266,9 @@ fn rasterize(map: &Map) -> Raster {
         transport_button(&mut c, t.row, t.col, DIM);
     }
     group_labels(&mut c);
-    for (cc, label) in labels(map) {
-        if let Some(spot) = spot(cc) {
-            place(&mut c, spot, &label);
-        }
-    }
-    for (i, (cc, label)) in spare.iter().enumerate() {
-        let y = PANEL_H - 4 + i as i32 * LINE;
-        c.text(PAD, y, &format!("cc {cc}  {label}"), c.width, LIT);
-    }
-    Raster {
-        width: c.width as u32,
-        height: c.height as u32,
-        pixels: c.pixels,
-    }
-}
-
-/// One line per binding for a surface whose panel this crate cannot draw.
-fn listing(map: &Map) -> Raster {
-    let lines: Vec<String> = [map.device.clone()]
-        .into_iter()
-        .chain(labels(map).map(|(cc, label)| format!("cc {cc:<3} {label}")))
-        .collect();
-    let widest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
-    let mut c = Canvas::new(
-        widest * GLYPH + 2 * PAD,
-        lines.len() as i32 * LINE + 2 * PAD,
-    );
-    for (i, line) in lines.iter().enumerate() {
-        let colour = if i == 0 { DIM } else { LIT };
-        c.text(PAD, PAD + i as i32 * LINE, line, c.width, colour);
+    for (cc, label) in labels() {
+        let spot = spot(cc).expect("every bound control is on the panel");
+        place(&mut c, spot, &label);
     }
     Raster {
         width: c.width as u32,
@@ -418,12 +333,7 @@ fn upload(device: &wgpu::Device, queue: &wgpu::Queue, raster: &Raster) -> wgpu::
 impl Overlay {
     /// `format` is the present target's, because the overlay draws into the
     /// present pass's own attachment.
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-        map: &Map,
-    ) -> Overlay {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Overlay {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("overlay"),
             entries: &[
@@ -452,7 +362,7 @@ impl Overlay {
             ..Default::default()
         });
         let panel = {
-            let raster = rasterize(map);
+            let raster = rasterize();
             let view = upload(device, queue, &raster);
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("overlay"),
@@ -523,17 +433,6 @@ mod tests {
 
     use crate::params::Node;
 
-    /// The texels that differ between two images — the overlay's whole claim
-    /// is that the picture follows the map, which is a claim about texels.
-    fn texels_differing(a: &Raster, b: &Raster) -> usize {
-        assert_eq!((a.width, a.height), (b.width, b.height));
-        a.pixels
-            .chunks(4)
-            .zip(b.pixels.chunks(4))
-            .filter(|(a, b)| a != b)
-            .count()
-    }
-
     fn lit_texels(r: &Raster) -> usize {
         r.pixels.chunks(4).filter(|p| *p == LIT).count()
     }
@@ -561,7 +460,7 @@ mod tests {
 
     #[test]
     fn the_left_cluster_is_arranged_the_way_the_surface_is() {
-        let raster = rasterize(&Map::nano_kontrol2());
+        let raster = rasterize();
         // Every expectation below is in the strip's own texels, so the
         // strip's own place has to be claimed outright: it starts at the
         // panel's edge and its widest row stops short of the channel
@@ -606,67 +505,47 @@ mod tests {
     }
 
     #[test]
-    fn the_factory_panel_is_drawn_and_captioned() {
-        let raster = rasterize(&Map::nano_kontrol2());
+    fn the_panel_is_drawn_and_captioned() {
+        let raster = rasterize();
         assert_eq!(
             (raster.width, raster.height),
             (PANEL_W as u32, PANEL_H as u32)
         );
         // Captions are the lit texels; a panel with none is chrome around
-        // nothing. The exact count is the drawing's business, but a full
-        // factory map captions every strip, which is thousands of texels.
+        // nothing. The exact count is the drawing's business, but the panel
+        // captions every strip, which is thousands of texels.
         assert!(lit_texels(&raster) > 1000, "{}", lit_texels(&raster));
     }
 
     #[test]
-    fn the_overlay_follows_the_map_not_the_factory_layout() {
-        // The rule inherited from rl's controls display: a picture that
-        // drifts from the map in force is disallowed. Move one knob in the
-        // map and the picture must move with it.
-        let before = rasterize(&Map::nano_kontrol2());
-        let mut moved = Map::nano_kontrol2();
-        moved.fader[0].knob = crate::params::Knob::Sharpness;
-        let moved = rasterize(&moved);
-        assert!(texels_differing(&before, &moved) > 100);
-    }
-
-    #[test]
-    fn a_binding_off_the_panel_gets_a_line_rather_than_vanishing() {
-        let mut map = Map::nano_kontrol2();
-        map.button.push(crate::midi::Button {
-            cc: 100,
-            command: "blank".into(),
-        });
-        let raster = rasterize(&map);
-        assert!(raster.height > PANEL_H as u32);
-    }
-
-    #[test]
-    fn an_unknown_surface_is_listed_not_drawn() {
-        let mut map = Map::nano_kontrol2();
-        map.device = "Launchpad".into();
-        let raster = rasterize(&map);
-        // A listing is one line per binding plus the device's own, and
-        // nothing panel-shaped about it.
-        assert_eq!(
-            raster.height,
-            ((labels(&map).count() + 1) as i32 * LINE + 2 * PAD) as u32
-        );
-        assert!(lit_texels(&raster) > 100);
-    }
-
-    #[test]
-    fn every_fader_caption_keeps_to_two_words() {
-        // The ceiling, on the half of the panel that is captioned by
-        // a knob's name. The button half is every command's own name, held
-        // to the same two words by `command::a_name_is_two_words_at_most`.
-        let map = Map::nano_kontrol2();
-        for f in &map.fader {
+    fn every_caption_lands_on_its_own_control() {
+        // Each binding's caption drawn alone, against the same texels of the
+        // whole panel: a caption that moved or doubled differs.
+        let raster = rasterize();
+        for (cc, label) in labels() {
+            let spot = spot(cc).unwrap();
+            let mut want = Canvas::new(PANEL_W, PANEL_H);
+            place(&mut want, spot, &label);
+            let lit: Vec<(i32, i32)> = (0..PANEL_H)
+                .flat_map(|y| (0..PANEL_W).map(move |x| (x, y)))
+                .filter(|(x, y)| {
+                    let at = ((y * PANEL_W + x) * 4) as usize;
+                    want.pixels[at..at + 4] == LIT
+                })
+                .collect();
             assert!(
-                f.knob.name().split_whitespace().count() <= 2,
-                "{:?}",
-                f.knob
+                lit.len() > 20,
+                "cc {cc}: {label:?} drew {} texels",
+                lit.len()
             );
+            for (x, y) in lit {
+                let at = ((y * PANEL_W + x) * 4) as usize;
+                assert_eq!(
+                    raster.pixels[at..at + 4],
+                    LIT,
+                    "cc {cc}: {label:?} at {x},{y}"
+                );
+            }
         }
     }
 
@@ -718,38 +597,26 @@ mod tests {
         })
     }
 
-    fn selects(node: Node, i: u8) -> Vec<[u8; 4]> {
-        captioned(node, i, &format!("{} {}", node.short(), i + 1))
-    }
-
     #[test]
     fn a_select_row_is_drawn_for_its_own_kind_and_stops_where_the_graph_does() {
         // The rig's three counts differ, so a row drawn from another kind's
         // would read wrong on at least one of them. Past the choice the strip
         // is bare chrome, which is what a dead button looks like.
-        let raster = rasterize(&Map::nano_kontrol2());
+        let raster = rasterize();
         for node in Node::ALL {
-            let bound = crate::rig::count(node);
-            for i in 0..crate::midi::ROW_BUTTONS as u8 {
-                let want = if (i as usize) < bound {
-                    selects(node, i)
-                } else {
-                    match crate::midi::row_of(node) + i {
-                        crate::midi::REVERSE => captioned(node, i, "reverse"),
-                        crate::midi::FLIP_X => captioned(node, i, "flip x"),
-                        crate::midi::FLIP_Y => captioned(node, i, "flip y"),
-                        crate::midi::SELECT => captioned(node, i, "select"),
-                        crate::midi::FINER => captioned(node, i, "precision -"),
-                        crate::midi::COARSER => captioned(node, i, "precision +"),
-                        crate::midi::CLUTCH => captioned(node, i, "clutch"),
-                        _ => asleep(node, i),
-                    }
+            for i in 0..crate::midi::STRIPS as u8 {
+                let bound = BUTTONS
+                    .iter()
+                    .find(|b| b.cc == crate::midi::row_of(node) + i);
+                let want = match bound {
+                    Some(b) => captioned(node, i, &b.action.caption()),
+                    None => asleep(node, i),
                 };
                 assert_eq!(
                     band(&raster.pixels, raster.width as i32, node, i),
                     want,
                     "{} {}",
-                    node.name(),
+                    node.short(),
                     i + 1
                 );
             }

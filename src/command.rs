@@ -1,6 +1,4 @@
-//! What a control on the surface does. One table, driving both the lookup a
-//! `midi.toml` is resolved against and the card the instrument prints, so the
-//! two cannot drift apart.
+//! What a control on the surface does.
 
 use crate::affine::Axis;
 use crate::params::{Knob, Node};
@@ -15,9 +13,8 @@ pub enum Action {
     /// in the graph. A select rather than a step: a hand that means "that
     /// one" should not have to walk past the ones it does not mean.
     ///
-    /// The index is in range for the graph the map was validated against —
-    /// [`crate::midi::Map::validate`] refuses a binding past it — so nothing
-    /// downstream checks it a second time.
+    /// The index is in range for the rig: the select rows are built as wide
+    /// as it, so nothing downstream checks it a second time.
     Focus(Node, usize),
     Reset,
     /// Put the last knob that moved back to its identity, and nothing else.
@@ -27,10 +24,6 @@ pub enum Action {
     ResetLastKnob,
     /// Blank every monitor, so the loops restart from the seed alone.
     Clear,
-    /// Which way a press moves the tempo — passes a second, the speed the
-    /// piece plays at. How far, and the range it moves inside, are
-    /// [`crate::tempo`]'s.
-    Tempo(crate::tempo::Step),
     /// Show the focused monitor on the whole display, or go back to the
     /// tiled bank. A latch and not a select — see [`crate::app`], where the
     /// monitor it shows is the focus and not an index of its own.
@@ -79,149 +72,29 @@ pub fn released(action: Action) -> Option<Action> {
     }
 }
 
-struct Command {
-    name: &'static str,
-    action: Action,
-    what: &'static str,
-}
-
-const COMMANDS: &[Command] = &[
-    cmd("blank", Action::Clear, "blank every monitor"),
-    cmd("reset", Action::Reset, "reset every knob"),
-    cmd(
-        "reset 1",
-        Action::ResetLastKnob,
-        "reset the last knob turned",
-    ),
-    cmd(
-        "rate -",
-        Action::Tempo(crate::tempo::Step::Slower),
-        "slow the piece down (four presses halve the rate)",
-    ),
-    cmd(
-        "rate +",
-        Action::Tempo(crate::tempo::Step::Faster),
-        "speed the piece up (four presses double the rate)",
-    ),
-    cmd(
-        "solo",
-        Action::Solo,
-        "the focused monitor on the whole display, or the tiled bank",
-    ),
-    cmd("help", Action::Overlay, "the controls overlay, on or off"),
-    cmd(
-        "snap",
-        Action::Screencap,
-        "write what the display is showing to a file",
-    ),
-    cmd(
-        "record",
-        Action::Record(Edge::Down),
-        "record the display for as long as this is held down",
-    ),
-    cmd(
-        "cut",
-        Action::Cut(Edge::Down),
-        "the focused switcher runs to its other source while this is held down",
-    ),
-    cmd(
-        "reverse",
-        Action::Reverse,
-        "the focused switcher's two sources trade places",
-    ),
-    cmd(
-        "select",
-        Action::Select,
-        "the focused monitor on its switcher's program or its own camera; lit on program",
-    ),
-    cmd(
-        "flip x",
-        Action::Flip(Axis::X),
-        "mirror the focused monitor left for right; lit while it is",
-    ),
-    cmd(
-        "flip y",
-        Action::Flip(Axis::Y),
-        "mirror the focused monitor top for bottom; lit while it is",
-    ),
-    cmd(
-        "precision -",
-        Action::Finer,
-        "a full throw moves half as much",
-    ),
-    cmd(
-        "precision +",
-        Action::Coarser,
-        "a full throw moves twice as much",
-    ),
-    cmd(
-        "clutch",
-        Action::Clutch(Edge::Down),
-        "while held, the faders and rotaries move nothing",
-    ),
-];
-
-const fn cmd(name: &'static str, action: Action, what: &'static str) -> Command {
-    Command { name, action, what }
-}
-
-/// The one place a kind and a number are written into a name. It stops at the
-/// most of that kind a graph may legally hold, so every name it mints is one
-/// a `midi.toml` can actually bind.
-pub fn select_names(node: Node) -> impl Iterator<Item = String> {
-    (1..=crate::rig::count(node)).map(move |i| format!("{} {i}", node.short()))
-}
-
-/// The one walk behind [`action_for_name`] and [`describes`], so what a name
-/// reaches cannot depend on which of the two asked.
-enum Binding {
-    Select { node: Node, index: usize },
-    Command(&'static Command),
-}
-
-fn binding(name: &str) -> Option<Binding> {
-    for node in Node::ALL {
-        if let Some(index) = select_names(node).position(|select| select == name) {
-            return Some(Binding::Select { node, index });
+impl Action {
+    /// What the overlay captions a control with: two words at most.
+    pub(crate) fn caption(self) -> String {
+        match self {
+            Action::Turn(knob, _) => knob.name().into(),
+            Action::Focus(node, index) => format!("{} {}", node.short(), index + 1),
+            Action::Reset => "reset".into(),
+            Action::ResetLastKnob => "reset 1".into(),
+            Action::Clear => "blank".into(),
+            Action::Solo => "solo".into(),
+            Action::Overlay => "help".into(),
+            Action::Screencap => "snap".into(),
+            Action::Record(_) => "record".into(),
+            Action::Cut(_) => "cut".into(),
+            Action::Reverse => "reverse".into(),
+            Action::Select => "select".into(),
+            Action::Flip(Axis::X) => "flip x".into(),
+            Action::Flip(Axis::Y) => "flip y".into(),
+            Action::Finer => "precision -".into(),
+            Action::Coarser => "precision +".into(),
+            Action::Clutch(_) => "clutch".into(),
         }
     }
-    COMMANDS
-        .iter()
-        .find(|c| c.name == name)
-        .map(Binding::Command)
-}
-
-/// Every name a `midi.toml` may bind a button to, in the order the card
-/// prints them.
-pub fn names() -> impl Iterator<Item = String> {
-    Node::ALL
-        .into_iter()
-        .flat_map(select_names)
-        .chain(command_names().map(String::from))
-}
-
-/// The commands that are not a select. Named apart from the rest of the
-/// vocabulary because the surface is held to them: a command with no button
-/// on the board is one nobody plays.
-pub fn command_names() -> impl Iterator<Item = &'static str> {
-    COMMANDS.iter().map(|c| c.name)
-}
-
-/// `None` for a name no table claims, which is how a hand-written `midi.toml`
-/// is caught at load rather than in the middle of a performance.
-pub fn action_for_name(name: &str) -> Option<Action> {
-    Some(match binding(name)? {
-        Binding::Select { node, index } => Action::Focus(node, index),
-        Binding::Command(c) => c.action,
-    })
-}
-
-/// What the command called `name` does, in the words the printed card uses.
-pub fn describes(name: &str) -> Option<String> {
-    Some(match binding(name)? {
-        Binding::Select { node, index } => format!("focus {} {}", node.name(), index + 1),
-        Binding::Command(c) => c.what.to_string(),
-    })
 }
 
 #[cfg(test)]
@@ -229,63 +102,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_name_reaches_exactly_one_action() {
-        let names: Vec<String> = names().collect();
-        for (i, name) in names.iter().enumerate() {
-            assert!(!names[..i].contains(name), "{name} names two bindings");
-            assert!(action_for_name(name).is_some(), "{name}");
-            assert!(!describes(name).unwrap().is_empty(), "{name}");
-        }
-        assert_eq!(action_for_name("wiggle"), None);
-        assert_eq!(describes("wiggle"), None);
-    }
-
-    #[test]
     fn a_select_names_its_kind_and_its_place() {
-        for node in Node::ALL {
-            for (index, name) in select_names(node).enumerate() {
-                assert_eq!(action_for_name(&name), Some(Action::Focus(node, index)));
-                assert_eq!(
-                    describes(&name).unwrap(),
-                    format!("focus {} {}", node.name(), index + 1)
-                );
-            }
-            assert_eq!(select_names(node).count(), crate::rig::count(node));
-        }
-        // The one place the actual words are pinned: every other select test
-        // builds its expectation out of `Node::short` and `Node::name`, so a
-        // rename would move expectation and reality together. Numbered from
-        // one on the button and from zero in the graph.
-        assert_eq!(
-            action_for_name("cam 3"),
-            Some(Action::Focus(Node::Camera, 2))
-        );
-        assert_eq!(describes("mon 3").as_deref(), Some("focus monitor 3"));
-        assert_eq!(
-            action_for_name("sw 1"),
-            Some(Action::Focus(Node::Switcher, 0))
-        );
-        // And it stops where the rig does: there is no fifth switcher and no
-        // fourth camera, so a name for one is a binding the loader rejects.
-        assert_eq!(action_for_name("sw 5"), None);
-        assert_eq!(action_for_name("cam 4"), None);
-    }
-
-    #[test]
-    fn the_commands_do_what_they_say() {
-        assert_eq!(action_for_name("blank"), Some(Action::Clear));
-        assert_eq!(action_for_name("reset"), Some(Action::Reset));
-        assert_eq!(action_for_name("solo"), Some(Action::Solo));
-        assert_eq!(action_for_name("help"), Some(Action::Overlay));
-        assert_eq!(action_for_name("snap"), Some(Action::Screencap));
-        assert_eq!(action_for_name("record"), Some(Action::Record(Edge::Down)));
-        assert_eq!(action_for_name("cut"), Some(Action::Cut(Edge::Down)));
-        assert_eq!(action_for_name("reverse"), Some(Action::Reverse));
-        assert_eq!(action_for_name("select"), Some(Action::Select));
-        assert_eq!(action_for_name("precision -"), Some(Action::Finer));
-        assert_eq!(action_for_name("precision +"), Some(Action::Coarser));
-        assert_eq!(action_for_name("clutch"), Some(Action::Clutch(Edge::Down)));
-        assert_eq!(describes("reset").as_deref(), Some("reset every knob"));
+        assert_eq!(Action::Focus(Node::Camera, 2).caption(), "cam 3");
+        assert_eq!(Action::Focus(Node::Monitor, 0).caption(), "mon 1");
+        assert_eq!(Action::Focus(Node::Switcher, 3).caption(), "sw 4");
     }
 
     #[test]
@@ -298,29 +118,28 @@ mod tests {
             released(Action::Cut(Edge::Down)),
             Some(Action::Cut(Edge::Up))
         );
-        // Every other binding is a press, so a release of one must reach
-        // nothing rather than firing it a second time.
-        for name in names() {
-            let action = action_for_name(&name).expect("every name resolves");
-            assert_eq!(
-                released(action).is_some(),
-                matches!(
-                    action,
-                    Action::Record(Edge::Down)
-                        | Action::Cut(Edge::Down)
-                        | Action::Clutch(Edge::Down)
-                ),
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_name_is_two_words_at_most() {
-        // The ceiling for text on the panel, held where the names are
-        // written: a name is what the overlay captions its button with.
-        for name in names() {
-            assert!(name.split_whitespace().count() <= 2, "{name:?}");
+        assert_eq!(
+            released(Action::Clutch(Edge::Down)),
+            Some(Action::Clutch(Edge::Up))
+        );
+        for action in [
+            Action::Reset,
+            Action::ResetLastKnob,
+            Action::Clear,
+            Action::Solo,
+            Action::Overlay,
+            Action::Screencap,
+            Action::Reverse,
+            Action::Select,
+            Action::Flip(Axis::X),
+            Action::Finer,
+            Action::Coarser,
+            Action::Focus(Node::Camera, 0),
+            Action::Record(Edge::Up),
+            Action::Cut(Edge::Up),
+            Action::Clutch(Edge::Up),
+        ] {
+            assert_eq!(released(action), None, "{action:?}");
         }
     }
 }

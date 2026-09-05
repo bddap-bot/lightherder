@@ -121,9 +121,9 @@ pub const fn count(node: Node) -> usize {
     }
 }
 
-/// The longest period, in passes: a second at the default tempo. The
-/// original's rates are unverified; a beat slower than that is a hand on the
-/// reversal, not a rhythm.
+/// The longest period, in passes: a second. The original's rates are
+/// unverified; a beat slower than that is a hand on the reversal, not a
+/// rhythm.
 pub const MAX_PERIOD: u32 = 60;
 
 /// One feed on the rig's cabling, as the share of each camera and of the
@@ -241,8 +241,8 @@ impl Rig {
     /// Every switcher whose period divides `pass` reverses. Counted from the
     /// start of the run rather than from when a period was dialled in, so
     /// every switcher in the mode beats on one grid — which is what the
-    /// original's quantizing is for. A pass is a beat of the tempo, so
-    /// nothing here reads a clock.
+    /// original's quantizing is for. The grid is in passes, so nothing here
+    /// reads a clock.
     pub fn beat(&mut self, pass: u64) {
         for i in 0..SWITCHERS {
             let period = u64::from(self.periods[i]);

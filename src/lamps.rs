@@ -14,9 +14,9 @@
 //!
 //! That switch is one switch for the whole panel, which is why this drives
 //! *every* button rather than the one it came for: external mode takes every
-//! button's light at once. So a button the map binds is lit here while it is
-//! held — exactly what internal mode did for it — and a button the map binds
-//! nothing to stays dark, which is now what it means.
+//! button's light at once. So a bound button is lit here while it is held —
+//! exactly what internal mode did for it — and a dead button stays dark,
+//! which is now what it means.
 //!
 //! And the mode goes back to Internal on the way out, because a surface left
 //! in a mode only this program drives is a surface whose buttons have gone
@@ -81,8 +81,7 @@ const EXTERNAL: u8 = 1;
 /// A control change, which is what a lamp in external mode answers to: the
 /// very control number the button transmits, at the button's own On and Off
 /// values. Those are 127 and 0 as the factory set them — the same factory
-/// layout [`crate::midi::Map::nano_kontrol2`] and the silkscreen are written
-/// against.
+/// layout [`crate::midi::BUTTONS`] is written against.
 const CONTROL: u8 = 0xB0;
 const LIT: u8 = 127;
 const DARK: u8 = 0;
@@ -92,8 +91,8 @@ const DARK: u8 = 0;
 /// address a lamp that could not exist.
 pub(crate) type Lamplight = u128;
 
-/// The one lamp of control number `cc`. Safe for every control a map can
-/// name: [`crate::midi::Map::validate`] refuses one past 127.
+/// The one lamp of control number `cc`. Safe for every bound control: each
+/// is on the panel, which stops at 71.
 pub(crate) fn lamp(cc: u8) -> Lamplight {
     1 << cc
 }
@@ -142,9 +141,9 @@ impl Frames {
 
 impl Lamps {
     /// Take over the lights on `file`, the surface's raw MIDI device opened
-    /// for writing. `buttons` is every control number the map binds to a
-    /// button — the only numbers that will ever be written, so a lamp mask
-    /// cannot reach a control that is not one.
+    /// for writing. `buttons` is every control number a button answers to —
+    /// the only numbers that will ever be written, so a lamp mask cannot
+    /// reach a control that is not one.
     pub(crate) fn spawn(file: File, buttons: Lamplight) -> Result<Lamps, String> {
         let (tx, rx) = channel();
         let panel = Panel {
@@ -696,7 +695,7 @@ mod tests {
     use super::*;
 
     /// The eight control numbers these tests let the instrument light. Which
-    /// buttons those are is the map's business; nothing here knows.
+    /// buttons those are is [`crate::midi`]'s business; nothing here knows.
     const BUTTONS: Lamplight = 0xFF << 32;
 
     #[test]
@@ -948,8 +947,8 @@ mod tests {
             }
         }
 
-        /// The blanking pass every connect opens with: every button the map
-        /// binds, put out, before any lamp is lit.
+        /// The blanking pass every connect opens with: every bound button,
+        /// put out, before any lamp is lit.
         fn blanked(&mut self, channel: u8) {
             let want: Vec<u8> = controls(BUTTONS)
                 .flat_map(|cc| [CONTROL | channel, cc, DARK])

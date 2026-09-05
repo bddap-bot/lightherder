@@ -24,8 +24,6 @@
 
 use std::fmt;
 
-use serde::Deserialize;
-
 /// What plays a file or a capture: one type per host, both with
 /// `async fn open(&Input, size) -> Result<(Feed, Vec<u8>), String>` — the
 /// feed and its first frame — and `fn next(&mut self, &mut Vec<u8>) -> Next`,
@@ -36,8 +34,7 @@ use ffmpeg::Feed;
 use video::Feed;
 
 /// One external source in the graph.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Input {
     /// Drawn here, once. Still on purpose: motion in this instrument is the
     /// camera's job, and a still layer is uploaded once instead of twice a
@@ -53,8 +50,7 @@ pub enum Input {
 /// is what drawing earns over `lavfi`: exact levels a test can assert without
 /// pinning an ffmpeg version. Geometry has no such claim — a grid or a
 /// timecode is `{ format = "lavfi", device = "testsrc2" }` and always was.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pattern {
     /// Eight vertical bars at 75%: white, yellow, cyan, green, magenta, red,
     /// blue, black. Every primary and both ends of the scale, which is what

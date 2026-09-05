@@ -4,8 +4,7 @@
 //! and the knobs are the same code the deployed instrument runs — so this is
 //! only the three things a page supplies that a terminal does not: an entry
 //! point, somewhere for the log to go, and the canvas winit draws on.
-//! How fast to play arrives the way a web page takes an argument, in the
-//! query string: `?rate=30`. Which instrument does not: there is one.
+//! Nothing arrives in the query string: there is one instrument.
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -42,22 +41,6 @@ pub(crate) fn document() -> Result<web_sys::Document, String> {
         .ok_or_else(|| "no document to draw in".to_string())
 }
 
-/// `?rate=…` if the page was asked for one, judged by the same rule as
-/// `--rate`: outside the range the instrument plays at is a refusal, not a
-/// clamp.
-fn requested_rate() -> Result<Option<f32>, String> {
-    match query().and_then(|params| params.get("rate")) {
-        Some(value) => crate::cli::rate(&value).map(Some),
-        None => Ok(None),
-    }
-}
-
-fn query() -> Option<web_sys::UrlSearchParams> {
-    web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
-}
-
 /// Say why nothing is going to happen, on the page rather than only in the
 /// console — a visitor whose browser has no WebGPU sees a black rectangle
 /// otherwise, and has no way to tell that from a bug. Reached from inside the
@@ -76,19 +59,12 @@ pub fn start() {
     let _ = console_log::init_with_level(log::Level::Info);
     wasm_bindgen_futures::spawn_local(async {
         let params = crate::config::instrument();
-        let rate = match requested_rate() {
-            Ok(rate) => rate,
-            Err(why) => return complain(&why),
-        };
         // Windowed: the canvas already covers the viewport, and asking the
         // browser for real fullscreen without a click is refused anyway.
-        let mut cli = crate::cli::Cli {
+        let cli = crate::cli::Cli {
             fullscreen: false,
             ..crate::cli::Cli::default()
         };
-        if let Some(rate) = rate {
-            cli.rate = rate;
-        }
         if let Err(why) = crate::app::run(params, &cli).await {
             complain(&format!("{why}"));
         }

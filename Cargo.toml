@@ -17,8 +17,6 @@ bytemuck = { version = "1.25", features = ["derive"] }
 # stack, because a dozen two-word captions do not justify one.
 font8x8 = { version = "0.3", default-features = false }
 log = "0.4"
-serde = { version = "1.0", features = ["derive"] }
-toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
 # `std::time::Instant` has no clock on wasm32 and panics on first use. This is
 # that type everywhere else and `performance.now()` in a browser.
 web-time = "1.1"
@@ -47,12 +45,10 @@ web-sys = { version = "0.3", features = [
   "HtmlMediaElement",
   "HtmlVideoElement",
   "ImageData",
-  "Location",
   "MediaDevices",
   "MediaStream",
   "MediaStreamConstraints",
   "MediaStreamTrack",
   "Navigator",
-  "UrlSearchParams",
   "Window",
 ] }

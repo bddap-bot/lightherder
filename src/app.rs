@@ -11,15 +11,15 @@ use winit::window::{Window, WindowId};
 
 use crate::capture::Capture;
 use crate::cli::Cli;
+use crate::clock::Clock;
 use crate::command::{Action, Edge};
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
-use crate::midi::{Map, Midi, Shown};
+use crate::midi::{Midi, Shown};
 use crate::overlay::Overlay;
 use crate::params::{Focus, Knob, Node, Params};
 use crate::present::{Present, View};
-use crate::tempo::Tempo;
 
 /// Close a capture and say where it went, which is the only report a
 /// performer on a fullscreen display gets of one.
@@ -30,7 +30,7 @@ fn finished(capture: Capture) {
     }
 }
 
-/// One beat of the tempo, before the pass it falls on. Not said on the log:
+/// One beat of the clock, before the pass it falls on. Not said on the log:
 /// at a period of one it would be a line a pass.
 fn beat(played: &mut u64, params: &mut Params) {
     *played += 1;
@@ -89,13 +89,13 @@ pub struct App {
     passes: u32,
     presents: u32,
     metered: Instant,
-    /// The tempo, which is where the rate of the piece is kept — not in the
-    /// display, whose grid is the compositor's to invent.
-    tempo: Tempo,
+    /// The pass clock — sixty a second on the wall clock, not the display's
+    /// grid, which is the compositor's to invent.
+    clock: Clock,
     /// Whether the last frame went out, and so whether there is a present
     /// left to pace the loop. One pacer at a time: while frames are landing
-    /// the swapchain's blank is the clock, and only when they stop is the
-    /// tempo's deadline armed to keep the piece going without one.
+    /// the swapchain's blank is the pacer, and only when they stop is the
+    /// clock's deadline armed to keep the piece going without one.
     paced: bool,
     /// Whether the compositor says nothing can see the window. Nothing is
     /// drawn while it does — see the redraw, where the piece goes on being
@@ -171,19 +171,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     crate::feedback::bank_fits(&params, cli.resolution)?;
     log::info!("seed: {}", params.input.source);
     let source = Source::open(&params.input.source, cli.resolution).await?;
-    // Read before the window opens, like the inputs and for the same reason:
-    // a map that will not load is a terminal error, not a surface that turns
-    // out to be playing the wrong knobs once there is light on the glass.
-    let map_path = crate::midi::map_path();
-    log::info!("surface map: {}", map_path.display());
-    let map = Map::load(&map_path)?;
-    // The controls, off the map that is about to be played rather than off a
-    // second read of the same file. Fullscreen this scrolls past behind the
-    // instrument; it is here for the terminal it was started from, which is
-    // where the log lands too.
-    print!("{}", map.card());
-    log::info!("surface: waiting for {}", map.device);
-    let midi = Midi::new(map)?;
+    log::info!("surface: waiting for {}", crate::midi::DEVICE);
     // Through the event loop's own display connection rather than a window's:
     // the adapter is chosen before there is a window, and wgpu forbids a
     // surface created against a different one later.
@@ -196,7 +184,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             params,
             focus: Focus::default(),
             source,
-            midi,
+            midi: Midi::default(),
             last_knob: None,
             resolution: cli.resolution,
             fullscreen: cli.fullscreen,
@@ -207,7 +195,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             passes: 0,
             presents: 0,
             metered: Instant::now(),
-            tempo: Tempo::new(cli.rate),
+            clock: Clock::new(crate::clock::RATE),
             paced: false,
             covered: false,
             capture: None,
@@ -228,7 +216,6 @@ impl Live {
         event_loop: &ActiveEventLoop,
         gpu: &Gpu,
         params: &Params,
-        map: &Map,
         resolution: (u32, u32),
         fullscreen: bool,
     ) -> Result<Live, String> {
@@ -262,8 +249,8 @@ impl Live {
             })?;
         // Fifo, so a frame reaches the glass whole: a torn frame is a wrong
         // frame in a piece whose look is the whole point, and Immediate buys
-        // nothing here now that the display no longer keeps the tempo (#16).
-        // It is not the clock — [`Tempo`] is — because the vertical blank
+        // nothing here now that the display no longer keeps the pass clock
+        // (#16). It is not the clock — [`Clock`] is — because the vertical blank
         // Fifo stands in for is the compositor's to invent, and the TV's
         // nested gamescope invents a grid of about 72 Hz (#11).
         config.present_mode = wgpu::PresentMode::Fifo;
@@ -295,7 +282,7 @@ impl Live {
         // an explicit clear.
         let feedback = Feedback::new(&gpu.device, resolution.0, resolution.1, params);
         let present = Present::new(&gpu.device, &feedback, format);
-        let overlay = Overlay::new(&gpu.device, &gpu.queue, format, map);
+        let overlay = Overlay::new(&gpu.device, &gpu.queue, format);
 
         Ok(Live {
             window,
@@ -321,7 +308,7 @@ impl Live {
     /// monitor stepped from the bank the last pass left.
     ///
     /// It touches no surface, which is what lets several run to one present
-    /// — the display's grid is not the tempo — and is also why the bench can
+    /// — the display's grid is not the clock — and is also why the bench can
     /// time exactly this work with no window at all.
     fn pass(&mut self, gpu: &Gpu, params: &Params, source: &mut Source) {
         // Before the cameras read the bank, not after. Once a pass rather than
@@ -449,11 +436,11 @@ impl App {
     /// One line a second on how the two clocks are going. The instrument is
     /// deployed fullscreen on a display, so the log is the only place a
     /// number can be read at all — and read together these two say which
-    /// thing is short. Passes under the tempo is the machine or the graph:
-    /// the piece is playing slow. Presents under the passes is only the
-    /// display path, which is allowed to hand out fewer frames than the
-    /// piece has — that is what the tempo being kept here rather than in the
-    /// swapchain is for (#16).
+    /// thing is short. Passes under sixty is the machine or the graph: the
+    /// piece is playing slow. Presents under the passes is only the display
+    /// path, which is allowed to hand out fewer frames than the piece has —
+    /// that is what the clock being kept here rather than in the swapchain
+    /// is for (#16).
     fn meter(&mut self, passes: u32, shown: bool) {
         self.passes += passes;
         self.presents += u32::from(shown);
@@ -463,9 +450,8 @@ impl App {
         }
         let seconds = elapsed.as_secs_f64();
         log::info!(
-            "sim {:.0} Hz of {:.0}, present {:.0} Hz",
+            "sim {:.0} Hz, present {:.0} Hz",
             self.passes as f64 / seconds,
-            self.tempo.rate(),
             self.presents as f64 / seconds,
         );
         self.passes = 0;
@@ -502,9 +488,6 @@ impl App {
                 self.last_knob = Some(knob);
                 log::info!("{}", self.params.describe(self.focus));
             }
-            // Never past the graph: the factory rows are built as wide as it
-            // is, and `Map::validate` refuses a hand-written select on a node
-            // the rig has not got.
             Action::Focus(node, index) => self.refocus(node, index),
             Action::Reset => self.reset(),
             Action::ResetLastKnob => self.reset_knob(),
@@ -513,16 +496,6 @@ impl App {
                     live.feedback.clear(&self.gpu.device, &self.gpu.queue);
                     log::info!("cleared");
                 }
-            }
-            // Said out loud, because the tempo has nothing on the glass to
-            // show it: the piece looks the same played fast or slow, and the
-            // rate line a second later is the only other place it appears.
-            Action::Tempo(step) => {
-                self.tempo.step(step, Instant::now());
-                // A tenth, because a press at the bottom of the range moves
-                // the rate by less than a whole pass a second and a readout
-                // that did not move would read as a dead key.
-                log::info!("sim {:.1} Hz", self.tempo.rate());
             }
             Action::Solo => {
                 self.solo = !self.solo;
@@ -721,7 +694,7 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    /// The tempo's wake-up, for when no frame is going out to ask for the
+    /// The clock's wake-up, for when no frame is going out to ask for the
     /// next one: a surface gone stale, or a window covered up. The piece goes
     /// on playing without a picture — it is not the picture.
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
@@ -739,7 +712,7 @@ impl ApplicationHandler for App {
     /// a spin between one frame and the next rather than a wait.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         event_loop.set_control_flow(match self.live {
-            Some(_) if !self.paced => ControlFlow::WaitUntil(self.tempo.due()),
+            Some(_) if !self.paced => ControlFlow::WaitUntil(self.clock.due()),
             _ => ControlFlow::Wait,
         });
     }
@@ -752,7 +725,6 @@ impl ApplicationHandler for App {
             event_loop,
             &self.gpu,
             &self.params,
-            self.midi.map(),
             self.resolution,
             self.fullscreen,
         ) {
@@ -768,12 +740,12 @@ impl ApplicationHandler for App {
         );
         log::info!("{}", self.params.describe(self.focus));
         live.window.request_redraw();
-        // The tempo and the rate line both start from the first frame, not
-        // from before the adapter, the device and the pipelines were built —
-        // half a second of startup inside the first window would owe the piece
+        // The clock and the meter both start from the first frame, not from
+        // before the adapter, the device and the pipelines were built — half
+        // a second of startup inside the first window would owe the piece
         // passes it never missed, and would report a rate the instrument never
         // ran at. That first line is what a deploy is read off.
-        self.tempo.start();
+        self.clock = Clock::new(crate::clock::RATE);
         self.metered = Instant::now();
         self.passes = 0;
         self.presents = 0;
@@ -811,11 +783,11 @@ impl ApplicationHandler for App {
                 let Some(live) = self.live.as_mut() else {
                     return;
                 };
-                // Whatever the tempo owes, and then the frame either way: a
+                // Whatever the clock owes, and then the frame either way: a
                 // pass is the piece's clock and the blank is the display's,
                 // so a beat that has not fallen due yet is no reason to leave
                 // an expose, a resize or the overlay unanswered.
-                let passes = self.tempo.take_due(Instant::now());
+                let passes = self.clock.take_due(Instant::now());
                 for _ in 0..passes {
                     beat(&mut self.played, &mut self.params);
                     live.pass(&self.gpu, &self.params, &mut self.source);
@@ -886,7 +858,7 @@ mod tests {
             initial: params.clone(),
             focus: Focus::default(),
             source,
-            midi: Midi::new(Map::nano_kontrol2()).unwrap(),
+            midi: Midi::default(),
             params,
             last_knob: None,
             resolution,
@@ -898,7 +870,7 @@ mod tests {
             passes: 0,
             presents: 0,
             metered: Instant::now(),
-            tempo: Tempo::new(crate::tempo::DEFAULT_RATE),
+            clock: Clock::new(crate::clock::RATE),
             paced: false,
             covered: false,
             capture: None,
@@ -1423,29 +1395,5 @@ mod tests {
         assert_eq!(app.params, app.initial);
         app.act(Action::Cut(Edge::Up));
         assert_eq!(app.params, app.initial);
-    }
-
-    #[test]
-    fn the_tempo_buttons_move_the_rate_the_way_they_are_named() {
-        // The half the tempo tests cannot reach: which button carries which
-        // step. A table that hands the faster ratio to track-prev is a wiring
-        // mistake no arithmetic test would see.
-        let Some(mut app) = playing(config::instrument()) else {
-            return;
-        };
-        let board = plugged(&mut app);
-        let started = app.tempo.rate();
-        surface(&mut app, &board, 59, 127);
-        assert!(
-            app.tempo.rate() > started,
-            "{} is not faster",
-            app.tempo.rate()
-        );
-        surface(&mut app, &board, 58, 127);
-        assert!(
-            (app.tempo.rate() - started).abs() < 1e-3,
-            "a press each way left {}",
-            app.tempo.rate()
-        );
     }
 }

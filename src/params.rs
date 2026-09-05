@@ -1,8 +1,6 @@
 //! The knobs on the instrument. No windowing, no GPU — a MIDI surface drives
 //! the same values a fader does.
 
-use serde::{Deserialize, Deserializer};
-
 use crate::affine::{Axis, Framing};
 use crate::input::Input;
 use crate::rig::Rig;
@@ -249,8 +247,7 @@ fn identity_graph() -> Params {
 
 /// The frame rate of a router output, as the cadence of passes it takes a
 /// fresh frame on. A cadence rather than a rate because the rig's clock is
-/// a pass, not a second: the tempo scales these along with everything else,
-/// and `rate` in this crate is the tempo's word.
+/// a pass, not a second.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cadence {
     Full,
@@ -375,14 +372,6 @@ impl Node {
     /// Every `for node in ALL` walk is silently vacuous for a kind missing
     /// from this list, including the ones that exist to catch omissions.
     pub const ALL: [Node; 3] = [Node::Camera, Node::Monitor, Node::Switcher];
-
-    pub const fn name(self) -> &'static str {
-        match self {
-            Node::Camera => "camera",
-            Node::Monitor => "monitor",
-            Node::Switcher => "switcher",
-        }
-    }
 
     /// The kind in the words the on-screen overlay's captions have room for.
     pub const fn short(self) -> &'static str {
@@ -519,9 +508,7 @@ impl Knob {
         Knob::Period,
     ];
 
-    /// The one name a knob has: in the printed help, in an error, and in a
-    /// config file — [`Knob`]'s serde is this function and its inverse, so a
-    /// knob cannot be called one thing on the terminal and another on disk.
+    /// The one name a knob has: on the overlay, in the log and in an error.
     pub const fn name(self) -> &'static str {
         match self {
             Knob::Zoom => "zoom",
@@ -537,10 +524,6 @@ impl Knob {
             Knob::Switcher => "switcher",
             Knob::Period => "period",
         }
-    }
-
-    pub fn from_name(name: &str) -> Option<Knob> {
-        Knob::ALL.into_iter().find(|knob| knob.name() == name)
     }
 
     /// Which node the knob's value belongs to, and so which of a [`Focus`]'s
@@ -598,19 +581,6 @@ impl Knob {
             // A crossfade stands between its two inputs and nowhere else.
             Knob::Switcher => Limit::Clamp(0.0, 1.0),
         }
-    }
-}
-
-/// By name, not by variant: a config file naming a knob reads the way the
-/// help prints it, and deriving would give it a second spelling to drift
-/// from.
-impl<'de> Deserialize<'de> for Knob {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Knob, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        Knob::from_name(&name).ok_or_else(|| {
-            let known = Knob::ALL.map(Knob::name).join(", ");
-            serde::de::Error::custom(format!("no knob called {name:?}; there are {known}"))
-        })
     }
 }
 
@@ -1400,22 +1370,7 @@ mod tests {
     }
 
     #[test]
-    fn a_knob_is_the_same_name_on_disk_as_on_the_terminal() {
-        for knob in Knob::ALL {
-            assert_eq!(Knob::from_name(knob.name()), Some(knob));
-            // Through a literal line of TOML, which is how a `midi.toml`
-            // names one: the terminal's spelling has to be the file's.
-            let read: std::collections::HashMap<String, Knob> =
-                toml::from_str(&format!("knob = {:?}", knob.name())).unwrap();
-            assert_eq!(read["knob"], knob, "{knob:?} on disk");
-        }
-        assert_eq!(Knob::from_name("no such knob"), None);
-    }
-
-    #[test]
     fn no_two_knobs_share_a_name() {
-        // The name is the knob's identity on disk, so a duplicate would make
-        // one of the two unreachable from a config file.
         for (i, knob) in Knob::ALL.iter().enumerate() {
             let clash = Knob::ALL[..i]
                 .iter()

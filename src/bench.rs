@@ -1,7 +1,7 @@
 //! What a frame costs, off screen.
 //!
-//! On a display a pass has a whole beat to fit inside, so a window reporting
-//! the tempo says only that it fit — not by how much. This runs the same work
+//! On a display a pass has a whole sixtieth to fit inside, so a window
+//! reporting sixty says only that it fit — not by how much. This runs the same work
 //! with nothing pacing it: the graph stepped, and then presented into a target
 //! the same size, which is the deployed case worth timing — a bank at the
 //! display's resolution.

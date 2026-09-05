@@ -76,15 +76,13 @@ dead on it.
 Past the select, the router output feeding each monitor has two settings that
 are the output's alone, and the monitor carries them: the **flip**, left for
 right and top for bottom, and the **frame rate** — 60, 30 or 24 of the rig's
-60. A slower output shows each
-frame it is handed until the next is due, so a camera on that monitor sees a
-held picture: 30 takes every other frame, and 24 holds for three frames, then
-two, then three, the cadence of film on a 60 Hz display. On the original, 24
-"adds a stutter, and a slowing of the image to fractal effect". A held
-monitor's pass is not drawn: its last frame is copied forward in the ring
-instead, so the ring holds what every monitor showed, the delay units read it
-as they always did, and the bank is no deeper for it. The rig's clock is a
-pass, so the tempo scales these rates along with everything else.
+60. A slower output shows each frame it is handed until the next is due, so a
+camera on that monitor sees a held picture: 30 takes every other frame, and 24
+holds for three frames, then two, then three, the cadence of film on a 60 Hz
+display. On the original, 24 "adds a stutter, and a slowing of the image to
+fractal effect". A held monitor's pass is not drawn: its last frame is copied
+forward in the ring instead, so the ring holds what every monitor showed, the
+delay units read it as they always did, and the bank is no deeper for it.
 
 **Those eight levers are the whole of the routing state.** A crossfade is a
 weighted sum, so the chain multiplies out into the matrix of camera and seed
@@ -200,9 +198,9 @@ whose card is named in `/proc/asound/cards`, and when the cable comes out the
 read ends and it goes back to looking. ALSA raw MIDI and no library — a
 controller is `/dev/snd/midiC<card>D0`, and reading it gives the wire bytes.
 
-Out of the box, with no configuration. Twelve knobs on sixteen continuous
-controls, so there is no page button and the four rotaries past the fourth are
-dead.
+The layout is fixed. Twelve knobs on sixteen continuous controls, so there is
+no page button and the four rotaries past the fourth are dead. Every channel
+is listened to, so a surface set to some other MIDI channel still works.
 
 | control | is |
 |---|---|
@@ -210,8 +208,8 @@ dead.
 | fader 7 | the focused **switcher**'s period: passes between reversals, 0 to 60, and 0 is the mode off |
 | fader 8 | the focused **switcher**'s crossfade — the lever the piece is played on, nearest the hand that is already on the select rows |
 | rotaries 1–3 | the focused **camera**: where it stands on its shaft (zoom, rotation) and how late its cable is (delay) |
-| rotary 4 | the focused **monitor**'s router-output frame rate: 60 at rest, then 30, then 24 — the rig's own clock, not the tempo the transport buttons play |
-| rotaries 5–8 | dead — free for a `midi.toml`, and no hand throws one by accident |
+| rotary 4 | the focused **monitor**'s router-output frame rate: 60 at rest, then 30, then 24 |
+| rotaries 5–8 | dead |
 | S 1–3 | focus camera A, B, 3 |
 | S 4, S 5 | dead |
 | S 6, S 7 | **precision -**, **precision +**: halve or double what a full throw of a fader moves, on a ladder from a whole travel down to a sixteenth; a quarter to begin with; the log says which rung |
@@ -227,11 +225,10 @@ dead.
 | ■ stop | reset every knob |
 | ⟳ cycle | the on-screen controls overlay, on or off |
 | ▶▶ forward | the focused monitor on the whole display, or the tiled bank |
-| \|◀ track prev, ▶\| track next | the tempo: slower / faster, four presses to halve or double it |
 | ● marker set | write what the display is showing to a file |
 | ● record | record the display for as long as it is held down |
 | marker prev | **cut**: the switcher's foot pedal — the press throws the focused switcher end to end and the release puts it back |
-| ▶ play | nothing — the factory map binds it to no command, so it stays dark |
+| \|◀ ▶\| track prev, track next, ▶ play | dead |
 
 So the left hand works one monitor and one switcher, the right hand one
 camera, and the three select rows point the knobs at a node, one kind each:
@@ -241,14 +238,10 @@ two rows follow it downward in the order the light travels — the cameras that
 film the glass, the glass, then what routes between them.
 
 **A row is exactly as wide as its kind.** The rig is three cameras, five
-monitors and four switchers, so five select buttons are dead — unlit, silent,
-and free for a `midi.toml` to claim; the commands take the rest of the tails,
-which is why R5–R8 and S6–S8 cost the transport nothing. A button is owed to
-equipment, not spent on it. Dead is the point.
-
-The loud cases are the other way round. A `midi.toml` that binds a select
-button on a node the rig has not got is refused at load rather than lighting a
-button that lies. Nothing is bound to quit — the window manager ends the
+monitors and four switchers, so five select buttons are dead — unlit and
+silent; the commands take the rest of the tails, which is why R5–R8 and S6–S8
+cost the transport nothing. A button is owed to equipment, not spent on it.
+Dead is the point. Nothing is bound to quit — the window manager ends the
 instrument, and a slipped finger on the surface must not be able to.
 
 **A fader turns its knob by how far it moves, never to where it stands.** A
@@ -273,7 +266,7 @@ The buttons are read on the way down, which assumes the surface's buttons are
 **momentary** rather than latching — Korg's editor calls it Button Behavior. A
 latching button plays on every second press.
 
-### Putting one knob back, and playing the tempo
+### Putting one knob back
 
 Stop puts the whole panel back to the instrument as it started. **Rewind puts
 back the one knob you were just turning**, to its *identity* — the value at
@@ -292,14 +285,6 @@ true the moment the panel moves without the hands, so a whole-panel reset and
 a change of focus onto another node of the same kind both clear the name —
 otherwise rewind after either would put back a knob nobody has touched.
 
-**The track pair plays the tempo**: |◀ slower, ▶| faster, a press being the
-fourth root of two so four of them halve or double the rate. It is the one
-control that acts on the whole piece rather than on a node of the rig, and the
-TRACK silkscreen is the one pair the surface prints as a pair — a minus and a
-plus want a pair to sit on. `--rate` is where the piece starts; the track pair
-is where it is played from there, and the rate line a second later is the
-readout. Nothing latches: a tempo is heard, not held.
-
 ### The lit buttons
 
 **The focused camera's Solo button is lit, and so are the focused monitor's
@@ -308,8 +293,7 @@ without anyone reading the log line. They follow the focus wherever it moves
 and go out when the instrument does. A latched mode — the overlay, the solo,
 the flips, and the select, which is the one bit nothing else on a fullscreen
 display says — lights the button holding it by the same rule, off that
-button's *action*, so a `midi.toml` that moves a binding moves its lamp with
-it. A node or a mode the map bound no button to lights nothing rather than the
+button's *action*. A node no row reaches lights nothing rather than the
 nearest button: a lamp on the wrong button is worse than no lamp.
 
 That takes setting up, and the app does the setting up. A nanoKONTROL2 leaves
@@ -324,11 +308,11 @@ connect, which is where it belongs.
 
 **That switch is one switch for the whole panel**, which is why the app then
 drives every button rather than the few it came for: external mode takes every
-row's lights, not just the Solo row's. So a button the map binds is lit while
-it is held — exactly what internal mode did for it — and the focused camera's
-is lit whether or not a finger is on it. What the instrument adds is one lamp;
-what it takes away is nothing. A button the map binds nothing to stays dark,
-which is now what it means.
+row's lights, not just the Solo row's. So a bound button is lit while it is
+held — exactly what internal mode did for it — and the focused camera's is lit
+whether or not a finger is on it. What the instrument adds is one lamp; what
+it takes away is nothing. A dead button stays dark, which is now what it
+means.
 
 The mode goes back to Internal on the way out, so the surface lights its own
 buttons again for whatever is played next. That includes being told to stop:
@@ -357,50 +341,6 @@ come and a MIDI write blocks when the wire is full, so the lights are a thread
 of their own; the frame loop's whole part is to say which lamps it wants, down
 a channel.
 
-### Mapping config
-
-`$XDG_CONFIG_HOME/lightherder/midi.toml`, named on the log at startup. If it
-is not there you get the layout above; if it is there and will not load, the
-instrument says why and does not start. It remaps the surface and nothing
-else — there is no config file for the rig, because there is nothing in the
-rig to choose.
-
-```toml
-# Matched case-insensitively against the card's line in /proc/asound/cards.
-device = "nanoKONTROL"
-
-[[fader]]
-cc = 0
-knob = "hue"        # any knob name the card prints
-
-[[button]]
-cc = 71
-command = "select"
-
-[[button]]
-cc = 41
-command = "blank"   # any command name the card prints
-
-[[button]]
-cc = 90
-command = "mon 1"   # focus the upper A monitor, off a spare control
-```
-
-A fader names a **knob** and spans its whole travel — for the two knobs that
-wrap, rotation and hue, that is one full revolution from bottom to top. The
-knobs are `zoom`, `rotation`, `delay`, `hue`, `saturation`, `brightness`,
-`contrast`, `temperature`, `sharpness`, `frame rate`, `switcher` and `period`. A button
-names a **command**, spelled the way the overlay captions it: `blank`,
-`reset`, `reset 1`, `solo`, `help`, `snap`, `record`, `cut`, `reverse`,
-`select`, `flip x`, `flip y`, `rate -`, `rate +`, `precision -`,
-`precision +`, `clutch`, and `cam 1`–`cam 3`, `mon 1`–`mon 5`, `sw 1`–`sw 4`
-for the focus.
-
-Every channel is listened to, so a surface set to some other MIDI channel
-still works. A control number may only be bound once, and a name that nothing
-answers to is refused at load with the list of the ones that do — a surface
-that quietly plays the wrong knobs is worse than one that will not start.
-
 ## Run it
 
 ```
@@ -417,16 +357,12 @@ able to.
 | --- | --- |
 | `--windowed` | a window rather than the whole display |
 | `--resolution 3840x2160` | how big every monitor is (default 1920x1080) |
-| `--rate 30` | passes a second, the speed the piece plays at (default 60, 1 to 240) |
 | `--bench` | what a frame costs, off screen, and exit |
 | `--help` | how to start it, and exit |
 
 Through `cargo run` they need the `--` above, which is cargo's and not this
 program's; a built binary takes them directly. Two of them at once — `--bench
---help` — is refused rather than answered silently with one, and a rate
-outside the range is refused rather than clamped: a performer who typed 6000
-meant something, and playing 240 instead answers neither the number nor the
-mistake behind it.
+--help` — is refused rather than answered silently with one.
 
 The resolution is every monitor's size, and so the resolution the whole loop
 runs at. The window's shape has nothing to do with it: the bank is tiled into
@@ -460,34 +396,31 @@ integrated adapter instead.
 
 ## Deploy
 
-**The pass rate is a tempo, not a smoothness setting.** The loop evolves one
+**A pass is a sixtieth of a second, on the wall clock.** The loop evolves one
 pass at a time — the shafts pull back 0.6% and turn per *pass*, and the trail
-decays per pass — so a spiral drawn in a second at sixty is drawn in a quarter
-of one at 240, the top of the range. That makes the rate a control rather than
-a property of the machine: the surface's track pair moves it while the piece
-plays, and `--rate` starts it somewhere other than sixty.
+decays per pass — so the rate the passes run at is the speed the piece plays
+at, and it is the rig's own sixty whatever the display is doing.
 
 **The display keeps its own clock, and it is vsync.** A pass is not a present.
-Passes fall due on the wall clock at the tempo; the picture goes out on every
-vertical blank, showing wherever the piece has got to — several passes at
-once when the tempo is above the grid, the same bank twice when it is below.
-The present is also what paces the loop — Fifo waits for the blank, and the
-frame that went out asks for the next one — so the tempo's own deadline is
-armed only when frames stop landing, behind a covered window or a surface gone
-stale. The piece goes on playing there without a picture; it is not the
-picture.
+Passes fall due on the wall clock; the picture goes out on every vertical
+blank, showing wherever the piece has got to — several passes at once when
+the grid is under sixty, the same bank twice when it is over. The present is
+also what paces the loop — Fifo waits for the blank, and the frame that went
+out asks for the next one — so the pass clock's own deadline is armed only
+when frames stop landing, behind a covered window or a surface gone stale. The
+piece goes on playing there without a picture; it is not the picture.
 
 A torn frame is a wrong frame in a piece whose look is the point, so the
 present mode is pinned to Fifo rather than taken from the adapter, which
-offers something faster. Keeping the tempo out of the swapchain is what makes
-that affordable: a display path granting 41 frames a second runs the sixty
-passes anyway, one or two to a present.
+offers something faster. Keeping the pass clock out of the swapchain is what
+makes that affordable: a display path granting 41 frames a second runs the
+sixty passes anyway, one or two to a present.
 
-The log prints both clocks once a second — `sim 60 Hz of 60, present 72 Hz` —
-and deployed there is no terminal in front of the instrument, so that line is
-the whole of what can be read. The two say different things. Passes under the
-tempo is the machine, and the piece really is playing slow. Presents are the
-display's own rate and say nothing about the piece.
+The log prints both clocks once a second — `sim 60 Hz, present 72 Hz` — and
+deployed there is no terminal in front of the instrument, so that line is the
+whole of what can be read. The two say different things. Passes under sixty is
+the machine, and the piece really is playing slow. Presents are the display's
+own rate and say nothing about the piece.
 
 **When the display belongs to another user's session** — as it does on the
 machine this was built for — the instrument runs as that user, who cannot read
@@ -514,13 +447,13 @@ see the screen — and it takes two lines, because they are two different
 things: `5 monitors of 3840x2160, 3 cameras, one seed` is the bank, and
 `window 3840x2160 (covering the display), presenting Fifo at Rgba8UnormSrgb`
 is the window. A 4K window over a 1080p bank prints the second and not the
-first. Then the rate line a second later, counted from the first pass rather
+first. Then the clock line a second later, counted from the first pass rather
 than from before the pipelines were built.
 
 ### What a frame costs
 
-On a display a pass has a whole beat to fit inside, so a rate line at the
-tempo says only that it fit — not by how much. `--bench` runs the same passes
+On a display a pass has a whole sixtieth to fit inside, so a clock line at
+sixty says only that it fit — not by how much. `--bench` runs the same passes
 with nothing pacing them: 600 frames after a warm-up, the rig stepped and
 presented into a target the size of the display. What it leaves out is a
 frame's edges rather than its loop — handing the frame to the compositor, and
@@ -539,10 +472,9 @@ since neither the resolution nor the depth alone is what went wrong.
 ## Playing it
 
 **The control surface is the instrument.** There is no keyboard: if a control
-is not on the board it does not exist. The card prints on startup; the
-surface's cycle button shows the same panel on the glass, drawn as it is
-actually mapped and each control captioned in a couple of words. Every knob
-logs its new value on change, and the log line is the numeric readout: the
+is not on the board it does not exist. The surface's cycle button shows the
+panel above on the glass, each control captioned in a couple of words. Every
+knob logs its new value on change, and the log line is the numeric readout: the
 focused camera, monitor and switcher, every knob on them, and whether that
 monitor is on program or direct. The glass shows one thing of the focus
 itself: in the tiled bank the focused monitor's tile is framed with a thin
@@ -566,9 +498,9 @@ thousandth there moves both readings at once.
 The **period** is the original's mode on a switcher column: every that many
 passes the switcher reverses itself, counted on one grid from the start of the
 run rather than from when the period was dialled in, so every switcher in the
-mode beats together. A pass is a beat of the tempo, so nothing in it reads a
-clock. There is no latch beside the knob — the board is full, and a period at
-its floor is the off switch.
+mode beats together. The grid is in passes, so nothing in it reads a clock.
+There is no latch beside the knob — the board is full, and a period at its
+floor is the off switch.
 
 ## Tests
 
@@ -576,7 +508,7 @@ its floor is the off switch.
 nix-shell --run "cargo test"
 ```
 
-The transform, parameter, tempo and letterbox tests are pure. The rig is
+The transform, parameter, clock and letterbox tests are pure. The rig is
 checked as arithmetic: a monitor on direct shows its own camera whatever the
 switchers say, the rotating monitor shows camera B whatever the setting, the
 seed reaches a B monitor only through the whole chain, a B monitor on program
@@ -635,16 +567,14 @@ not knobs. The turn against a fader's first word placing it and not moving
 anything, a full throw at every rung of the precision ladder, the clutch
 holding every control still and letting go without a jump, a whole-frame knob
 owed a frame at a time, and an unplug that throws nothing and lets go of every
-button a finger was on. The factory map is asserted pair by pair — coverage
-alone let hue and brightness swap CCs and `blank` and `reset` swap buttons,
-a surface whose silkscreen lies with every behaviour test still green — and
-every select row is checked to be exactly as wide as its kind. The map is
-tested against a duplicate binding, a command nothing answers to, and a
-literal file rather than a round trip, because a round trip agrees with itself
-whatever the fields are called. The card search runs against a
+button a finger was on. The panel is asserted pair by pair — coverage alone let
+hue and brightness swap CCs and `blank` and `reset` swap buttons, a surface
+whose silkscreen lies with every behaviour test still green — and every select
+row is checked to be exactly as wide as its kind, and every bound control to
+be on the panel exactly once. The card search runs against a
 `/proc/asound/cards` with two other cards that also have raw MIDI devices. And
-the whole path — discovery, the open, the reader thread, the decode, the map
-and the turn — against a device that is not there when the instrument starts,
+the whole path — discovery, the open, the reader thread, the decode and the
+turn — against a device that is not there when the instrument starts,
 appears, sends a sweep down a pipe, and goes away again, which is what
 hot-plug is.
 
@@ -663,16 +593,15 @@ surface played. The lamps against a focus that moves — out first, then on,
 because two lit at once is a panel claiming the knobs are in two places —
 against the same focus said sixty times, which must put nothing on the wire,
 against a held button, which must light with the focus rather than instead of
-it, against a lamp no button of the map answers to, which must never reach the
-wire, and against the exit, which must put the lamps out and the mode back.
+it, against a lamp no button answers to, which must never reach the wire, and
+against the exit, which must put the lamps out and the mode back.
 
 ## In a browser
 
 The same instrument, on WebGPU, at
-<https://bddap-bot.github.io/lightherder/>. The tempo is chosen the way a page
-takes an argument, `?rate=30` — the same range `--rate` takes, refused rather
-than clamped outside it — and nothing else is: there is one instrument. What
-is not there is what a browser has no way to give it: the ALSA control
+<https://bddap-bot.github.io/lightherder/>. Nothing is chosen the way a page
+takes an argument: there is one instrument. What is not there is what a
+browser has no way to give it: the ALSA control
 surface, so a tab plays and nothing turns a knob. The seed it does have: where
 a terminal runs ffmpeg on `/dev/video0`, a page plays a `<video>` of its own
 camera — asked for with `getUserMedia` — and reads it back through a canvas
