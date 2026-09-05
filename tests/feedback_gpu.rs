@@ -2378,7 +2378,7 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
     }
 }
 
-fn proof(h: &Harness, name: &str, view: View, overlay: Option<&lightherder::overlay::Overlay>) {
+fn proof(h: &Harness, name: &str, view: View) {
     let Some(dir) = std::env::var_os("LIGHTHERDER_PROOF_DIR") else {
         return;
     };
@@ -2386,7 +2386,7 @@ fn proof(h: &Harness, name: &str, view: View, overlay: Option<&lightherder::over
     let mut capture =
         Capture::still(h.device, &dir, h.target_size, TARGET_FORMAT).expect("a capture");
     capture
-        .frame(h.device, h.queue, &h.present, &h.feedback, view, overlay)
+        .frame(h.device, h.queue, &h.present, &h.feedback, view, None)
         .expect("a frame");
     let path = capture.finish().expect("a png");
     std::fs::rename(&path, dir.join(format!("{name}.png"))).expect("the proof's name");
@@ -2430,7 +2430,7 @@ fn the_startup_graph_carries_the_seed_to_the_last_pair_of_screens() {
         .write_seed(h.queue, &quartered_frame(monitor, QUARTERS));
 
     h.step_graph(&p);
-    proof(&h, "startup-pass-1", View::Bank { focus: None }, None);
+    proof(&h, "startup-pass-1", View::Bank { focus: None });
     let img = h.read();
     for m in [2, 3] {
         assert_shows_the_seed(&img, n, m, "pass 1, the B pair");
@@ -2446,7 +2446,7 @@ fn the_startup_graph_carries_the_seed_to_the_last_pair_of_screens() {
     }
 
     h.step_graph(&p);
-    proof(&h, "startup-pass-2", View::Bank { focus: None }, None);
+    proof(&h, "startup-pass-2", View::Bank { focus: None });
     let img = h.read();
     for m in 0..n {
         assert_shows_the_seed(&img, n, m, "pass 2, every screen");

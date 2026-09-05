@@ -521,8 +521,6 @@ impl Midi {
         self.precision = self.precision.coarser();
     }
 
-    /// Whether a hand is holding the clutch, read off the buttons themselves
-    /// so that there is no second flag to fall out of step with them.
     #[cfg(test)]
     pub(crate) fn standing(&self, cc: u8) -> Option<u8> {
         self.standing[usize::from(cc)]

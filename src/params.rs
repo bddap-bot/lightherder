@@ -332,24 +332,18 @@ impl Default for Params {
     }
 }
 
-/// A kind of node the focus points at, and so one of the surface's three
-/// rows of select buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum End {
+    Camera(usize),
+    Monitor(usize),
+    Seed,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Flow {
-    Look {
-        camera: usize,
-        monitor: usize,
-        share: f32,
-    },
-    Feed {
-        camera: usize,
-        monitor: usize,
-        share: f32,
-    },
-    Seed {
-        monitor: usize,
-        share: f32,
-    },
+pub struct Flow {
+    pub from: End,
+    pub to: End,
+    pub share: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,11 +446,11 @@ impl Limit {
     }
 
     pub fn fraction(self, value: f32) -> f32 {
-        let travel = self.travel();
-        if travel == 0.0 {
-            return 0.0;
+        let (low, _) = self.ends();
+        match self.travel() {
+            0.0 => 0.0,
+            travel => ((self.stepped(value) - self.stepped(low)) / travel).clamp(0.0, 1.0),
         }
-        ((self.stepped(value) - self.stepped(self.ends().0)) / travel).clamp(0.0, 1.0)
     }
 
     /// Nepers on a ratio, so that one step is one factor wherever the knob
@@ -525,9 +519,7 @@ impl Knob {
         }
     }
 
-    /// Which node the knob's value belongs to, and so which of a [`Focus`]'s
-    /// indices it reads.
-    pub fn readout(self, value: f32) -> String {
+    pub fn reads(self, value: f32) -> String {
         match self {
             Knob::Zoom | Knob::Saturation | Knob::Contrast | Knob::Sharpness | Knob::Switcher => {
                 format!("{value:.3}")
@@ -612,32 +604,17 @@ impl Params {
     }
 
     pub fn flows(&self) -> impl Iterator<Item = Flow> + '_ {
-        let looks = self.cameras.iter().enumerate().flat_map(|(camera, cam)| {
-            cam.look
-                .iter()
-                .enumerate()
-                .filter(|(_, share)| **share > 0.0)
-                .map(move |(monitor, share)| Flow::Look {
-                    camera,
-                    monitor,
-                    share: *share,
-                })
+        let flow = |from, to, share| Flow { from, to, share };
+        let looks = self.cameras.iter().enumerate().flat_map(move |(c, cam)| {
+            (0..cam.look.len()).map(move |m| flow(End::Monitor(m), End::Camera(c), cam.look[m]))
         });
-        let feeds = (0..self.monitors.len()).flat_map(move |monitor| {
-            let feed = self.rig.feed(monitor);
-            let cameras = (0..self.cameras.len())
-                .filter(move |c| feed.cameras[*c] > 0.0)
-                .map(move |camera| Flow::Feed {
-                    camera,
-                    monitor,
-                    share: feed.cameras[camera],
-                });
-            cameras.chain((feed.seed > 0.0).then_some(Flow::Seed {
-                monitor,
-                share: feed.seed,
-            }))
+        let feeds = (0..self.monitors.len()).flat_map(move |m| {
+            let feed = self.rig.feed(m);
+            (0..self.cameras.len())
+                .map(move |c| flow(End::Camera(c), End::Monitor(m), feed.cameras[c]))
+                .chain(std::iter::once(flow(End::Seed, End::Monitor(m), feed.seed)))
         });
-        looks.chain(feeds)
+        looks.chain(feeds).filter(|f| f.share > 0.0)
     }
 
     /// Through [`Params::place`] rather than by writing the field, so the
@@ -735,7 +712,7 @@ impl Params {
     /// The focused nodes and every knob's value: the only readout the
     /// instrument has.
     pub fn describe(&self, focus: Focus) -> String {
-        let reads = |knob: Knob| knob.readout(self.knob(knob, focus));
+        let reads = |knob: Knob| knob.reads(self.knob(knob, focus));
         format!(
             "cam {}/{}: zoom {}  rot {}  delay {}/{}\n\
              mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \

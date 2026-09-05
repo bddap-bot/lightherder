@@ -1,8 +1,8 @@
 use crate::lamps::{lamp, Lamplight};
 use crate::midi::{spot, Spot, BUTTONS, FADERS, TRANSPORT};
-use crate::params::{Flow, Focus, Knob, Node, Params};
-use crate::present::{mark_thickness, Rect};
-use crate::rig::{CAMERAS, MONITORS};
+use crate::params::{End, Flow, Focus, Knob, Node, Params};
+use crate::present::{mark_thickness, Bank, Rect};
+use crate::rig::CAMERAS;
 
 struct Raster {
     width: u32,
@@ -23,7 +23,8 @@ const PAD: i32 = 10;
 const GROUP_LIFT: i32 = GLYPH + 2;
 const TRANSPORT_W: i32 = 5 * BUTTON_PITCH - (BUTTON_PITCH - BUTTON_W);
 const STRIPS_X: i32 = PAD + TRANSPORT_W + 16;
-const PANEL_W: i32 = STRIPS_X + 8 * STRIP_W + PAD;
+const STRIPS: u8 = crate::midi::STRIPS as u8;
+const PANEL_W: i32 = STRIPS_X + STRIPS as i32 * STRIP_W + PAD;
 const ROWS_Y: [i32; 3] = [66, 84, 102];
 const SQUARE: i32 = 14;
 const PANEL_H: i32 = 152;
@@ -36,17 +37,14 @@ const FADER_VALUE_Y: i32 = 134;
 const THUMB_H: i32 = 3;
 const ROTARY_SWEEP: f32 = 1.5 * std::f32::consts::PI;
 
-const LEGEND_W: i32 = 64;
-const LEGEND_BOX_H: i32 = 16;
-const LEGEND_GAP: i32 = 6;
-const LEGEND_ROWS: usize = CAMERAS + 1;
-const LEGEND_H: i32 = LEGEND_ROWS as i32 * (LEGEND_BOX_H + LEGEND_GAP) - LEGEND_GAP;
+const SOURCE_W: i32 = 64;
+const SOURCE_H: i32 = 16;
+const SOURCE_GAP: i32 = 6;
+const SOURCES: usize = CAMERAS + 1;
+const SOURCES_H: i32 = SOURCES as i32 * (SOURCE_H + SOURCE_GAP) - SOURCE_GAP;
 
 const MAX_ARROWS: usize = 40;
-const _: () = assert!(
-    MAX_ARROWS >= 2 * CAMERAS * MONITORS + MONITORS,
-    "shaders/overlay.wgsl spells this number too"
-);
+const _: () = assert!(MAX_ARROWS >= 2 * CAMERAS * crate::rig::MONITORS + crate::rig::MONITORS);
 
 struct Canvas {
     width: i32,
@@ -152,33 +150,39 @@ impl Canvas {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+struct Reading {
+    value: f32,
+    fraction: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Readout {
-    values: [f32; Knob::ALL.len()],
-    fractions: [f32; Knob::ALL.len()],
-    lit: Lamplight,
+    knobs: [Reading; Knob::ALL.len()],
+    lamps: Lamplight,
 }
 
 impl Readout {
-    pub(crate) fn of(params: &Params, focus: Focus, lit: Lamplight) -> Readout {
-        let values = Knob::ALL.map(|knob| params.knob(knob, focus));
-        let fractions = Knob::ALL.map(|knob| knob.limit(params).fraction(params.knob(knob, focus)));
-        Readout {
-            values,
-            fractions,
-            lit,
-        }
+    pub(crate) fn of(params: &Params, focus: Focus, lamps: Lamplight) -> Readout {
+        let knobs = Knob::ALL.map(|knob| {
+            let value = params.knob(knob, focus);
+            Reading {
+                value,
+                fraction: knob.limit(params).fraction(value),
+            }
+        });
+        Readout { knobs, lamps }
     }
 
     pub(crate) fn reads(&self, knob: Knob) -> String {
-        knob.readout(self.values[knob as usize])
+        knob.reads(self.knobs[knob as usize].value)
     }
 
     fn fraction(&self, knob: Knob) -> f32 {
-        self.fractions[knob as usize]
+        self.knobs[knob as usize].fraction
     }
 
     fn lit(&self, cc: u8) -> bool {
-        self.lit & lamp(cc) != 0
+        self.lamps & lamp(cc) != 0
     }
 }
 
@@ -186,17 +190,23 @@ fn strip_x(i: u8) -> i32 {
     STRIPS_X + i as i32 * STRIP_W
 }
 
+fn track_x(i: u8) -> i32 {
+    strip_x(i) + STRIP_W - 14
+}
+
 fn strip_chrome(c: &mut Canvas, i: u8) {
     let x = strip_x(i);
-    rotary(c, x + STRIP_W / 2, DIM, 0.5);
+    c.ring(x + STRIP_W / 2, ROTARY_Y, ROTARY_R, DIM);
     for y in ROWS_Y {
         c.frame(x + 2, y, SQUARE, SQUARE, DIM);
     }
-    fader_track(c, i, DIM, 0.5);
-}
-
-fn track_x(i: u8) -> i32 {
-    strip_x(i) + STRIP_W - 14
+    c.frame(
+        track_x(i),
+        ROWS_Y[0],
+        12,
+        ROWS_Y[2] + SQUARE - ROWS_Y[0],
+        DIM,
+    );
 }
 
 fn thumb_y(fraction: f32) -> i32 {
@@ -205,14 +215,12 @@ fn thumb_y(fraction: f32) -> i32 {
     bottom - 1 - THUMB_H - (fraction * travel as f32).round() as i32
 }
 
-fn fader_track(c: &mut Canvas, i: u8, colour: [u8; 4], fraction: f32) {
-    let x = track_x(i);
-    c.frame(x, ROWS_Y[0], 12, ROWS_Y[2] + SQUARE - ROWS_Y[0], colour);
-    c.fill(x - 1, thumb_y(fraction), 14, THUMB_H, colour);
+fn thumb(c: &mut Canvas, i: u8, colour: [u8; 4], fraction: f32) {
+    c.fill(track_x(i) - 1, thumb_y(fraction), 14, THUMB_H, colour);
 }
 
-fn rotary(c: &mut Canvas, cx: i32, colour: [u8; 4], fraction: f32) {
-    c.ring(cx, ROTARY_Y, ROTARY_R, colour);
+fn needle(c: &mut Canvas, i: u8, colour: [u8; 4], fraction: f32) {
+    let cx = strip_x(i) + STRIP_W / 2;
     let angle = (fraction - 0.5) * ROTARY_SWEEP;
     let reach = (ROTARY_R - 2) as f32;
     let tip = (
@@ -258,11 +266,12 @@ fn group_labels(c: &mut Canvas) {
 #[derive(Clone, Debug)]
 enum Control {
     Knob(Knob),
-    Button(u8, String),
+    Button(String),
 }
 
-fn place(c: &mut Canvas, spot: Spot, control: &Control, readout: &Readout) {
-    let beside = |c: &mut Canvas, i: u8, row: usize, cc: u8, label: &str| {
+fn place(c: &mut Canvas, cc: u8, control: &Control, readout: &Readout) {
+    let spot = spot(cc).expect("every bound control is on the panel");
+    let beside = |c: &mut Canvas, i: u8, row: usize, label: &str| {
         let x = strip_x(i);
         match readout.lit(cc) {
             true => c.fill(x + 2, ROWS_Y[row], SQUARE, SQUARE, LIT),
@@ -272,23 +281,31 @@ fn place(c: &mut Canvas, spot: Spot, control: &Control, readout: &Readout) {
     };
     match (spot, control) {
         (Spot::Fader(i), Control::Knob(knob)) => {
-            fader_track(c, i, LIT, readout.fraction(*knob));
+            c.frame(
+                track_x(i),
+                ROWS_Y[0],
+                12,
+                ROWS_Y[2] + SQUARE - ROWS_Y[0],
+                LIT,
+            );
+            thumb(c, i, LIT, readout.fraction(*knob));
             let cx = strip_x(i) + STRIP_W / 2;
             c.text_centred(cx, FADER_CAPTION_Y, knob.name(), LIT);
             c.text_centred(cx, FADER_VALUE_Y, &readout.reads(*knob), LIT);
         }
         (Spot::Rotary(i), Control::Knob(knob)) => {
             let cx = strip_x(i) + STRIP_W / 2;
-            rotary(c, cx, LIT, readout.fraction(*knob));
+            c.ring(cx, ROTARY_Y, ROTARY_R, LIT);
+            needle(c, i, LIT, readout.fraction(*knob));
             c.text_centred(cx, ROTARY_CAPTION_Y, knob.name(), LIT);
             c.text_centred(cx, ROTARY_VALUE_Y, &readout.reads(*knob), LIT);
         }
-        (Spot::S(i), Control::Button(cc, label)) => beside(c, i, 0, *cc, label),
-        (Spot::M(i), Control::Button(cc, label)) => beside(c, i, 1, *cc, label),
-        (Spot::R(i), Control::Button(cc, label)) => beside(c, i, 2, *cc, label),
-        (Spot::Transport(t), Control::Button(cc, label)) => {
+        (Spot::S(i), Control::Button(label)) => beside(c, i, 0, label),
+        (Spot::M(i), Control::Button(label)) => beside(c, i, 1, label),
+        (Spot::R(i), Control::Button(label)) => beside(c, i, 2, label),
+        (Spot::Transport(t), Control::Button(label)) => {
             let (x, y) = (button_x(t.col), ROWS_Y[t.row as usize]);
-            let ink = match readout.lit(*cc) {
+            let ink = match readout.lit(cc) {
                 true => {
                     c.fill(x, y, BUTTON_W, BUTTON_H, LIT);
                     BACK
@@ -300,7 +317,7 @@ fn place(c: &mut Canvas, spot: Spot, control: &Control, readout: &Readout) {
             };
             c.text(x + 2, y + 4, label, x + BUTTON_W - 1, ink);
         }
-        (Spot::Fader(_) | Spot::Rotary(_), Control::Button(..))
+        (Spot::Fader(_) | Spot::Rotary(_), Control::Button(_))
         | (Spot::S(_) | Spot::M(_) | Spot::R(_) | Spot::Transport(_), Control::Knob(_)) => {
             unreachable!("a knob sits on a fader or rotary and a button on a button")
         }
@@ -311,48 +328,71 @@ fn controls() -> impl Iterator<Item = (u8, Control)> {
     let faders = FADERS.iter().map(|f| (f.cc, Control::Knob(f.knob)));
     let buttons = BUTTONS
         .iter()
-        .map(|b| (b.cc, Control::Button(b.cc, b.action.caption())));
+        .map(|b| (b.cc, Control::Button(b.action.caption())));
     faders.chain(buttons)
+}
+
+fn dead_indicators(c: &mut Canvas) {
+    let bound = |wanted: Spot| {
+        FADERS.iter().any(|f| match (spot(f.cc), wanted) {
+            (Some(Spot::Fader(a)), Spot::Fader(b)) | (Some(Spot::Rotary(a)), Spot::Rotary(b)) => {
+                a == b
+            }
+            _ => false,
+        })
+    };
+    for i in 0..STRIPS {
+        if !bound(Spot::Fader(i)) {
+            thumb(c, i, DIM, 0.5);
+        }
+        if !bound(Spot::Rotary(i)) {
+            needle(c, i, DIM, 0.5);
+        }
+    }
 }
 
 fn rasterize(readout: &Readout) -> Raster {
     let mut c = Canvas::new(PANEL_W, PANEL_H);
-    for i in 0..8 {
+    for i in 0..STRIPS {
         strip_chrome(&mut c, i);
     }
+    dead_indicators(&mut c);
     for t in TRANSPORT {
         transport_button(&mut c, t.row, t.col, DIM);
     }
     group_labels(&mut c);
     for (cc, control) in controls() {
-        let spot = spot(cc).expect("every bound control is on the panel");
-        place(&mut c, spot, &control, readout);
+        place(&mut c, cc, &control, readout);
     }
     c.raster()
 }
 
-fn legend_names() -> [String; LEGEND_ROWS] {
-    std::array::from_fn(|i| match i < CAMERAS {
-        true => format!("{} {}", Node::Camera.short(), i + 1),
-        false => "seed".to_string(),
-    })
-}
-
-fn legend_box(i: usize) -> Rect {
-    Rect {
-        x: 0.0,
-        y: (i as i32 * (LEGEND_BOX_H + LEGEND_GAP)) as f32,
-        w: LEGEND_W as f32,
-        h: LEGEND_BOX_H as f32,
+fn source_row(end: End) -> Option<usize> {
+    match end {
+        End::Camera(c) => Some(c),
+        End::Seed => Some(CAMERAS),
+        End::Monitor(_) => None,
     }
 }
 
-fn legend() -> Raster {
-    let mut c = Canvas::new(LEGEND_W, LEGEND_H);
-    for (i, name) in legend_names().iter().enumerate() {
-        let b = legend_box(i);
+fn source_box(row: usize) -> Rect {
+    Rect {
+        x: 0.0,
+        y: (row as i32 * (SOURCE_H + SOURCE_GAP)) as f32,
+        w: SOURCE_W as f32,
+        h: SOURCE_H as f32,
+    }
+}
+
+fn sources() -> Raster {
+    let mut c = Canvas::new(SOURCE_W, SOURCES_H);
+    let named = (0..CAMERAS)
+        .map(|i| format!("{} {}", Node::Camera.short(), i + 1))
+        .chain(["seed".to_string()]);
+    for (row, name) in named.enumerate() {
+        let b = source_box(row);
         c.frame(b.x as i32, b.y as i32, b.w as i32, b.h as i32, LIT);
-        c.text_centred(LEGEND_W / 2, b.y as i32 + 4, name, LIT);
+        c.text_centred(SOURCE_W / 2, b.y as i32 + 4, &name, LIT);
     }
     c.raster()
 }
@@ -392,10 +432,10 @@ fn panel_placement(size: (u32, u32), target: (u32, u32)) -> Option<Placement> {
     })
 }
 
-fn legend_placement(size: (u32, u32), cell: Rect, panel_top: f32) -> Option<Placement> {
+fn sources_placement(size: (u32, u32), spare: Rect, panel_top: f32) -> Option<Placement> {
     let room = Rect {
-        h: (panel_top.min(cell.y + cell.h) - cell.y - MARGIN).max(0.0),
-        ..cell
+        h: (panel_top.min(spare.y + spare.h) - spare.y - MARGIN).max(0.0),
+        ..spare
     };
     let scale = scale_into(size, (room.w * 0.8, room.h * 0.8))?;
     Some(Placement {
@@ -448,22 +488,18 @@ fn arrow(from: Rect, to: Rect, share: f32, line: f32) -> Option<Arrow> {
     })
 }
 
-fn arrows(flows: &[Flow], tiles: &[Rect], boxes: &[Rect; LEGEND_ROWS], line: f32) -> Vec<Arrow> {
+fn arrows(
+    flows: impl Iterator<Item = Flow>,
+    tiles: &[Rect],
+    sources: &[Rect; SOURCES],
+    line: f32,
+) -> Vec<Arrow> {
+    let rect = |end: End| match end {
+        End::Monitor(m) => tiles.get(m).copied(),
+        source => source_row(source).map(|row| sources[row]),
+    };
     flows
-        .iter()
-        .filter_map(|flow| match *flow {
-            Flow::Look {
-                camera,
-                monitor,
-                share,
-            } => arrow(tiles[monitor], boxes[camera], share, line),
-            Flow::Feed {
-                camera,
-                monitor,
-                share,
-            } => arrow(boxes[camera], tiles[monitor], share, line),
-            Flow::Seed { monitor, share } => arrow(boxes[CAMERAS], tiles[monitor], share, line),
-        })
+        .filter_map(|f| arrow(rect(f.from)?, rect(f.to)?, f.share, line))
         .collect()
 }
 
@@ -473,20 +509,20 @@ struct ArrowsUniform {
     count: [u32; 4],
     line: [f32; 4],
     segments: [[f32; 4]; MAX_ARROWS],
-    shares: [[f32; 4]; MAX_ARROWS],
+    shares: [[f32; 4]; MAX_ARROWS / 4],
 }
 
 impl ArrowsUniform {
     fn of(arrows: &[Arrow], line: f32) -> ArrowsUniform {
         let mut uniform = ArrowsUniform {
             count: [arrows.len().min(MAX_ARROWS) as u32, 0, 0, 0],
-            line: [line, 6.0 * line, 3.0 * line, 0.0],
+            line: [line, 0.0, 0.0, 0.0],
             segments: [[0.0; 4]; MAX_ARROWS],
-            shares: [[0.0; 4]; MAX_ARROWS],
+            shares: [[0.0; 4]; MAX_ARROWS / 4],
         };
         for (i, a) in arrows.iter().take(MAX_ARROWS).enumerate() {
             uniform.segments[i] = [a.from[0], a.from[1], a.to[0], a.to[1]];
-            uniform.shares[i] = [0.35 + 0.65 * a.share.clamp(0.0, 1.0), 0.0, 0.0, 0.0];
+            uniform.shares[i / 4][i % 4] = 0.35 + 0.65 * a.share.clamp(0.0, 1.0);
         }
         uniform
     }
@@ -582,13 +618,13 @@ impl Image {
 
 pub struct Overlay {
     blit: wgpu::RenderPipeline,
-    panel: Image,
-    legend: Image,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    panel: Option<(Readout, Image)>,
+    sources: Image,
     arrows: wgpu::RenderPipeline,
     arrows_uniform: wgpu::Buffer,
     arrows_bind: wgpu::BindGroup,
-    flows: Vec<Flow>,
-    shown: Option<Readout>,
 }
 
 impl Overlay {
@@ -618,14 +654,7 @@ impl Overlay {
             label: Some("overlay"),
             ..Default::default()
         });
-        let panel = Image::new(
-            device,
-            queue,
-            &layout,
-            &sampler,
-            &Canvas::new(PANEL_W, PANEL_H).raster(),
-        );
-        let legend = Image::new(device, queue, &layout, &sampler, &legend());
+        let sources = Image::new(device, queue, &layout, &sampler, &sources());
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/overlay.wgsl"));
         let blit = crate::fullscreen_pipeline(
             device,
@@ -677,21 +706,33 @@ impl Overlay {
         );
         Overlay {
             blit,
-            panel,
-            legend,
+            layout,
+            sampler,
+            panel: None,
+            sources,
             arrows,
             arrows_uniform,
             arrows_bind,
-            flows: Vec::new(),
-            shown: None,
         }
     }
 
-    pub(crate) fn show(&mut self, queue: &wgpu::Queue, params: &Params, readout: Readout) {
-        self.flows = params.flows().collect();
-        if self.shown != Some(readout) {
-            write(queue, &self.panel.texture, &rasterize(&readout));
-            self.shown = Some(readout);
+    pub(crate) fn show(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, readout: Readout) {
+        match &mut self.panel {
+            Some((shown, _)) if *shown == readout => {}
+            Some((shown, image)) => {
+                write(queue, &image.texture, &rasterize(&readout));
+                *shown = readout;
+            }
+            None => {
+                let image = Image::new(
+                    device,
+                    queue,
+                    &self.layout,
+                    &self.sampler,
+                    &rasterize(&readout),
+                );
+                self.panel = Some((readout, image));
+            }
         }
     }
 
@@ -700,36 +741,41 @@ impl Overlay {
         queue: &wgpu::Queue,
         pass: &mut wgpu::RenderPass,
         target_size: (u32, u32),
-        cells: &[Rect],
+        params: &Params,
+        bank: Option<&Bank>,
     ) {
-        let Some(panel) = panel_placement(self.panel.size, target_size) else {
+        let Some((_, panel)) = &self.panel else {
             return;
         };
-        let spare = cells.get(MONITORS).copied();
-        let legend = spare.and_then(|cell| legend_placement(self.legend.size, cell, panel.y));
-        if let Some(at) = legend {
-            let line = mark_thickness(target_size.1);
-            let boxes: [Rect; LEGEND_ROWS] = std::array::from_fn(|i| at.of(legend_box(i)));
-            let arrows = arrows(&self.flows, &cells[..MONITORS], &boxes, line);
-            queue.write_buffer(
-                &self.arrows_uniform,
-                0,
-                bytemuck::bytes_of(&ArrowsUniform::of(&arrows, line)),
-            );
-            pass.set_viewport(
-                0.0,
-                0.0,
-                target_size.0 as f32,
-                target_size.1 as f32,
-                0.0,
-                1.0,
-            );
-            pass.set_pipeline(&self.arrows);
-            pass.set_bind_group(0, &self.arrows_bind, &[]);
-            pass.draw(0..3, 0..1);
-            self.legend.blit(pass, &self.blit, at);
+        let Some(at) = panel_placement(panel.size, target_size) else {
+            return;
+        };
+        let spare = bank.and_then(|b| b.spare);
+        if let Some((bank, spare)) = bank.zip(spare) {
+            if let Some(placed) = sources_placement(self.sources.size, spare, at.y) {
+                let line = mark_thickness(target_size.1);
+                let boxes: [Rect; SOURCES] = std::array::from_fn(|i| placed.of(source_box(i)));
+                let arrows = arrows(params.flows(), &bank.tiles, &boxes, line);
+                queue.write_buffer(
+                    &self.arrows_uniform,
+                    0,
+                    bytemuck::bytes_of(&ArrowsUniform::of(&arrows, line)),
+                );
+                pass.set_viewport(
+                    0.0,
+                    0.0,
+                    target_size.0 as f32,
+                    target_size.1 as f32,
+                    0.0,
+                    1.0,
+                );
+                pass.set_pipeline(&self.arrows);
+                pass.set_bind_group(0, &self.arrows_bind, &[]);
+                pass.draw(0..3, 0..1);
+                self.sources.blit(pass, &self.blit, placed);
+            }
         }
-        self.panel.blit(pass, &self.blit, panel);
+        panel.blit(pass, &self.blit, at);
     }
 }
 
@@ -739,6 +785,7 @@ mod tests {
 
     use crate::midi::CLUTCH;
     use crate::params::Node;
+    use crate::rig::MONITORS;
 
     fn at_rest() -> Readout {
         Readout::of(&crate::config::instrument(), Focus::default(), 0)
@@ -818,9 +865,8 @@ mod tests {
         let readout = at_rest();
         let raster = rasterize(&readout);
         for (cc, control) in controls() {
-            let spot = spot(cc).unwrap();
             let mut want = Canvas::new(PANEL_W, PANEL_H);
-            place(&mut want, spot, &control, &readout);
+            place(&mut want, cc, &control, &readout);
             let lit: Vec<(i32, i32)> = (0..PANEL_H)
                 .flat_map(|y| (0..PANEL_W).map(move |x| (x, y)))
                 .filter(|(x, y)| {
@@ -844,12 +890,8 @@ mod tests {
         }
     }
 
-    fn spot_of(node: Node, i: u8) -> Spot {
-        spot(crate::midi::row_of(node) + i).expect("a select row is a block of spots")
-    }
-
     fn row_index(node: Node) -> usize {
-        match spot_of(node, 0) {
+        match spot(crate::midi::row_of(node)).expect("a select row is a block of spots") {
             Spot::S(_) => 0,
             Spot::M(_) => 1,
             Spot::R(_) => 2,
@@ -879,13 +921,13 @@ mod tests {
         band_of(node, i, |c| strip_chrome(c, i))
     }
 
-    fn captioned(node: Node, i: u8, cc: u8, caption: &str) -> Vec<[u8; 4]> {
+    fn captioned(node: Node, i: u8, caption: &str) -> Vec<[u8; 4]> {
         band_of(node, i, |c| {
             strip_chrome(c, i);
             place(
                 c,
-                spot_of(node, i),
-                &Control::Button(cc, caption.to_string()),
+                crate::midi::row_of(node) + i,
+                &Control::Button(caption.to_string()),
                 &at_rest(),
             );
         })
@@ -895,12 +937,12 @@ mod tests {
     fn a_select_row_is_drawn_for_its_own_kind_and_stops_where_the_graph_does() {
         let raster = rasterize(&at_rest());
         for node in Node::ALL {
-            for i in 0..crate::midi::STRIPS as u8 {
+            for i in 0..STRIPS {
                 let bound = BUTTONS
                     .iter()
                     .find(|b| b.cc == crate::midi::row_of(node) + i);
                 let want = match bound {
-                    Some(b) => captioned(node, i, b.cc, &b.action.caption()),
+                    Some(b) => captioned(node, i, &b.action.caption()),
                     None => asleep(node, i),
                 };
                 assert_eq!(
@@ -911,6 +953,13 @@ mod tests {
                     i + 1
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_readout_is_indexed_the_way_the_knobs_are_listed() {
+        for (i, knob) in Knob::ALL.iter().enumerate() {
+            assert_eq!(*knob as usize, i, "{knob:?}");
         }
     }
 
@@ -952,6 +1001,42 @@ mod tests {
         assert_eq!(thumb(&thrown, thumb_y(0.0)), 14 * THUMB_H as usize);
         assert!(thumb_y(0.0) > thumb_y(0.5) && thumb_y(0.5) > thumb_y(1.0));
         assert!(thumb_y(1.0) > ROWS_Y[0] && thumb_y(0.0) + THUMB_H < ROWS_Y[2] + SQUARE);
+    }
+
+    #[test]
+    fn one_thumb_per_fader_and_one_needle_per_rotary() {
+        let raster = rasterize(&at_rest());
+        let track = |i: u8| {
+            let x = track_x(i) + 1;
+            (ROWS_Y[0] + 1..ROWS_Y[2] + SQUARE - 1)
+                .filter(|y| marked_texels(&raster, x, *y, 1, 1) > 0)
+                .count()
+        };
+        let needles = |i: u8| {
+            let cx = strip_x(i) + STRIP_W / 2;
+            let r = ROTARY_R - 3;
+            let ring = (0..360).step_by(3).map(|deg| {
+                let a = (deg as f32).to_radians();
+                (
+                    cx + (a.sin() * r as f32).round() as i32,
+                    ROTARY_Y - (a.cos() * r as f32).round() as i32,
+                )
+            });
+            let samples: Vec<bool> = ring
+                .map(|(x, y)| marked_texels(&raster, x, y, 1, 1) > 0)
+                .collect();
+            let mut on = *samples.last().unwrap();
+            let mut hits = 0;
+            for hit in samples {
+                hits += usize::from(hit && !on);
+                on = hit;
+            }
+            hits
+        };
+        for i in 0..STRIPS {
+            assert_eq!(track(i), THUMB_H as usize, "fader {}", i + 1);
+            assert_eq!(needles(i), 1, "rotary {}", i + 1);
+        }
     }
 
     #[test]
@@ -1007,64 +1092,76 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_are_the_flows_between_the_tiles_and_the_legend() {
+    fn the_arrows_run_from_each_flows_source_to_its_sink() {
         let params = crate::config::instrument();
         let flows: Vec<Flow> = params.flows().collect();
         let (cols, rows) = crate::present::grid(MONITORS);
         let cells = cells((cols * rows) as usize);
         assert!(
             cells.len() > MONITORS,
-            "the bank has no spare cell for the cameras"
+            "the bank has no spare cell for the sources"
         );
-        let legend =
-            legend_placement((LEGEND_W as u32, LEGEND_H as u32), cells[MONITORS], 700.0).unwrap();
-        let boxes: [Rect; LEGEND_ROWS] = std::array::from_fn(|i| legend.of(legend_box(i)));
+        let placed =
+            sources_placement((SOURCE_W as u32, SOURCES_H as u32), cells[MONITORS], 700.0).unwrap();
+        let boxes: [Rect; SOURCES] = std::array::from_fn(|i| placed.of(source_box(i)));
         for b in boxes {
             assert!(
                 inside([b.x, b.y], cells[MONITORS], 0.0) && b.y + b.h < 700.0,
                 "{b:?}"
             );
         }
-        let arrows = arrows(&flows, &cells[..MONITORS], &boxes, 2.0);
+        let arrows = arrows(flows.iter().copied(), &cells[..MONITORS], &boxes, 2.0);
         assert_eq!(arrows.len(), flows.len());
-        assert_eq!(arrows.len(), 10);
+        let looks = flows
+            .iter()
+            .filter(|f| matches!(f.to, End::Camera(_)))
+            .count();
+        let feeds = flows
+            .iter()
+            .filter(|f| matches!(f.from, End::Camera(_)))
+            .count();
+        let seeds = flows.iter().filter(|f| f.from == End::Seed).count();
+        assert_eq!((looks, feeds, seeds), (5, 3, 2), "{flows:?}");
         for (flow, arrow) in flows.iter().zip(&arrows) {
-            let (from, to) = match *flow {
-                Flow::Look {
-                    camera, monitor, ..
-                } => (cells[monitor], boxes[camera]),
-                Flow::Feed {
-                    camera, monitor, ..
-                } => (boxes[camera], cells[monitor]),
-                Flow::Seed { monitor, .. } => (boxes[CAMERAS], cells[monitor]),
+            let rect = |end: End| match end {
+                End::Monitor(m) => cells[m],
+                End::Camera(c) => boxes[c],
+                End::Seed => boxes[CAMERAS],
             };
+            let (from, to) = (rect(flow.from), rect(flow.to));
             assert!(
-                inside(arrow.from, from, 12.0),
+                inside(arrow.from, from, 12.0) && !inside(arrow.from, from, -4.0),
                 "{flow:?} starts at {:?}",
                 arrow.from
             );
             assert!(
-                inside(arrow.to, to, 12.0),
+                inside(arrow.to, to, 12.0) && !inside(arrow.to, to, -4.0),
                 "{flow:?} ends at {:?}",
                 arrow.to
             );
-            assert!(
-                !inside(arrow.from, from, -4.0),
-                "{flow:?} starts inside its tile"
-            );
-            assert!(!inside(arrow.to, to, -4.0), "{flow:?} ends inside its tile");
         }
-        let seeds = flows
-            .iter()
-            .filter(|f| matches!(f, Flow::Seed { .. }))
-            .count();
-        assert_eq!(seeds, 2, "the identity graph seeds the B pair");
     }
 
     #[test]
-    fn a_solo_has_no_spare_cell_and_so_no_arrows() {
-        assert!(cells(1).get(MONITORS).is_none());
-        assert!(cells(0).get(MONITORS).is_none());
+    fn a_flow_to_a_tile_the_bank_lacks_draws_nothing() {
+        let boxes: [Rect; SOURCES] = std::array::from_fn(source_box);
+        let flows = [Flow {
+            from: End::Seed,
+            to: End::Monitor(3),
+            share: 1.0,
+        }];
+        assert!(arrows(flows.iter().copied(), &cells(2), &boxes, 2.0).is_empty());
+        assert_eq!(
+            arrows(flows.iter().copied(), &cells(5), &boxes, 2.0).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_shader_holds_as_many_arrows_as_the_uniform_carries() {
+        let wgsl = include_str!("shaders/overlay.wgsl");
+        assert!(wgsl.contains(&format!("array<vec4<f32>, {MAX_ARROWS}>")));
+        assert!(wgsl.contains(&format!("array<vec4<f32>, {}>", MAX_ARROWS / 4)));
         let uniform = ArrowsUniform::of(&[], 2.0);
         assert_eq!(uniform.count[0], 0);
     }

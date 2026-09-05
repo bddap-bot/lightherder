@@ -3,7 +3,7 @@
 use crate::params::{Focus, Knob, Node, Params};
 use crate::rig::{self, Rig};
 
-/// The instrument: Blair's rig at its performance setting — see [`Rig`].
+/// The instrument: Blair's rig at identity — see [`Rig`].
 /// There is one, and nothing chooses it.
 pub fn instrument() -> Params {
     Rig::IDENTITY.params()

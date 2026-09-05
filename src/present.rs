@@ -3,6 +3,7 @@
 //! grid of tiles, each letterboxed in its cell.
 
 use crate::feedback::Feedback;
+use crate::params::Params;
 
 /// What of the bank the display shows: the whole of it tiled, with the
 /// monitor the front panel plays picked out, or one monitor alone. One value
@@ -25,6 +26,22 @@ pub struct Rect {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bank {
+    pub tiles: Vec<Rect>,
+    pub spare: Option<Rect>,
+}
+
+fn bank(solo: Option<usize>, monitors: usize, cells: Vec<Rect>) -> Option<Bank> {
+    if solo.is_some() || cells.len() < monitors {
+        return None;
+    }
+    Some(Bank {
+        spare: cells.get(monitors).copied(),
+        tiles: cells[..monitors].to_vec(),
+    })
 }
 
 pub struct Present {
@@ -94,7 +111,7 @@ impl Present {
         target: &wgpu::Texture,
         monitors: &Feedback,
         view: View,
-        overlay: Option<&crate::overlay::Overlay>,
+        overlay: Option<(&crate::overlay::Overlay, &Params)>,
     ) {
         let (solo, marked) = match view {
             View::Bank { focus } => (None, focus),
@@ -156,12 +173,9 @@ impl Present {
                     }
                 }
             }
-            if let Some(overlay) = overlay {
-                let bank = match solo {
-                    None => cells.as_slice(),
-                    Some(_) => &[],
-                };
-                overlay.draw(queue, &mut pass, target_size, bank);
+            if let Some((overlay, params)) = overlay {
+                let bank = bank(solo, monitors.monitors(), cells);
+                overlay.draw(queue, &mut pass, target_size, params, bank.as_ref());
             }
         }
         queue.submit([encoder.finish()]);
@@ -208,7 +222,29 @@ fn fit(target: (u32, u32), aspect: f32) -> Option<(f32, f32, f32, f32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit, grid, mark_strips, mark_thickness, tiles};
+    use super::{bank, fit, grid, mark_strips, mark_thickness, tiles, Rect};
+
+    fn cells(n: usize) -> Vec<Rect> {
+        (0..n)
+            .map(|i| Rect {
+                x: i as f32,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_solo_has_no_bank_and_a_tiled_display_names_its_spare_cell() {
+        assert_eq!(bank(Some(2), 5, cells(1)), None);
+        assert_eq!(bank(Some(0), 5, cells(6)), None);
+        assert_eq!(bank(None, 5, cells(3)), None);
+        let tiled = bank(None, 5, cells(6)).unwrap();
+        assert_eq!(tiled.tiles, cells(5));
+        assert_eq!(tiled.spare, Some(cells(6)[5]));
+        assert_eq!(bank(None, 5, cells(5)).unwrap().spare, None);
+    }
 
     #[test]
     fn the_mark_lines_the_inside_of_the_tile_edges() {

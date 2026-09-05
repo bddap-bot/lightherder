@@ -94,8 +94,9 @@ free to drift from them. At every setting of the eight, on every monitor, the
 shares sum to exactly one: nothing on the rig's cabling amplifies.
 
 It starts at **identity**: every monitor on its program — on Direct the
-switchers would feed nothing — and every switcher run to In2, the end that
-hands on what the stage upstream made. So the seed walks the whole chain
+switchers would feed nothing — and every switcher run to In2, the end away
+from its own structure's camera: the seed on D, the stage before on C and B,
+camera B on A. So no loop is closed and the seed walks the whole chain
 untouched: D passes it to C, C to B, B puts it on both B monitors whole,
 camera B sees that pair through the glass, and switcher A puts what camera B
 sees on both A monitors while the rotating monitor shows it too. Every screen
@@ -278,7 +279,7 @@ which its stage does nothing to the light: zoom 1, no turn, no delay, the
 full frame rate, a neutral front panel and no sharpening. The crossfade is the
 one knob with no such value — it is not a stage the light passes through but
 where a sum stands — so its identity is the end of its travel it started at,
-In2 whole, the end that hands on what the stage upstream made. The picture
+In2 whole, the end away from its own structure's camera. The picture
 visibly loses the mix and the fader puts it straight back, which is the error
 that corrects itself. Every knob starts at its identity, so Stop and Rewind
 agree on where a knob goes.
@@ -488,8 +489,8 @@ are the surface's lamps. In the tiled bank the panel is joined by the
 dataflow: the three cameras and the seed stand in the bank's spare cell, an
 arrow runs from each monitor to the camera watching it and from each camera
 and the seed to the monitors they feed, the heavier the larger the share, and
-the arrows are read off the same taps the passes are built from. A solo draws
-none. Every knob logs its new value on change, and the log line is the same
+the arrows are read off the same levers and glass the passes are built from.
+A solo draws none. Every knob logs its new value on change, and the log line is the same
 readout: the focused camera, monitor and switcher, every knob on them, and
 whether that monitor is on program or direct. The glass shows one thing of the focus
 itself: in the tiled bank the focused monitor's tile is framed with a thin

@@ -325,7 +325,7 @@ impl Live {
     /// with no texture to give is the one way a present does nothing, and
     /// the caller counts the ones that landed so that a stale surface reads
     /// as the rate it really is.
-    fn show(&mut self, gpu: &Gpu, view: View, overlay: bool) -> bool {
+    fn show(&mut self, gpu: &Gpu, params: &Params, view: View, overlay: bool) -> bool {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             // Suboptimal still hands back a usable texture, and the next
@@ -349,7 +349,7 @@ impl Live {
             &frame.texture,
             &self.feedback,
             view,
-            overlay.then_some(&self.overlay),
+            overlay.then_some((&self.overlay, params)),
         );
         gpu.queue.present(frame);
         true
@@ -578,13 +578,6 @@ impl App {
         }
     }
 
-    /// Draw the display into `capture` and hand it whatever falls due.
-    ///
-    /// The capture's own pass rather than the surface's: what the glass gets
-    /// is a swapchain texture, which is not a copy source on every backend
-    /// and is a different size on every window. Solo and the overlay are the
-    /// display's, so a capture is framed the way the display is — but not
-    /// the focus mark, which guides the hand and is no part of the picture.
     fn readout(&self) -> Readout {
         Readout::of(
             &self.params,
@@ -604,7 +597,8 @@ impl App {
             .as_mut()
             .ok_or_else(|| "there is no picture yet".to_string())?;
         if self.overlay_shown {
-            live.overlay.show(&self.gpu.queue, &self.params, readout);
+            live.overlay
+                .show(&self.gpu.device, &self.gpu.queue, readout);
         }
         capture.frame(
             &self.gpu.device,
@@ -612,7 +606,7 @@ impl App {
             &live.present,
             &live.feedback,
             view,
-            self.overlay_shown.then_some(&live.overlay),
+            self.overlay_shown.then_some((&live.overlay, &self.params)),
         )
     }
 
@@ -812,9 +806,10 @@ impl ApplicationHandler for App {
                 // The piece plays on through either; only the picture waits.
                 if overlay {
                     let readout = Readout::of(&self.params, focus, lit);
-                    live.overlay.show(&self.gpu.queue, &self.params, readout);
+                    live.overlay
+                        .show(&self.gpu.device, &self.gpu.queue, readout);
                 }
-                let shown = !self.covered && live.show(&self.gpu, view, overlay);
+                let shown = !self.covered && live.show(&self.gpu, &self.params, view, overlay);
                 // Under Fifo the present waits for the blank, so a frame that
                 // went out is the one thing that can ask for the next at the
                 // display's rate. One that did not paces nothing.
@@ -942,7 +937,7 @@ mod tests {
         // The whole point of the button: Stop already puts everything back,
         // and what a hand mid-piece wants is the one knob it just pushed too
         // far.
-        let Some(mut app) = playing(config::instrument()) else {
+        let Some(mut app) = playing(off_identity()) else {
             return;
         };
         app.focus = Focus {
@@ -951,10 +946,7 @@ mod tests {
             switcher: 0,
         };
         let before = app.params.clone();
-        // Zoom, because the rig stands at 0.994 rather than at 1.0: a
-        // reset that put back *what was loaded* instead of the identity
-        // would land on the wrong number, and there is nowhere else in this
-        // test that difference shows.
+        assert_ne!(before.knob(Knob::Zoom, app.focus), Knob::Zoom.identity());
         turn(&mut app, Knob::Saturation, 1.0);
         turn(&mut app, Knob::Zoom, 0.5);
         assert_ne!(app.params, before);
@@ -1099,6 +1091,12 @@ mod tests {
                 .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
             "a latch let go kept its lamp"
         );
+    }
+
+    fn off_identity() -> Params {
+        let mut params = config::instrument();
+        params.shafts[1].zoom = 0.9;
+        params
     }
 
     fn turn(app: &mut App, knob: Knob, delta: f32) {
@@ -1432,10 +1430,17 @@ mod tests {
         }
         let present = Present::new(device, &feedback, format);
         let mut overlay = Overlay::new(device, queue, format);
-        overlay.show(queue, &app.params, app.readout());
+        overlay.show(device, queue, app.readout());
         let mut capture = Capture::still(device, &dir, (1920, 1080), format).unwrap();
         capture
-            .frame(device, queue, &present, &feedback, view, Some(&overlay))
+            .frame(
+                device,
+                queue,
+                &present,
+                &feedback,
+                view,
+                Some((&overlay, &app.params)),
+            )
             .unwrap();
         let path = capture.finish().unwrap();
         std::fs::rename(&path, dir.join(format!("{name}.png"))).unwrap();
@@ -1456,13 +1461,13 @@ mod tests {
         surface(&mut app, &board, fader, 64);
         let moved = app.params.knob(Knob::Switcher, app.focus);
         assert!((moved - (1.0 - 63.0 / 127.0 / 4.0)).abs() < 1e-5, "{moved}");
-        assert_eq!(reads(&app), Knob::Switcher.readout(moved));
+        assert_eq!(reads(&app), Knob::Switcher.reads(moved));
 
         app.act(Action::Focus(Node::Switcher, 1));
         assert_eq!(app.midi.standing(fader), Some(64));
         assert_eq!(reads(&app), "1.000", "a page flip: the fader stands at 64");
         app.act(Action::Focus(Node::Switcher, 0));
-        assert_eq!(reads(&app), Knob::Switcher.readout(moved));
+        assert_eq!(reads(&app), Knob::Switcher.reads(moved));
 
         surface(&mut app, &board, CLUTCH, 127);
         surface(&mut app, &board, fader, 0);
@@ -1470,7 +1475,7 @@ mod tests {
         assert_eq!(app.params.knob(Knob::Switcher, app.focus), moved);
         assert_eq!(
             reads(&app),
-            Knob::Switcher.readout(moved),
+            Knob::Switcher.reads(moved),
             "a clutched fader: the fader stands at 0"
         );
         surface(&mut app, &board, CLUTCH, 0);
@@ -1490,13 +1495,22 @@ mod tests {
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
+        use crate::params::{End, Flow};
+        let camera_b_on_the_b_pair = |app: &App| {
+            app.params
+                .flows()
+                .filter(|f| f.from == End::Camera(1) && matches!(f.to, End::Monitor(2 | 3)))
+                .collect::<Vec<Flow>>()
+        };
+        assert_eq!(camera_b_on_the_b_pair(&app), []);
         app.act(Action::Focus(Node::Switcher, 1));
         turn(&mut app, Knob::Switcher, -0.5);
+        let fed = camera_b_on_the_b_pair(&app);
+        assert_eq!(fed.len(), 2, "{fed:?}");
+        assert!(fed.iter().all(|f| (f.share - 0.5).abs() < 1e-6), "{fed:?}");
         app.act(Action::Focus(Node::Monitor, 2));
         app.act(Action::Flip(crate::affine::Axis::X));
         app.overlay_shown = true;
-        let flows: Vec<_> = app.params.flows().collect();
-        assert_eq!(flows.len(), 12, "{flows:?}");
         proof(&app, "overlay-arrows", View::Bank { focus: None });
     }
 }
