@@ -486,9 +486,9 @@ never where the hardware sits: a fader turns its knob by how far it moves, so
 after a clutched throw the two differ, and the glass shows the truth the
 picture is made from. The lit buttons on the panel are the surface's lamps.
 In the tiled bank the panel is joined by the dataflow: each camera stands on
-the seam between the rows beside the monitors it watches — between its
-structure's pair, as on the rig — and the seed beside the pair it enters, so
-that an arrow from each monitor to the camera watching it and from each camera
+the seam between the rows under the monitors it watches — a structure's
+camera between its pair, as on the rig, the third under the rotating monitor
+— and the seed beside the pair it enters, so that an arrow from each monitor to the camera watching it and from each camera
 and the seed to the monitors they feed is short enough to follow; the brighter
 the larger the share, and the arrows are read off the same levers and glass
 the passes are built from. Every knob logs its new value on

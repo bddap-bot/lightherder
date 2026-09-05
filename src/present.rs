@@ -34,13 +34,13 @@ pub struct Bank {
     pub tiles: Vec<Rect>,
 }
 
-pub(crate) fn bank(target: (u32, u32), aspect: f32, tiles: usize) -> Option<Bank> {
-    let (cols, rows) = grid(tiles);
+pub(crate) fn bank(target: (u32, u32), aspect: f32, count: usize) -> Option<Bank> {
+    let (cols, rows) = grid(count);
     let cell = (target.0 / cols, target.1 / rows);
     let (x, y, w, h) = fit(cell, aspect)?;
-    let tiles = (0..tiles)
+    let tiles = (0..count)
         .map(|i| {
-            let (col, row) = cell_of(tiles, i);
+            let (col, row) = cell_of(count, i);
             Rect {
                 x: x + (col * cell.0) as f32,
                 y: y + (row * cell.1) as f32,
@@ -76,11 +76,11 @@ pub fn grid(monitors: usize) -> (u32, u32) {
     (cols, (monitors as u32).div_ceil(cols))
 }
 
-/// Tile `i` of `tiles` as `(column, row)`: the grid fills down before it
+/// Tile `i` of `count` as `(column, row)`: the grid fills down before it
 /// fills across, so consecutive monitors stack — a structure's upper monitor
 /// over its lower, the way they stand on the rig.
-pub fn cell_of(tiles: usize, i: usize) -> (u32, u32) {
-    let (_, rows) = grid(tiles);
+pub fn cell_of(count: usize, i: usize) -> (u32, u32) {
+    let (_, rows) = grid(count);
     (i as u32 / rows, i as u32 % rows)
 }
 
@@ -138,9 +138,7 @@ impl Present {
         };
         let tiles = tiles(monitors.monitors(), solo);
         let target_size = (target.width(), target.height());
-        let Some(tiling) = bank(target_size, monitors.aspect(), tiles.len()) else {
-            return;
-        };
+        let tiling = bank(target_size, monitors.aspect(), tiles.len());
         let target = &target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("present"),
@@ -162,7 +160,8 @@ impl Present {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            for (m, r) in tiles.zip(&tiling.tiles) {
+            let rects = tiling.as_ref().map_or(&[][..], |t| t.tiles.as_slice());
+            for (m, r) in tiles.zip(rects) {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_viewport(r.x, r.y, r.w, r.h, 0.0, 1.0);
                 pass.set_bind_group(0, monitors.bind_group(), &[monitors.uniform_offset(m)]);
@@ -178,7 +177,7 @@ impl Present {
                 }
             }
             if let Some((overlay, params)) = overlay {
-                let bank = solo.is_none().then_some(&tiling);
+                let bank = tiling.as_ref().filter(|_| solo.is_none());
                 overlay.draw(queue, &mut pass, target_size, params, bank);
             }
         }

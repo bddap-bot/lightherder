@@ -49,9 +49,15 @@ struct Seat {
 
 const SEATS: [Seat; SOURCES] = [
     Seat { col: 0.5, row: 1.0 },
-    Seat { col: 1.5, row: 1.0 },
+    Seat {
+        col: 1.25,
+        row: 1.0,
+    },
     Seat { col: 2.5, row: 1.0 },
-    Seat { col: 2.0, row: 1.0 },
+    Seat {
+        col: 1.75,
+        row: 1.0,
+    },
 ];
 
 const MAX_ARROWS: usize = 40;
@@ -394,25 +400,16 @@ fn source(i: usize) -> Raster {
     c.raster()
 }
 
-fn seat(i: usize, bank: &Bank, scale: f32) -> Rect {
+fn seats(bank: &Bank) -> Option<[Rect; SOURCES]> {
+    let size = (SOURCE_W as u32, SOURCE_H as u32);
+    let scale = scale_into(size, (bank.cell.0 * 0.3, bank.cell.1 * 0.15))?;
     let (w, h) = (SOURCE_W as f32 * scale, SOURCE_H as f32 * scale);
-    Rect {
+    Some(std::array::from_fn(|i| Rect {
         x: SEATS[i].col * bank.cell.0 - w / 2.0,
         y: SEATS[i].row * bank.cell.1 - h / 2.0,
         w,
         h,
-    }
-}
-
-fn seats(bank: &Bank, scale: f32) -> [Rect; SOURCES] {
-    std::array::from_fn(|i| seat(i, bank, scale))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Placement {
-    x: f32,
-    y: f32,
-    scale: f32,
+    }))
 }
 
 fn scale_into(size: (u32, u32), room: (f32, f32)) -> Option<f32> {
@@ -423,12 +420,14 @@ fn scale_into(size: (u32, u32), room: (f32, f32)) -> Option<f32> {
 
 const MARGIN: f32 = 24.0;
 
-fn panel_placement(size: (u32, u32), target: (u32, u32)) -> Option<Placement> {
+fn panel_placement(size: (u32, u32), target: (u32, u32)) -> Option<Rect> {
     let scale = scale_into(size, (target.0 as f32 * 0.9, target.1 as f32 * 0.9))?;
-    Some(Placement {
-        x: (target.0 as f32 - size.0 as f32 * scale - MARGIN).max(0.0),
-        y: (target.1 as f32 - size.1 as f32 * scale - MARGIN).max(0.0),
-        scale,
+    let (w, h) = (size.0 as f32 * scale, size.1 as f32 * scale);
+    Some(Rect {
+        x: (target.0 as f32 - w - MARGIN).max(0.0),
+        y: (target.1 as f32 - h - MARGIN).max(0.0),
+        w,
+        h,
     })
 }
 
@@ -589,15 +588,8 @@ impl Image {
         }
     }
 
-    fn blit(&self, pass: &mut wgpu::RenderPass, pipeline: &wgpu::RenderPipeline, at: Placement) {
-        pass.set_viewport(
-            at.x,
-            at.y,
-            self.size.0 as f32 * at.scale,
-            self.size.1 as f32 * at.scale,
-            0.0,
-            1.0,
-        );
+    fn blit(&self, pass: &mut wgpu::RenderPass, pipeline: &wgpu::RenderPipeline, at: Rect) {
+        pass.set_viewport(at.x, at.y, at.w, at.h, 0.0, 1.0);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.draw(0..3, 0..1);
@@ -739,9 +731,8 @@ impl Overlay {
         let Some(at) = panel_placement(panel.size, target_size) else {
             return;
         };
-        if let Some(bank) = bank {
+        if let Some((bank, boxes)) = bank.and_then(|b| Some((b, seats(b)?))) {
             let line = mark_thickness(target_size.1);
-            let boxes = seats(bank, at.scale);
             let arrows = arrows(params.flows(), &bank.tiles, &boxes, line);
             queue.write_buffer(
                 &self.arrows_uniform,
@@ -760,12 +751,7 @@ impl Overlay {
             pass.set_bind_group(0, &self.arrows_bind, &[]);
             pass.draw(0..3, 0..1);
             for (image, r) in self.sources.iter().zip(boxes) {
-                let placed = Placement {
-                    x: r.x,
-                    y: r.y,
-                    scale: at.scale,
-                };
-                image.blit(pass, &self.blit, placed);
+                image.blit(pass, &self.blit, r);
             }
         }
         panel.blit(pass, &self.blit, at);
@@ -1085,7 +1071,7 @@ mod tests {
         let params = crate::config::instrument();
         let flows: Vec<Flow> = params.flows().collect();
         let bank = tiled();
-        let boxes = seats(&bank, 1.0);
+        let boxes = seats(&bank).unwrap();
         let arrows = arrows(flows.iter().copied(), &bank.tiles, &boxes, 2.0);
         assert_eq!(arrows.len(), flows.len());
         let looks = flows
@@ -1147,7 +1133,7 @@ mod tests {
     fn every_source_sits_beside_what_it_talks_to_so_the_arrows_are_short() {
         let params = crate::config::instrument();
         let bank = tiled();
-        let boxes = seats(&bank, 1.0);
+        let boxes = seats(&bank).unwrap();
         for (i, b) in boxes.iter().enumerate() {
             for t in &bank.tiles {
                 assert!(!overlaps(*b, *t), "{} sits on a tile", source_name(i));
@@ -1165,7 +1151,22 @@ mod tests {
         let (length, crossings) = (length(&arrows, bank.cell.0), crossings(&arrows));
         println!("identity dataflow: {length:.2} tile widths of arrow, {crossings} crossings");
         assert!(length < 2.5, "{length:.2} tile widths of arrow");
-        assert!(crossings <= 1, "{crossings} crossings");
+        assert_eq!(crossings, 0);
+        for flow in params.flows() {
+            let (source, m) = match (flow.from, flow.to) {
+                (End::Monitor(m), End::Camera(c)) => (c, m),
+                (End::Seed, End::Monitor(m)) => (CAMERAS, m),
+                _ => continue,
+            };
+            let (col, _) = crate::present::cell_of(MONITORS, m);
+            assert_eq!(
+                SEATS[source].col.floor() as u32,
+                col,
+                "{} is not seated in the column of monitor {}",
+                source_name(source),
+                m + 1
+            );
+        }
         for (a, flow) in arrows.iter().zip(params.flows()) {
             for (i, b) in boxes.iter().enumerate() {
                 let end = |e: End| {
@@ -1191,7 +1192,7 @@ mod tests {
     #[test]
     fn a_flow_to_a_tile_the_bank_lacks_draws_nothing() {
         let bank = tiled();
-        let boxes = seats(&bank, 1.0);
+        let boxes = seats(&bank).unwrap();
         let flows = [Flow {
             from: End::Seed,
             to: End::Monitor(3),
