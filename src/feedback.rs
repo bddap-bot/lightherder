@@ -606,12 +606,7 @@ impl Feedback {
         }
         let aspect = self.aspect();
 
-        // Shafts move every frame; the affine per camera is the same for all
-        // of its taps, so it is worked out once. Two cameras on one shaft get
-        // the same one, which is the lock.
-        let framings: Vec<crate::affine::Affine2> = (0..params.cameras.len())
-            .map(|c| sample_transform(&params.framing(c), aspect))
-            .collect();
+        let framing = sample_transform(&params.framing, aspect);
         // What the seed's tap samples through. It is plugged into the
         // switcher, so nothing frames it: it arrives square on and fills the
         // monitor, which is the identity framing carried through the same
@@ -639,7 +634,7 @@ impl Feedback {
                 // layer arrives as itself. Its key is the switcher's own,
                 // which is where this rig keys at all.
                 let (framing, gain, key) = match through {
-                    Through::Camera(c) => (&framings[c], params.cameras[c].gain, Key::OFF),
+                    Through::Camera(c) => (&framing, params.cameras[c].gain, Key::OFF),
                     Through::Seed => (&square_on, [1.0; 3], params.input.key),
                 };
                 let rows = mirror.then(framing).rows();

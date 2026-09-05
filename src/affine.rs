@@ -68,7 +68,7 @@ impl Affine2 {
     }
 }
 
-/// Where a shaft stands: how the image a camera on it sees is magnified and
+/// Where the shaft stands: how the image a camera on it sees is magnified and
 /// turned on its way back onto the monitor. The rig's two freedoms and no
 /// others — a camera on a shaft slides and turns, and nothing on it pans.
 #[derive(Clone, Copy, Debug, PartialEq)]

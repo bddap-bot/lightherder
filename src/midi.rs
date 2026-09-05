@@ -88,10 +88,9 @@ const fn button(cc: u8, action: Action) -> Button {
 /// The eight faders are the left hand's: the focused monitor's front panel,
 /// then the focused switcher's period and its crossfade — the lever the
 /// piece is played on, on the fader nearest the hand that is already on the
-/// select rows. The rotaries above them are the right hand's: the focused
-/// camera — where it stands on its shaft and how late its cable is — and
-/// then the focused monitor's frame rate, the one router-output setting a
-/// knob turns. Twelve handles on sixteen controls, so there is no second
+/// select rows. The rotaries above them are the right hand's: where the rig
+/// stands on its shaft, how late the focused camera's cable is, and then the
+/// focused monitor's frame rate, the one router-output setting a knob turns. Twelve handles on sixteen controls, so there is no second
 /// page and the four rotaries past the fourth are dead.
 pub(crate) const FADERS: [Fader; 12] = [
     fader(0, Knob::Hue),

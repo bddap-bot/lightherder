@@ -421,11 +421,8 @@ impl App {
     fn refocus(&mut self, node: Node, index: usize) {
         // The index and not the value: two monitors may sit on the same hue,
         // and a rewind after a select between them owes the monitor the hand
-        // was on rather than the one it is on now. Cameras A and 3 share a
-        // shaft, so a select between those two clears a name that had not
-        // moved — over-eager, which costs a rewind that says so, where the
-        // other way round costs the wrong node put back.
-        let moved_under = |knob: Knob| knob.node() == node && index != self.focus.at(node);
+        // was on rather than the one it is on now.
+        let moved_under = |knob: Knob| knob.node() == Some(node) && index != self.focus.at(node);
         if self.last_knob.is_some_and(moved_under) {
             self.last_knob = None;
         }
@@ -949,8 +946,6 @@ mod tests {
         turn(&mut app, Knob::Zoom, 0.5);
         assert_ne!(app.params, before);
 
-        // Only the last one turned, and only on the focused node — the other
-        // camera's zoom is a different number in the same field.
         app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Zoom, app.focus),
@@ -1093,7 +1088,7 @@ mod tests {
 
     fn off_identity() -> Params {
         let mut params = config::instrument();
-        params.shafts[1].zoom = 0.9;
+        params.framing.zoom = 0.9;
         params
     }
 
@@ -1122,7 +1117,7 @@ mod tests {
             return;
         };
 
-        turn(&mut app, Knob::Zoom, 0.5);
+        turn(&mut app, Knob::Delay, 1.0);
         app.act(Action::Focus(Node::Camera, 1));
         let moved = app.params.clone();
         app.act(Action::ResetLastKnob);
@@ -1166,6 +1161,13 @@ mod tests {
         app.act(Action::Focus(Node::Switcher, 0));
         assert_eq!(app.last_knob, Some(Knob::Zoom), "zoom reads neither");
         app.act(Action::Focus(Node::Camera, 0));
+        assert_eq!(
+            app.last_knob,
+            Some(Knob::Zoom),
+            "zoom is the rig's, not a camera's"
+        );
+        turn(&mut app, Knob::Delay, 1.0);
+        app.act(Action::Focus(Node::Camera, 1));
         assert_eq!(app.last_knob, None);
     }
 

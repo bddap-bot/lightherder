@@ -287,15 +287,13 @@ impl Monitor {
     }
 }
 
-/// The whole instrument for one frame: the shafts the cameras stand on,
+/// The whole instrument for one frame: the shaft the cameras stand on,
 /// every camera, every monitor, and the switchers routing the first onto the
 /// second. The live state the knobs mutate, and the only one there is.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Params {
-    /// The shafts the cameras stand on — see [`crate::rig::SHAFT_OF`]. Camera
-    /// A and the rotating monitor share the first, so turning it turns both
-    /// and there is nothing to keep in step.
-    pub shafts: [Framing; crate::rig::SHAFTS],
+    /// The one shaft, which every camera samples through.
+    pub framing: Framing,
     pub cameras: [Camera; crate::rig::CAMERAS],
     pub monitors: [Monitor; crate::rig::MONITORS],
     /// The switchers and the router selects: the whole of the routing, and
@@ -399,11 +397,11 @@ impl Focus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Knob {
-    /// The camera's slide along its shaft, which is what a zoom of the image
+    /// The rig's slide along its shaft, which is what a zoom of the image
     /// is at this end. The lens's own zoom is a setting of its own and not
     /// this one — see #48.
     Zoom,
-    /// The camera's turn about its shaft.
+    /// The rig's turn about its shaft.
     Rotation,
     /// The frame delay unit on the camera's cable, in whole frames.
     Delay,
@@ -531,17 +529,20 @@ impl Knob {
         }
     }
 
-    pub const fn node(self) -> Node {
+    /// The node the knob is one of, or none: the rig's own knobs read the
+    /// same whatever is focused.
+    pub const fn node(self) -> Option<Node> {
         match self {
-            Knob::Zoom | Knob::Rotation | Knob::Delay => Node::Camera,
+            Knob::Zoom | Knob::Rotation => None,
+            Knob::Delay => Some(Node::Camera),
             Knob::Hue
             | Knob::Saturation
             | Knob::Brightness
             | Knob::Contrast
             | Knob::Temperature
             | Knob::Sharpness
-            | Knob::FrameRate => Node::Monitor,
-            Knob::Switcher | Knob::Period => Node::Switcher,
+            | Knob::FrameRate => Some(Node::Monitor),
+            Knob::Switcher | Knob::Period => Some(Node::Switcher),
         }
     }
 
@@ -584,12 +585,6 @@ impl Params {
     /// of the graph's reach.
     pub fn history(&self) -> usize {
         2 + self.delay as usize
-    }
-
-    /// How camera `c`'s view is magnified and turned, which is where the
-    /// shaft it stands on stands.
-    pub fn framing(&self, c: usize) -> Framing {
-        self.shafts[crate::rig::SHAFT_OF[c]]
     }
 
     /// How much of camera `c` monitor `m` shows, and how much of the seed:
@@ -635,8 +630,8 @@ impl Params {
         let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         match knob {
-            Knob::Zoom => self.framing(focus.camera).zoom,
-            Knob::Rotation => self.framing(focus.camera).rotation,
+            Knob::Zoom => self.framing.zoom,
+            Knob::Rotation => self.framing.rotation,
             Knob::Delay => cam.delay as f32,
             Knob::Hue => mon.colour.hue,
             Knob::Saturation => mon.colour.saturation,
@@ -694,8 +689,8 @@ impl Params {
     /// Every index is one the caller has already landed inside this graph.
     fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
         match knob {
-            Knob::Zoom => &mut self.shafts[crate::rig::SHAFT_OF[focus.camera]].zoom,
-            Knob::Rotation => &mut self.shafts[crate::rig::SHAFT_OF[focus.camera]].rotation,
+            Knob::Zoom => &mut self.framing.zoom,
+            Knob::Rotation => &mut self.framing.rotation,
             Knob::Hue => &mut self.monitors[focus.monitor].colour.hue,
             Knob::Saturation => &mut self.monitors[focus.monitor].colour.saturation,
             Knob::Brightness => &mut self.monitors[focus.monitor].colour.brightness,
@@ -714,14 +709,15 @@ impl Params {
     pub fn describe(&self, focus: Focus) -> String {
         let reads = |knob: Knob| knob.reads(self.knob(knob, focus));
         format!(
-            "cam {}/{}: zoom {}  rot {}  delay {}/{}\n\
+            "rig: zoom {}  rot {}\n\
+             cam {}/{}: delay {}/{}\n\
              mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \
              temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}\n\
              sw {}/{}: switcher {}  period {}",
-            focus.camera + 1,
-            self.cameras.len(),
             reads(Knob::Zoom),
             reads(Knob::Rotation),
+            focus.camera + 1,
+            self.cameras.len(),
             reads(Knob::Delay),
             self.delay,
             focus.monitor + 1,
@@ -904,7 +900,7 @@ mod tests {
             assert_ne!(before, after, "{knob:?} did not move");
             for (i, node) in Node::ALL.into_iter().enumerate() {
                 let elsewhere = params.knob(knob, at.with(node, 1));
-                let want = match knob.node() == node {
+                let want = match knob.node() == Some(node) {
                     true => stood[i],
                     false => after,
                 };
@@ -936,7 +932,7 @@ mod tests {
             }
         }
         let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
-        assert_eq!(params.shafts[0].zoom, 4.0);
+        assert_eq!(params.framing.zoom, 4.0);
         assert_eq!(cam.delay, params.delay);
         assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.switchers[0], 1.0);
@@ -952,7 +948,7 @@ mod tests {
             }
         }
         let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
-        assert_eq!(params.shafts[0].zoom, 0.25);
+        assert_eq!(params.framing.zoom, 0.25);
         assert_eq!(cam.delay, 0);
         assert_eq!(params.rig.periods[0], 0);
         assert_eq!(params.rig.switchers[0], 0.0);
@@ -965,44 +961,57 @@ mod tests {
 
     #[test]
     fn a_knob_follows_its_own_side_of_the_graph() {
-        // Two cameras and two monitors: a camera knob nudged at focus (1, 0)
-        // lands on camera 1 and nowhere else, and a monitor knob on monitor 0.
         let mut params = crate::config::instrument();
         let before = params.clone();
-        params.nudge(
-            Knob::Zoom,
-            0.01,
-            Focus {
-                camera: 1,
-                monitor: 0,
-                switcher: 0,
-            },
-        );
-        params.nudge(
-            Knob::Hue,
-            0.02,
-            Focus {
-                camera: 1,
-                monitor: 0,
-                switcher: 0,
-            },
-        );
-        assert_eq!(params.shafts[0], before.shafts[0]);
-        assert_ne!(params.shafts[1], before.shafts[1]);
+        let at = Focus {
+            camera: 1,
+            monitor: 0,
+            switcher: 0,
+        };
+        params.nudge(Knob::Delay, 1.0, at);
+        params.nudge(Knob::Hue, 0.02, at);
+        assert_eq!(params.cameras[0], before.cameras[0]);
+        assert_ne!(params.cameras[1], before.cameras[1]);
         assert_ne!(params.monitors[0].colour, before.monitors[0].colour);
         assert_eq!(params.monitors[1], before.monitors[1]);
     }
 
     #[test]
+    fn zoom_moves_the_rig_and_delay_moves_the_focused_camera() {
+        let mut params = crate::config::instrument();
+        for camera in 0..params.cameras.len() {
+            let before = params.clone();
+            let at = Focus::default().with(Node::Camera, camera);
+            params.nudge(Knob::Zoom, 1.0, at);
+            params.nudge(Knob::Rotation, 1.0, at);
+            params.nudge(Knob::Delay, 1.0, at);
+            assert_ne!(params.framing, before.framing, "focused on {camera}");
+            for other in 0..params.cameras.len() {
+                let elsewhere = Focus::default().with(Node::Camera, other);
+                assert_eq!(params.knob(Knob::Zoom, elsewhere), params.framing.zoom);
+                assert_eq!(
+                    params.knob(Knob::Rotation, elsewhere),
+                    params.framing.rotation
+                );
+                assert_eq!(
+                    params.cameras[other].delay,
+                    before.cameras[other].delay + u32::from(other == camera),
+                    "camera {other} with {camera} focused"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rotation_wraps_instead_of_running_away() {
         let mut params = p();
-        params.shafts[0].rotation = 0.0;
+        params.framing.rotation = 0.0;
         for _ in 0..10_000 {
             nudge(&mut params, Knob::Rotation, 0.5);
-            let rotation = params.shafts[0].rotation;
+            let rotation = params.framing.rotation;
             assert!(rotation > -PI && rotation <= PI);
         }
-        assert!((params.shafts[0].rotation - wrap_pi(5000.0)).abs() < 1e-2);
+        assert!((params.framing.rotation - wrap_pi(5000.0)).abs() < 1e-2);
     }
 
     #[test]
@@ -1512,9 +1521,10 @@ mod tests {
             };
             let name = knob.name();
             let node = match knob.node() {
-                Node::Camera => format!("camera {}'s {name}", focus.camera),
-                Node::Monitor => format!("monitor {}'s {name}", focus.monitor),
-                Node::Switcher => format!("switcher {}'s {name}", focus.switcher),
+                None => format!("the rig's {name}"),
+                Some(Node::Camera) => format!("camera {}'s {name}", focus.camera),
+                Some(Node::Monitor) => format!("monitor {}'s {name}", focus.monitor),
+                Some(Node::Switcher) => format!("switcher {}'s {name}", focus.switcher),
             };
             let (low, high) = knob.limit(&crate::config::instrument()).ends();
             // A count has no field below zero to poison.

@@ -13,8 +13,8 @@ use crate::affine::Framing;
 use crate::input::Input;
 use crate::params::{Camera, Key, Monitor, Node, Params, Plug};
 
-/// In [`Params::cameras`] order. A and B are on the rotating, sliding shafts,
-/// one per structure; the third watches the rotating monitor alone.
+/// In [`Params::cameras`] order. A and B look into their structure's glass;
+/// the third watches the rotating monitor alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Cam {
     A,
@@ -90,18 +90,6 @@ pub struct Rig {
 /// The rig's counts, which are the instrument's: nothing chooses them.
 pub const CAMERAS: usize = 3;
 
-/// The shafts the cameras stand on. Two, not three: camera A and the
-/// rotating monitor are belt-locked to one shaft and turn and slide in
-/// unison, and camera 3 is fixed watching that monitor — so what camera 3
-/// sees turns and slides with camera A, off the one number they share.
-/// Camera B has its own. Whether A and B share one is not stated anywhere
-/// found, so they do not.
-pub const SHAFTS: usize = 2;
-
-/// Which shaft each camera's view stands on, in [`Params::cameras`] order.
-/// The lock is this table and the pair of shafts behind it: there is no
-/// second number for the two to disagree on.
-pub const SHAFT_OF: [usize; CAMERAS] = [0, 1, 0];
 pub const MONITORS: usize = 5;
 pub const SWITCHERS: usize = 4;
 
@@ -251,7 +239,7 @@ impl Rig {
         }
     }
 
-    /// The rig at this setting, as the graph the instrument runs: both shafts
+    /// The rig at this setting, as the graph the instrument runs: the shaft
     /// square on, every knob at its identity. The seed is the one physical camera, and the monitors are dark: on
     /// this rig the seed input is what sparks the loops.
     pub fn params(&self) -> Params {
@@ -262,7 +250,7 @@ impl Rig {
         };
         Params {
             rig: *self,
-            shafts: [Framing::identity(); SHAFTS],
+            framing: Framing::identity(),
             cameras: [
                 camera(Cam::A, [0.980, 0.986, 0.992]),
                 camera(Cam::B, [0.992, 0.986, 0.980]),
@@ -429,9 +417,9 @@ mod tests {
     }
 
     #[test]
-    fn the_shafts_start_square_on_and_the_cables_lose_a_little() {
+    fn the_shaft_starts_square_on_and_the_cables_lose_a_little() {
         let params = Rig::IDENTITY.params();
-        assert_eq!(params.shafts, [Framing::identity(); SHAFTS]);
+        assert_eq!(params.framing, Framing::identity());
         for camera in &params.cameras {
             assert!(
                 camera.gain.iter().all(|g| 0.9 < *g && *g < 1.0),
@@ -440,19 +428,6 @@ mod tests {
         }
         let (a, b) = (&params.cameras[0], &params.cameras[1]);
         assert!(a.gain[0] < a.gain[2] && b.gain[0] > b.gain[2]);
-    }
-
-    #[test]
-    fn camera_three_stands_on_camera_a_s_shaft_and_camera_b_on_its_own() {
-        // The belt: camera A and the rotating monitor turn and slide in
-        // unison, and camera 3 is fixed watching that monitor — so what it
-        // sees moves with camera A, off the one number they share. Turning
-        // it moves both readings and cannot move only one.
-        let mut params = Rig::IDENTITY.params();
-        params.shafts[0].rotation += 0.3;
-        assert_eq!(params.framing(0), params.framing(2));
-        assert_ne!(params.framing(0), params.framing(1));
-        assert_eq!(params.framing(1), Framing::identity());
     }
 
     #[test]

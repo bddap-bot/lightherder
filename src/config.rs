@@ -16,8 +16,8 @@ pub fn instrument() -> Params {
 /// the ones a knob does not distinguish would be the same checks and five
 /// times the loop, once a frame. The rest stay at zero, since a knob on any
 /// other side never reads them.
-fn focuses(side: Node) -> impl Iterator<Item = Focus> {
-    let count = |node| match side == node {
+fn focuses(side: Option<Node>) -> impl Iterator<Item = Focus> {
+    let count = |node| match side == Some(node) {
         true => rig::count(node),
         false => 1,
     };
@@ -89,9 +89,10 @@ pub fn validate(params: &Params) -> Result<(), String> {
                 // re-assertion above stays allocation-free.
                 let (name, node) = (knob.name(), focus);
                 let what = match knob.node() {
-                    Node::Camera => format!("camera {}'s {name}", node.camera),
-                    Node::Monitor => format!("monitor {}'s {name}", node.monitor),
-                    Node::Switcher => format!("switcher {}'s {name}", node.switcher),
+                    None => format!("the rig's {name}"),
+                    Some(Node::Camera) => format!("camera {}'s {name}", node.camera),
+                    Some(Node::Monitor) => format!("monitor {}'s {name}", node.monitor),
+                    Some(Node::Switcher) => format!("switcher {}'s {name}", node.switcher),
                 };
                 return Err(format!("{what} is {value}; it runs {low} to {high}"));
             }
@@ -174,7 +175,7 @@ mod tests {
         // does not reach.
         let poison: &[fn(&mut Params)] = &[
             |p| p.cameras[0].gain[0] = f32::NAN,
-            |p| p.shafts[0].rotation = f32::INFINITY,
+            |p| p.framing.rotation = f32::INFINITY,
             |p| p.monitors[0].colour.saturation = f32::NAN,
             |p| p.input.key.threshold = f32::NAN,
             |p| p.rig.switchers[2] = f32::INFINITY,

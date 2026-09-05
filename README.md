@@ -21,7 +21,7 @@ in.
 
 A "monitor" is one layer of an offscreen `Rgba16Float` texture array. A
 "camera" is a fullscreen pass that samples a layer through an affine transform
-— the slide and the turn of the shaft it stands on — multiplies by a
+— the slide and the turn of the shaft the rig stands on — multiplies by a
 per-channel gain and writes the result back. That output is the next frame's
 input, which is the whole trick: pull the camera back a little each pass and
 the image walks inward, turn it a little and it spirals.
@@ -52,13 +52,9 @@ at half each. The fifth monitor turns on a shaft of its own and shows camera
 B, always. **Camera 3** is fixed on that rotating monitor and sees nothing
 else.
 
-The cameras stand on **two shafts, not three**. Camera A and the rotating
-monitor are belt-locked to one — they turn and slide in unison — and camera 3
-watches that monitor, so what camera 3 sees moves with camera A off the one
-number the two share. Camera B has its own shaft. `zoom` and `rotation` on
-camera A and on camera 3 are therefore the same knob: the lock is that fact
-and the pair of shafts behind it, not a second number kept in step with a
-first.
+The cameras stand on **one shaft**. `zoom` and `rotation` are the rig's, one
+value each, and every camera samples through the same framing: turning the
+knob moves the whole rig. The Solo row picks a camera for its delay unit only.
 
 Four **switchers**, the M/Es, each a crossfade between two feeds:
 
@@ -110,8 +106,8 @@ survives best and B's red does, so the two structures' trails cool and warm
 away from each other. Nothing on the rig turns one, so nothing here does
 either.
 
-Out of the box both shafts stand square on — zoom 1, no turn — so a loop, once
-a switcher closes one, copies its monitor exactly until a hand pulls a camera
+Out of the box the shaft stands square on — zoom 1, no turn — so a loop, once
+a switcher closes one, copies its monitor exactly until a hand pulls the rig
 back or turns it.
 
 ## The front panel
@@ -212,7 +208,8 @@ is listened to, so a surface set to some other MIDI channel still works.
 | faders 1–6 | the focused **monitor**'s front panel: hue, saturation, brightness, contrast, temperature, sharpness |
 | fader 7 | the focused **switcher**'s period: passes between reversals, 0 to 60, and 0 is the mode off |
 | fader 8 | the focused **switcher**'s crossfade — the lever the piece is played on, nearest the hand that is already on the select rows |
-| rotaries 1–3 | the focused **camera**: where it stands on its shaft (zoom, rotation) and how late its cable is (delay) |
+| rotaries 1–2 | the **rig**: where it stands on its shaft (zoom, rotation), whatever camera is focused |
+| rotary 3 | the focused **camera**'s delay: how late its cable is |
 | rotary 4 | the focused **monitor**'s router-output frame rate: 60 at rest, then 30, then 24 |
 | rotaries 5–8 | dead |
 | S 1–3 | focus camera A, B, 3 |
@@ -403,7 +400,7 @@ integrated adapter instead.
 ## Deploy
 
 **A pass is a sixtieth of a second, on the wall clock.** The loop evolves one
-pass at a time — the shafts pull back 0.6% and turn per *pass*, and the trail
+pass at a time — the shaft pulls back 0.6% and turns per *pass*, and the trail
 decays per pass — so the rate the passes run at is the speed the piece plays
 at, and it is the rig's own sixty whatever the display is doing.
 
@@ -500,10 +497,10 @@ focused monitor's tile is framed with a thin line, so a glance finds which
 glass the faders are on. A solo has nothing to pick out and draws neither the
 mark nor the arrows.
 
-The knobs act on the focused camera (where it stands on its shaft, and its
-delay), the focused monitor (its front panel) and the focused switcher (its
-crossfade and its period). The three select rows pick a node of any of the
-three outright.
+The knobs act on the rig (where it stands on its shaft), the focused camera
+(its delay), the focused monitor (its front panel) and the focused switcher
+(its crossfade and its period). The three select rows pick a node of any of
+the three outright.
 
 Every knob starts at its identity, so the instrument out of the box is the rig
 described above passing the seed through, and nothing else. Turn one against
@@ -513,8 +510,8 @@ loop does.
 
 Zoom is the sensitive one. A few thousandths either side of `zoom 1.000` is
 the difference between an image that walks inward, one that stands still, and
-one that blows outward — and since camera A and camera 3 share a shaft, a
-thousandth there moves both readings at once.
+one that blows outward — and since every camera stands on the one shaft, a
+thousandth there moves all three at once.
 
 The **period** is the original's mode on a switcher column: every that many
 passes the switcher reverses itself, counted on one grid from the start of the

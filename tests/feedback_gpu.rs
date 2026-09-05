@@ -65,7 +65,7 @@ fn graph(s: &Single) -> Params {
     let mut p = blank();
     p.rig.selects[2] = Select::Program;
     p.rig.switchers = [0.0, 1.0, 1.0, s.seed];
-    p.shafts = [s.framing; 2];
+    p.framing = s.framing;
     p.cameras[2].gain = s.loop_gain;
     p.cameras[2].look = one_hot(SEEDED);
     p.monitors[SEEDED].colour = s.colour;
@@ -1064,7 +1064,7 @@ fn blank() -> Params {
         periods: [0; SWITCHERS],
     };
     p.delay = 0;
-    p.shafts = [Framing::identity(); 2];
+    p.framing = Framing::identity();
     for camera in &mut p.cameras {
         *camera = plain_camera([0.0; MONITORS]);
     }
@@ -1210,15 +1210,14 @@ fn the_focused_tile_is_framed_and_only_in_the_bank() {
 
 #[test]
 fn a_crossfade_delivers_the_fractions_it_names() {
-    // Two cameras on one monitor, crossfaded 3:1. Their framings differ —
-    // one holds still, one turns the picture a quarter round — so the two
-    // contributions land in different places and each share can be read off
-    // on its own.
+    // Two cameras on one monitor, crossfaded 3:1. One passes only red and the
+    // other only green, so each share can be read off its own channel.
     let Some(mut h) = square() else { return };
     let mut p = blank();
     p.cameras[0].look = one_hot(SEEDED);
+    p.cameras[0].gain = [1.0, 0.0, 0.0];
     p.cameras[1].look = one_hot(SEEDED);
-    p.shafts[1].rotation = std::f32::consts::FRAC_PI_2;
+    p.cameras[1].gain = [0.0, 1.0, 0.0];
     // Monitor 3 takes the whole seed; monitor 1 takes switcher A's program,
     // a quarter of the way from camera A toward camera B.
     p.rig.selects[0] = Select::Program;
@@ -1227,22 +1226,25 @@ fn a_crossfade_delivers_the_fractions_it_names() {
 
     h.step_solo(&p, SEEDED);
     let at = h.spot_uv();
-    let base = h.read().at(at[0], at[1]);
-    assert!(base > 200.0, "the seed never lit: {base}");
+    let base = h.read().rgb_at(at[0], at[1]);
+    assert!(
+        base.iter().all(|c| *c > 200.0),
+        "the seed never lit: {base:?}"
+    );
 
     h.step_solo(&p, 0);
-    let img = h.read();
-    // The spot sits a quarter of the monitor's height right of centre, so a
-    // quarter turn counter-clockwise puts it the same distance above centre.
-    let (held, turned) = (img.at(at[0], at[1]), img.at(0.5, 0.25));
+    let [red, green, blue] = h.read().rgb_at(at[0], at[1]);
     assert!(
-        (held / base - 0.75).abs() < 0.04,
-        "the crossfade delivered {held} of {base}, not three quarters"
+        (red / base[0] - 0.75).abs() < 0.04,
+        "the crossfade delivered {red} of {}, not three quarters",
+        base[0]
     );
     assert!(
-        (turned / base - 0.25).abs() < 0.04,
-        "the crossfade delivered {turned} of {base}, not a quarter"
+        (green / base[1] - 0.25).abs() < 0.04,
+        "the crossfade delivered {green} of {}, not a quarter",
+        base[1]
     );
+    assert!(blue < 2.0, "a third share arrived: {blue}");
 }
 
 #[test]
@@ -1773,7 +1775,7 @@ fn the_seed_arrives_whole_however_the_cameras_are_set() {
     const SEED_SHARE: f32 = 0.98;
     p.rig.switchers = [0.0, 1.0, 1.0, SEED_SHARE];
     p.cameras[2].look = one_hot(SEEDED);
-    p.shafts[0].zoom = 0.5;
+    p.framing.zoom = 0.5;
     p.cameras[2].gain = [0.1; 3];
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
@@ -2048,7 +2050,7 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
         let mut p = blank();
         p.cameras[0].delay = delay;
         p.cameras[0].gain = [0.9; 3];
-        p.shafts[0].zoom = 0.9;
+        p.framing.zoom = 0.9;
         p.cameras[0].look = one_hot(SEEDED);
         p.delay = Params::MAX_DELAY;
         seeding(&mut p);
