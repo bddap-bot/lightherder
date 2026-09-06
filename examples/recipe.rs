@@ -104,21 +104,6 @@ fn number(word: Option<&str>, what: &str) -> Result<f32, String> {
         .map_err(|_| format!("{what} takes a number"))
 }
 
-/// `FORMAT:NAME`, which is ffmpeg's `-f` and its `-i`. Split at the first
-/// colon and no other: `lavfi:testsrc2=size=640x480:rate=30` is one source.
-fn seed(value: &str) -> Result<Input, String> {
-    let (format, device) = value
-        .split_once(':')
-        .ok_or_else(|| format!("seed {value:?} is not FORMAT:NAME"))?;
-    match format.is_empty() || device.is_empty() {
-        true => Err(format!("seed {value:?} names no source")),
-        false => Ok(Input::Capture {
-            format: format.into(),
-            device: device.into(),
-        }),
-    }
-}
-
 /// Everything a script says before the first pass runs: how big a monitor is
 /// and what is plugged into the switcher. The rest of the lines are played.
 struct Script {
@@ -152,7 +137,8 @@ fn read(path: &Path) -> Result<Script, String> {
                 let value = arg(1).ok_or("seed needs FORMAT:NAME")?;
                 script.seed = match value {
                     "bars" => Input::Pattern(Pattern::Bars),
-                    value => seed(value).map_err(|why| format!("line {}: {why}", n + 1))?,
+                    value => lightherder::input::capture(value)
+                        .map_err(|why| format!("line {}: {why}", n + 1))?,
                 };
             }
             _ => script.lines.push((n + 1, words)),
