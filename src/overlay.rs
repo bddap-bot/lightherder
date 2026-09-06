@@ -1,5 +1,5 @@
 use crate::lamps::{lamp, Lamplight};
-use crate::midi::{spot, Spot, BUTTONS, FADERS, TRANSPORT};
+use crate::midi::{spot, Precision, Spot, BUTTONS, FADERS, PRECISION, TRANSPORT};
 use crate::params::{End, Flow, Focus, Knob, Node, Params};
 use crate::present::{mark_thickness, Bank, Rect};
 use crate::rig::CAMERAS;
@@ -161,11 +161,17 @@ struct Reading {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Readout {
     knobs: [Reading; Knob::ALL.len()],
+    precision: Precision,
     lamps: Lamplight,
 }
 
 impl Readout {
-    pub(crate) fn of(params: &Params, focus: Focus, lamps: Lamplight) -> Readout {
+    pub(crate) fn of(
+        params: &Params,
+        focus: Focus,
+        precision: Precision,
+        lamps: Lamplight,
+    ) -> Readout {
         let knobs = Knob::ALL.map(|knob| {
             let value = params.knob(knob, focus);
             Reading {
@@ -173,7 +179,11 @@ impl Readout {
                 fraction: knob.limit(params).fraction(value),
             }
         });
-        Readout { knobs, lamps }
+        Readout {
+            knobs,
+            precision,
+            lamps,
+        }
     }
 
     pub(crate) fn reads(&self, knob: Knob) -> String {
@@ -269,6 +279,7 @@ fn group_labels(c: &mut Canvas) {
 #[derive(Clone, Debug)]
 enum Control {
     Knob(Knob),
+    Precision,
     Button(String),
 }
 
@@ -303,6 +314,19 @@ fn place(c: &mut Canvas, cc: u8, control: &Control, readout: &Readout) {
             c.text_centred(cx, ROTARY_CAPTION_Y, knob.name(), LIT);
             c.text_centred(cx, ROTARY_VALUE_Y, &readout.reads(*knob), LIT);
         }
+        (Spot::Rotary(i), Control::Precision) => {
+            let cx = strip_x(i) + STRIP_W / 2;
+            c.ring(cx, ROTARY_Y, ROTARY_R, LIT);
+            let fraction = (readout.precision.gain().log2() + 6.0) / 6.0;
+            needle(c, i, LIT, fraction);
+            c.text_centred(cx, ROTARY_CAPTION_Y, "precision", LIT);
+            c.text_centred(
+                cx,
+                ROTARY_VALUE_Y,
+                &format!("{:.3}", readout.precision.gain()),
+                LIT,
+            );
+        }
         (Spot::S(i), Control::Button(label)) => beside(c, i, 0, label),
         (Spot::M(i), Control::Button(label)) => beside(c, i, 1, label),
         (Spot::R(i), Control::Button(label)) => beside(c, i, 2, label),
@@ -321,7 +345,9 @@ fn place(c: &mut Canvas, cc: u8, control: &Control, readout: &Readout) {
             c.text(x + 2, y + 4, label, x + BUTTON_W - 1, ink);
         }
         (Spot::Fader(_) | Spot::Rotary(_), Control::Button(_))
-        | (Spot::S(_) | Spot::M(_) | Spot::R(_) | Spot::Transport(_), Control::Knob(_)) => {
+        | (Spot::Fader(_), Control::Precision)
+        | (Spot::S(_) | Spot::M(_) | Spot::R(_) | Spot::Transport(_), Control::Knob(_))
+        | (Spot::S(_) | Spot::M(_) | Spot::R(_) | Spot::Transport(_), Control::Precision) => {
             unreachable!("a knob sits on a fader or rotary and a button on a button")
         }
     }
@@ -332,17 +358,22 @@ fn controls() -> impl Iterator<Item = (u8, Control)> {
     let buttons = BUTTONS
         .iter()
         .map(|b| (b.cc, Control::Button(b.action.caption())));
-    faders.chain(buttons)
+    faders
+        .chain(std::iter::once((PRECISION, Control::Precision)))
+        .chain(buttons)
 }
 
 fn dead_indicators(c: &mut Canvas) {
     let bound = |wanted: Spot| {
-        FADERS.iter().any(|f| match (spot(f.cc), wanted) {
-            (Some(Spot::Fader(a)), Spot::Fader(b)) | (Some(Spot::Rotary(a)), Spot::Rotary(b)) => {
-                a == b
-            }
-            _ => false,
-        })
+        FADERS
+            .iter()
+            .map(|f| f.cc)
+            .chain([PRECISION])
+            .any(|cc| match (spot(cc), wanted) {
+                (Some(Spot::Fader(a)), Spot::Fader(b))
+                | (Some(Spot::Rotary(a)), Spot::Rotary(b)) => a == b,
+                _ => false,
+            })
     };
     for i in 0..STRIPS {
         if !bound(Spot::Fader(i)) {
@@ -748,12 +779,16 @@ impl Overlay {
 mod tests {
     use super::*;
 
-    use crate::midi::CLUTCH;
     use crate::params::Node;
     use crate::rig::MONITORS;
 
     fn at_rest() -> Readout {
-        Readout::of(&crate::config::instrument(), Focus::default(), 0)
+        Readout::of(
+            &crate::config::instrument(),
+            Focus::default(),
+            Precision::DEFAULT,
+            0,
+        )
     }
 
     fn lit_texels(r: &Raster) -> usize {
@@ -940,9 +975,9 @@ mod tests {
     fn a_knob_is_drawn_where_the_program_holds_it_and_nothing_else_moves() {
         let mut params = crate::config::instrument();
         let focus = Focus::default();
-        let rest = rasterize(&Readout::of(&params, focus, 0));
+        let rest = rasterize(&Readout::of(&params, focus, Precision::DEFAULT, 0));
         params.rig.switchers[0] = 0.0;
-        let moved = Readout::of(&params, focus, 0);
+        let moved = Readout::of(&params, focus, Precision::DEFAULT, 0);
         assert_eq!(moved.reads(Knob::Switcher), "0.000");
         assert_eq!(at_rest().reads(Knob::Switcher), "1.000");
         let thrown = rasterize(&moved);
@@ -1007,11 +1042,17 @@ mod tests {
     #[test]
     fn a_lit_lamp_fills_its_button_on_the_panel() {
         let params = crate::config::instrument();
-        let dark = rasterize(&Readout::of(&params, Focus::default(), 0));
+        let dark = rasterize(&Readout::of(
+            &params,
+            Focus::default(),
+            Precision::DEFAULT,
+            0,
+        ));
         let lit = rasterize(&Readout::of(
             &params,
             Focus::default(),
-            lamp(46) | lamp(CLUTCH),
+            Precision::DEFAULT,
+            lamp(46),
         ));
         let inside = |r: &Raster, x: i32, y: i32, w: i32, h: i32| {
             box_of(&r.pixels, r.width as i32, x + 1, y + 1, w - 2, h - 2)
@@ -1026,15 +1067,6 @@ mod tests {
         assert!(
             inside(&lit, x, y, BUTTON_W, BUTTON_H) > inside(&dark, x, y, BUTTON_W, BUTTON_H) + 400
         );
-        let Spot::S(i) = spot(CLUTCH).unwrap() else {
-            panic!("the clutch is on the S row")
-        };
-        let (x, y) = (strip_x(i) + 2, ROWS_Y[0]);
-        assert_eq!(
-            inside(&lit, x, y, SQUARE, SQUARE),
-            ((SQUARE - 2) * (SQUARE - 2)) as usize
-        );
-        assert_eq!(inside(&dark, x, y, SQUARE, SQUARE), 0);
     }
 
     fn tiled() -> Bank {

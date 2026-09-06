@@ -210,11 +210,10 @@ is listened to, so a surface set to some other MIDI channel still works.
 | rotaries 1–2 | the **rig**: where it stands on its shaft (zoom, rotation) |
 | rotary 3 | the focused **camera**'s delay: how late its cable is |
 | rotary 4 | the focused **monitor**'s router-output frame rate: 60 at rest, then 30, then 24 |
-| rotaries 5–8 | dead |
+| rotary 5 | **precision**: a full throw of every continuous relative control moves from 1/64 to one whole travel, on a continuous exponential; a quarter at startup until this rotary moves |
+| rotaries 6–8 | dead |
 | S 1–3 | focus camera A, B, 3 |
-| S 4, S 5 | dead |
-| S 6, S 7 | **precision -**, **precision +**: halve or double what a full throw of a fader moves, on a ladder from a whole travel down to a sixteenth; a quarter to begin with; the log says which rung; the three whole-number knobs run their whole count over the throw and do not listen |
-| S 8 | **clutch**: while held, every fader and rotary moves nothing, so a hand can bring one back from a rail; lit while held |
+| S 4–8 | dead |
 | M 1–5 | focus monitor: upper A, lower A, upper B, lower B, rotating |
 | M 6–8 | dead |
 | R 1–4 | focus switcher A, B, C, D |
@@ -241,23 +240,21 @@ film the glass, the glass, then what routes between them.
 
 **A row is exactly as wide as its kind.** The rig is three cameras, five
 monitors and four switchers, so five select buttons are dead — unlit and
-silent; the commands take the rest of the tails, which is why R5–R8 and S6–S8
-cost the transport nothing. A button is owed to equipment, not spent on it.
+silent; the commands take the rest of the R tail, while the S tail stays dead.
+A button is owed to equipment, not spent on it.
 Dead is the point. Nothing is bound to quit — the window manager ends the
 instrument, and a slipped finger on the surface must not be able to.
 
 **A fader turns its knob by how far it moves, never to where it stands.** A
 fader sends where it is, and what the instrument reads off that is the
 distance since it was last heard from: a continuous knob moves by that
-fraction of its travel, scaled by the precision — a quarter by default, so a
-full throw covers a quarter of the knob and one step of the 127 covers a
-five-hundredth. Nothing jumps: a hot-plug, a change of focus, a reset, a cut
+fraction of its travel, scaled by the precision — a quarter until rotary 5
+speaks, then continuously from a sixty-fourth at its bottom to a whole travel
+at its top. Nothing jumps: a hot-plug, a change of focus, a reset, a cut
 or a beat of the period all leave every fader turning on from wherever the
 knob now is, and a fresh cable, a select, a reset or a rewind forgives a
 count knob the part of a step it was owed. The rails clamp — a step past one
-is dropped, not owed — and a fader that has run out of travel is brought back
-under the **clutch**: while S8 is held, every fader and rotary moves nothing,
-and letting go resumes from the new position. Rotation and hue wrap instead of clamping, a whole revolution end to end. Zoom is a
+is dropped, not owed. Rotation and hue wrap instead of clamping, a whole revolution end to end. Zoom is a
 ratio and a step multiplies instead of adding: a throw doubles it from
 wherever it stands, one code moves it half a percent, and unity sits in the
 middle of the travel, so the thousandths either side of 1.0 get the same hand
@@ -482,9 +479,9 @@ is not on the board it does not exist. The surface's cycle button shows the
 panel above on the glass, each control captioned in a couple of words, and
 each fader and rotary drawn where the knob it points at stands, the number
 under it. That number is the value the program holds for the focused node,
-never where the hardware sits: a fader turns its knob by how far it moves, so
-after a clutched throw the two differ, and the glass shows the truth the
-picture is made from. The lit buttons on the panel are the surface's lamps.
+never where the hardware sits: a fader turns its knob by how far it moves,
+and the glass shows the truth the picture is made from. The lit buttons on
+the panel are the surface's lamps.
 In the tiled bank the panel is joined by the dataflow: each camera stands on
 the seam between the rows under the monitors it watches — a structure's
 camera between its pair, as on the rig, the third under the rotating monitor
@@ -584,9 +581,8 @@ arrives — three bytes split across reads, running status with the status byte
 left off, a clock byte landing between a control number and its value, a scene
 dump that must not read as a hundred knob moves, and notes and bends that are
 not knobs. The turn against a fader's first word placing it and not moving
-anything, a full throw at every rung of the precision ladder, the clutch
-holding every control still and letting go without a jump, a whole-frame knob
-owed a frame at a time and deaf to the precision, and an unplug that throws
+anything, the precision rotary's exponential span and monotonic travel, a
+whole-frame knob owed a frame at a time and deaf to the precision, and an unplug that throws
 nothing and lets go of every button a finger was on. The panel is asserted
 pair by pair — coverage alone let hue and brightness swap CCs and `blank` and
 `reset` swap buttons, a surface whose silkscreen lies with every behaviour

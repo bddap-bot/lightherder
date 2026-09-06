@@ -45,12 +45,6 @@ pub enum Action {
     /// the focused monitor, because the rig mirrors a router output and not
     /// a camera.
     Flip(Axis),
-    /// Halve or double what a full throw of a fader moves.
-    Finer,
-    Coarser,
-    /// While held, every fader and rotary is inert, so a hand can bring one
-    /// back from a rail it has hit.
-    Clutch(Edge),
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -67,7 +61,6 @@ pub fn released(action: Action) -> Option<Action> {
     match action {
         Action::Record(Edge::Down) => Some(Action::Record(Edge::Up)),
         Action::Cut(Edge::Down) => Some(Action::Cut(Edge::Up)),
-        Action::Clutch(Edge::Down) => Some(Action::Clutch(Edge::Up)),
         _ => None,
     }
 }
@@ -90,9 +83,6 @@ impl Action {
             Action::Select => "select".into(),
             Action::Flip(Axis::X) => "flip x".into(),
             Action::Flip(Axis::Y) => "flip y".into(),
-            Action::Finer => "precision -".into(),
-            Action::Coarser => "precision +".into(),
-            Action::Clutch(_) => "clutch".into(),
         }
     }
 }
@@ -118,10 +108,6 @@ mod tests {
             released(Action::Cut(Edge::Down)),
             Some(Action::Cut(Edge::Up))
         );
-        assert_eq!(
-            released(Action::Clutch(Edge::Down)),
-            Some(Action::Clutch(Edge::Up))
-        );
         for action in [
             Action::Reset,
             Action::ResetLastKnob,
@@ -132,12 +118,9 @@ mod tests {
             Action::Reverse,
             Action::Select,
             Action::Flip(Axis::X),
-            Action::Finer,
-            Action::Coarser,
             Action::Focus(Node::Camera, 0),
             Action::Record(Edge::Up),
             Action::Cut(Edge::Up),
-            Action::Clutch(Edge::Up),
         ] {
             assert_eq!(released(action), None, "{action:?}");
         }

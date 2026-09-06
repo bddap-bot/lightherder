@@ -560,23 +560,6 @@ impl App {
                     monitor.flip
                 );
             }
-            Action::Finer => {
-                self.midi.finer();
-                log::info!("precision {}", self.midi.precision());
-            }
-            Action::Coarser => {
-                self.midi.coarser();
-                log::info!("precision {}", self.midi.precision());
-            }
-            // The surface reads the clutch off its own held buttons; the line
-            // is so a performer can see the knobs went quiet on purpose.
-            Action::Clutch(edge) => log::info!(
-                "clutch {}",
-                match edge {
-                    Edge::Down => "held: the knobs stay put",
-                    Edge::Up => "released",
-                }
-            ),
         }
     }
 
@@ -584,6 +567,7 @@ impl App {
         Readout::of(
             &self.params,
             self.focus,
+            self.midi.precision(),
             self.midi.wanted(self.focus, self.shown()),
         )
     }
@@ -1496,7 +1480,6 @@ mod tests {
 
     #[test]
     fn the_overlay_reads_the_knob_the_program_holds_and_not_where_the_fader_stands() {
-        use crate::midi::CLUTCH;
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
@@ -1516,17 +1499,6 @@ mod tests {
         assert_eq!(reads(&app), "1.000", "a page flip: the fader stands at 64");
         app.act(Action::Focus(Node::Switcher, 0));
         assert_eq!(reads(&app), Knob::Switcher.reads(moved));
-
-        surface(&mut app, &board, CLUTCH, 127);
-        surface(&mut app, &board, fader, 0);
-        assert_eq!(app.midi.standing(fader), Some(0));
-        assert_eq!(app.params.knob(Knob::Switcher, app.focus), moved);
-        assert_eq!(
-            reads(&app),
-            Knob::Switcher.reads(moved),
-            "a clutched fader: the fader stands at 0"
-        );
-        surface(&mut app, &board, CLUTCH, 0);
 
         surface(&mut app, &board, fader, 20);
         app.act(Action::ResetLastKnob);

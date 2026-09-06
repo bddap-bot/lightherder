@@ -92,7 +92,7 @@ const fn button(cc: u8, action: Action) -> Button {
 /// stands on its shaft, how late the focused camera's cable is, and then the
 /// focused monitor's frame rate, the one router-output setting a knob turns.
 /// Twelve handles on sixteen controls, so there is no second page and the
-/// four rotaries past the fourth are dead.
+/// precision is absolute on the fifth rotary. The last three rotaries are dead.
 pub(crate) const FADERS: [Fader; 12] = [
     fader(0, Knob::Hue),
     fader(1, Knob::Saturation),
@@ -189,10 +189,7 @@ pub(crate) const FLIP_X: u8 = SELECT - 2;
 pub(crate) const FLIP_Y: u8 = SELECT - 1;
 pub(crate) const REVERSE: u8 = FLIP_X - 1;
 const _: () = assert!(crate::rig::count(Node::Switcher) as u8 + R_ROW <= REVERSE);
-pub(crate) const CLUTCH: u8 = S_ROW + STRIPS as u8 - 1;
-pub(crate) const COARSER: u8 = CLUTCH - 1;
-pub(crate) const FINER: u8 = COARSER - 1;
-const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= FINER);
+pub(crate) const PRECISION: u8 = ROTARY_ROW + 4;
 
 pub(crate) fn spot(cc: u8) -> Option<Spot> {
     let block = |first: u8| (cc >= first && cc < first + STRIPS as u8).then(|| cc - first);
@@ -234,10 +231,9 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 /// puts the whole panel back. Cycle shows and hides the overlay that
 /// explains all of the above — the one button whose job survives not
 /// knowing what any button does. Marker set takes a still of the display,
-/// and record records it for as long as a hand stays on it. The clutch is
-/// the corner, findable by feel while the other hand is on the fader it is
-/// freeing. The track pair and play are dead.
-pub(crate) const BUTTONS: [Button; 27] = [
+/// and record records it for as long as a hand stays on it. The track pair
+/// and play are dead.
+pub(crate) const BUTTONS: [Button; 24] = [
     button(S_ROW, Action::Focus(Node::Camera, 0)),
     button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
     button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
@@ -262,9 +258,6 @@ pub(crate) const BUTTONS: [Button; 27] = [
     button(FLIP_X, Action::Flip(Axis::X)),
     button(FLIP_Y, Action::Flip(Axis::Y)),
     button(SELECT, Action::Select),
-    button(FINER, Action::Finer),
-    button(COARSER, Action::Coarser),
-    button(CLUTCH, Action::Clutch(Edge::Down)),
 ];
 
 /// Every control number a button answers to, which is the whole of what the
@@ -386,38 +379,23 @@ impl Stream {
     }
 }
 
-/// How much of a continuous knob's travel one full throw moves: a power
-/// of two from the whole travel down to a sixteenth, a quarter to start.
-/// A count knob runs its whole count over the throw and does not listen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// How much of a continuous knob's travel one full throw moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Precision {
-    halvings: u8,
+    gain: f32,
 }
 
 impl Precision {
-    const FINEST: u8 = 4;
-    pub const DEFAULT: Precision = Precision { halvings: 2 };
+    pub const DEFAULT: Precision = Precision { gain: 0.25 };
 
     pub fn gain(self) -> f32 {
-        1.0 / f32::from(1u8 << self.halvings)
+        self.gain
     }
 
-    fn finer(self) -> Precision {
+    fn at(x: f32) -> Precision {
         Precision {
-            halvings: (self.halvings + 1).min(Self::FINEST),
+            gain: 2.0f32.powf(-6.0 * (1.0 - x)),
         }
-    }
-
-    fn coarser(self) -> Precision {
-        Precision {
-            halvings: self.halvings.saturating_sub(1),
-        }
-    }
-}
-
-impl std::fmt::Display for Precision {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "1/{}", 1u8 << self.halvings)
     }
 }
 
@@ -512,27 +490,15 @@ impl Midi {
         self.precision
     }
 
-    pub fn finer(&mut self) {
-        self.precision = self.precision.finer();
-    }
-
     pub fn forgive(&mut self, knobs: impl IntoIterator<Item = Knob>) {
         for knob in knobs {
             self.owed[knob as usize] = 0.0;
         }
     }
 
-    pub fn coarser(&mut self) {
-        self.precision = self.precision.coarser();
-    }
-
     #[cfg(test)]
     pub(crate) fn standing(&self, cc: u8) -> Option<u8> {
         self.standing[usize::from(cc)]
-    }
-
-    fn clutched(&self) -> bool {
-        self.held[usize::from(CLUTCH)]
     }
 
     /// Look somewhere other than the real ALSA for the surface. Tests only.
@@ -714,11 +680,12 @@ impl Midi {
         // its page is hidden has still moved, and the knob it turns on the
         // other page must not be charged for that when the page comes back.
         let from = self.standing[usize::from(message.control)].replace(message.value);
+        if message.control == PRECISION {
+            self.precision = Precision::at(f32::from(message.value) / 127.0);
+            return None;
+        }
         if let Some(fader) = FADERS.iter().find(|f| f.cc == message.control) {
             let steps = f32::from(message.value) - f32::from(from?);
-            if self.clutched() {
-                return None;
-            }
             let limit = fader.knob.limit(params);
             let throw = steps / 127.0 * limit.travel();
             let paid = match limit {
@@ -1201,6 +1168,7 @@ mod tests {
                 fader(19, Knob::FrameRate),
             ]
         );
+        assert_eq!(PRECISION, 20);
         assert_eq!(
             BUTTONS,
             [
@@ -1228,12 +1196,9 @@ mod tests {
                 button(69, Action::Flip(Axis::X)),
                 button(70, Action::Flip(Axis::Y)),
                 button(71, Action::Select),
-                button(37, Action::Finer),
-                button(38, Action::Coarser),
-                button(39, Action::Clutch(Edge::Down)),
             ]
         );
-        for cc in [20, 21, 22, 23, 41, 58, 59] {
+        for cc in [21, 22, 23, 37, 38, 39, 41, 58, 59] {
             assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
             assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
         }
@@ -1269,9 +1234,6 @@ mod tests {
             Action::Flip(Axis::X),
             Action::Flip(Axis::Y),
             Action::Select,
-            Action::Finer,
-            Action::Coarser,
-            Action::Clutch(Edge::Down),
         ] {
             let on = BUTTONS.iter().filter(|b| b.action == action).count();
             assert_eq!(on, 1, "{action:?} is on {on} buttons");
@@ -1289,6 +1251,7 @@ mod tests {
         let mut captions: Vec<String> = FADERS
             .iter()
             .map(|f| f.knob.name().to_string())
+            .chain(["precision".to_string()])
             .chain(BUTTONS.iter().map(|b| b.action.caption()))
             .collect();
         for caption in &captions {
@@ -1316,6 +1279,7 @@ mod tests {
         let mut ccs: Vec<u8> = FADERS
             .iter()
             .map(|f| f.cc)
+            .chain([PRECISION])
             .chain(BUTTONS.iter().map(|b| b.cc))
             .collect();
         for cc in &ccs {
@@ -1360,67 +1324,21 @@ mod tests {
     }
 
     #[test]
-    fn the_precision_ladder_is_five_rungs_from_a_whole_travel_to_a_sixteenth() {
+    fn precision_is_absolute_exponential_and_monotone() {
         let (mut midi, params) = surface();
-        assert_eq!(midi.precision().to_string(), "1/4");
-        let throw = |midi: &mut Midi| {
-            turned(midi, &params, 0);
-            turned(midi, &params, 127).unwrap() / 4.0
-        };
-        assert!((throw(&mut midi) - 0.25).abs() < 1e-6);
-        for (press, want) in [
-            (COARSER, "1/2"),
-            (COARSER, "1/1"),
-            (COARSER, "1/1"),
-            (FINER, "1/2"),
-            (FINER, "1/4"),
-            (FINER, "1/8"),
-            (FINER, "1/16"),
-            (FINER, "1/16"),
-        ] {
-            match feed(&mut midi, &params, &cc(press, 127))[..] {
-                [Action::Finer] => midi.finer(),
-                [Action::Coarser] => midi.coarser(),
-                ref other => panic!("{other:?}"),
-            }
-            feed(&mut midi, &params, &cc(press, 0));
-            assert_eq!(midi.precision().to_string(), want);
-            let fraction = throw(&mut midi);
-            assert!(
-                (fraction - midi.precision().gain()).abs() < 1e-6,
-                "{want}: a full throw moved {fraction}"
-            );
+        assert_eq!(midi.precision(), Precision::DEFAULT);
+        let mut previous = 0.0;
+        for value in 0..=127 {
+            assert_eq!(feed(&mut midi, &params, &cc(PRECISION, value)), []);
+            let gain = midi.precision().gain();
+            assert!(gain >= previous);
+            previous = gain;
         }
-    }
-
-    #[test]
-    fn the_clutch_holds_every_knob_still_and_lets_go_without_a_jump() {
-        let (mut midi, params) = surface();
-        assert_eq!(turned(&mut midi, &params, 127), None);
-        assert_eq!(
-            feed(&mut midi, &params, &cc(CLUTCH, 127)),
-            [Action::Clutch(Edge::Down)]
-        );
-        assert_eq!(turned(&mut midi, &params, 64), None);
-        assert_eq!(turned(&mut midi, &params, 0), None);
-        assert_eq!(feed(&mut midi, &params, &cc(16, 50)), []);
-        assert_eq!(feed(&mut midi, &params, &cc(16, 90)), []);
-        assert_eq!(
-            feed(&mut midi, &params, &cc(CLUTCH, 0)),
-            [Action::Clutch(Edge::Up)]
-        );
-        let by = turned(&mut midi, &params, 10).unwrap();
-        assert!((by - 10.0 / 127.0).abs() < 1e-6, "{by}");
-        assert!(matches!(
-            feed(&mut midi, &params, &cc(16, 91))[..],
-            [Action::Turn(Knob::Zoom, by)] if (by - 16f32.ln() / 4.0 / 127.0).abs() < 1e-6
-        ));
-        let lit = |midi: &Midi| midi.wanted(at(0, 0), Shown::default()) & lamp(CLUTCH) != 0;
-        assert!(!lit(&midi));
-        feed(&mut midi, &params, &cc(CLUTCH, 127));
-        assert!(lit(&midi));
-        feed(&mut midi, &params, &cc(CLUTCH, 0));
-        assert!(!lit(&midi));
+        feed(&mut midi, &params, &cc(PRECISION, 0));
+        assert!((midi.precision().gain() - 1.0 / 64.0).abs() < 1e-6);
+        feed(&mut midi, &params, &cc(PRECISION, 127));
+        assert!((midi.precision().gain() - 1.0).abs() < 1e-6);
+        assert!((Precision::at(0.5).gain() - 1.0 / 8.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1437,10 +1355,9 @@ mod tests {
         assert_eq!(delay(&mut midi, 15), None);
         assert_eq!(delay(&mut midi, 16), Some(1.0));
         assert_eq!(delay(&mut midi, 127), Some(3.0));
-        midi.finer();
+        feed(&mut midi, &params, &cc(PRECISION, 0));
         assert_eq!(delay(&mut midi, 0), Some(-4.0));
-        midi.coarser();
-        midi.coarser();
+        feed(&mut midi, &params, &cc(PRECISION, 127));
         assert_eq!(delay(&mut midi, 127), Some(4.0));
         assert_eq!(delay(&mut midi, 112), None);
         midi.drop_port();
@@ -1565,15 +1482,6 @@ mod tests {
             [Action::Flip(Axis::Y)]
         );
         assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), [Action::Select]);
-        assert_eq!(feed(&mut midi, &params, &cc(FINER, 127)), [Action::Finer]);
-        assert_eq!(
-            feed(&mut midi, &params, &cc(COARSER, 127)),
-            [Action::Coarser]
-        );
-        assert_eq!(
-            feed(&mut midi, &params, &cc(CLUTCH, 127)),
-            [Action::Clutch(Edge::Down)]
-        );
         assert_eq!(
             feed(&mut midi, &params, &cc(43, 127)),
             [Action::ResetLastKnob]
@@ -1585,7 +1493,7 @@ mod tests {
     #[test]
     fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        for dead in [20, 41, 58, 59, 100] {
+        for dead in [37, 38, 39, 41, 58, 59, 100] {
             assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
             assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
         }
