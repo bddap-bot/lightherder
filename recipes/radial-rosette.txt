@@ -5,6 +5,7 @@ precision 1
 sw 2
 turn switcher -0.90
 precision 0.666667
+cam 2
 turn zoom -0.03
 turn rotation 0.80
 mon 3

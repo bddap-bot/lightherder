@@ -5,8 +5,12 @@ precision 1
 sw 3
 turn switcher -0.95
 precision 0.666667
-turn zoom -0.02
-turn rotation 0.10
+cam 1
+turn zoom -0.012
+turn rotation 0.04
+cam 2
+turn zoom -0.05
+turn rotation -0.35
 mon 1
 turn saturation 0.3
 mon 3

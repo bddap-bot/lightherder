@@ -254,15 +254,22 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-/// Where the eight routing levers and the shaft stand when the recipe ends,
-/// and the front panel of every monitor a knob was turned on: the rig-state a
-/// written recipe lands on, in the form a reader can check against the code.
+/// Where the eight routing levers and the two shafts stand when the recipe
+/// ends, and the front panel of every monitor a knob was turned on: the
+/// rig-state a written recipe lands on, in the form a reader can check against
+/// the code.
 fn state(board: &Board) -> String {
     let rig = &board.params.rig;
     let mut out = format!(
-        "rig: zoom {:.4} rotation {:+.4}\nswitchers {:.3?} periods {:?}\nselects {:?}",
-        board.params.framing.zoom,
-        board.params.framing.rotation,
+        "shafts {}\nswitchers {:.3?} periods {:?}\nselects {:?}",
+        board
+            .params
+            .shafts
+            .iter()
+            .enumerate()
+            .map(|(i, f)| format!("{}: zoom {:.4} rotation {:+.4}", i + 1, f.zoom, f.rotation))
+            .collect::<Vec<_>>()
+            .join("  "),
         rig.switchers,
         rig.periods,
         std::array::from_fn::<_, { rig::SELECTS }, _>(|m| match rig.on_program(m) {
