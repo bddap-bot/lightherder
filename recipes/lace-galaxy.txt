@@ -1,0 +1,16 @@
+resolution 1920x1080
+seed lavfi:life=s=40x30:r=30:ratio=0.2:mold=6,scale=200:150:flags=neighbor,pad=640:480:400:180:black
+run 40
+coarser
+coarser
+sw 2
+turn switcher -0.90
+finer
+finer
+turn zoom -0.012
+turn rotation 0.05
+mon 3
+turn saturation 0.1
+run 250
+mon 3
+solo

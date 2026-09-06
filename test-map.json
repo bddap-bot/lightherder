@@ -13,6 +13,11 @@
       "why": "the landing contract's one script; shellcheck is what a shell script has, and running it for real is the gate's job"
     },
     {
+      "paths": ["recipes/**"],
+      "tests": [],
+      "why": "the reference frames, the frames this rig answered them with, and the written control sequences that produced them: data a reader compares by eye, and the harness that plays them is Rust under the crate rule below"
+    },
+    {
       "paths": ["**/*.md", ".gitignore", "LICENSE-*"],
       "tests": [],
       "why": "prose and licenses — nothing executes them"
