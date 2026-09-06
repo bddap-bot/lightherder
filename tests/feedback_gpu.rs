@@ -1848,6 +1848,47 @@ fn the_luma_key_cuts_the_dark_passes_the_bright_and_blends_the_edge() {
     );
 }
 
+#[test]
+fn where_the_key_cuts_the_switcher_leaves_the_loop_whole() {
+    // Switcher D keys the seed over camera 3, so where the seed is dark the
+    // monitor keeps what camera 3 hands it undimmed, and only where the seed
+    // is bright does the crossfade take its share. A crossfade would dim the
+    // whole loop to 1-d; the seed's bright quarter is the control that the
+    // crossfade still runs where the key passes.
+    let mut p = keyed_seed(Key::OFF);
+    p.cameras[2].look = one_hot(SEEDED);
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    h.feedback
+        .write_seed(h.queue, &flat_frame((SIZE, SIZE), [200; 3]));
+    h.step_solo(&p, SEEDED);
+    let lit = h.read().at(0.25, 0.25);
+    assert!((lit - 200.0).abs() < 4.0, "the loop should hold 200: {lit}");
+
+    p.input.key = Key {
+        threshold: 0.5,
+        softness: 0.2,
+    };
+    p.rig.switchers[3] = 0.5;
+    h.feedback.write_seed(
+        h.queue,
+        &quartered_frame((SIZE, SIZE), [[20; 3], [255; 3], [255; 3], [255; 3]]),
+    );
+    h.step_solo(&p, SEEDED);
+    let img = h.read();
+    let cut = img.at(0.25, 0.25);
+    assert!(
+        (cut - 200.0).abs() < 4.0,
+        "where the key cuts, the loop should stand whole at 200, not {cut}"
+    );
+    let passed = img.at(0.75, 0.75);
+    assert!(
+        (passed - 227.5).abs() < 4.0,
+        "where the key passes, half of 200 and half of 255: {passed}"
+    );
+}
+
 /// The pixels a file holds, decoded by the same ffmpeg that wrote it — the
 /// one oracle here that does not ask the capture what it captured.
 fn decoded(path: &std::path::Path, size: (u32, u32)) -> Vec<u8> {

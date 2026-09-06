@@ -2,12 +2,14 @@
 //! switchers and the router selects in front of them, and the graph a
 //! setting of those makes.
 //!
-//! Every switcher on the rig is a crossfade between two feeds and a router
-//! select picks one of two, so what any monitor shows is a weighted sum of
-//! the three cameras and the seed. [`Rig`] is that setting and the whole of
-//! the routing state; [`Rig::feed`] multiplies the chain out on demand, and
-//! no copy of the products is kept — a stored matrix would be a second state
-//! standing beside the levers that set it, free to drift from them.
+//! Every switcher on the rig is a crossfade between two feeds — D keys its
+//! In2, the seed, over its In1 — and a router select picks one of two, so
+//! what any monitor shows is a weighted sum of the three cameras and the
+//! seed, the weights moving with the key. [`Rig`] is that setting and the
+//! whole of the routing state; [`Rig::feed`] multiplies the chain out on
+//! demand, and no copy of the products is kept — a stored matrix would be a
+//! second state standing beside the levers that set it, free to drift from
+//! them.
 
 use crate::affine::Framing;
 use crate::input::Input;
@@ -20,6 +22,12 @@ enum Cam {
     A,
     B,
     Three,
+}
+
+impl Cam {
+    /// Switcher D's In1, which it keys the seed over: where the key cuts,
+    /// this camera stands whole.
+    const KEYED_OVER: Cam = Cam::Three;
 }
 
 /// In [`Params::monitors`] order. A structure is an upper and a lower monitor
@@ -44,17 +52,19 @@ impl Screen {
     ];
 }
 
-/// The luma key the seed meets on its way into the switcher: passing from
+/// The luma key switcher D keys the seed over its In1 with: passing from
 /// mid-grey up and cutting to nothing a little below it, which is a lit
 /// subject against an unlit room — what a camera pointed at a couch faces.
-/// A fixed character of the rig, not a control: the board has no key.
+/// Where it cuts, In1 stands whole. A fixed character of the rig, not a
+/// control: the board has no key.
 const SEED_KEY: Key = Key {
     threshold: 0.35,
     softness: 0.08,
 };
 
-/// The four M/Es, each a crossfade from its In1 to its In2. C and D are the
-/// chain that brings the rotating monitor and the seed into structure B.
+/// The four M/Es, each a crossfade from its In1 to its In2 — D a keyer,
+/// since its In2 is the seed. C and D are the chain that brings the rotating
+/// monitor and the seed into structure B.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switcher {
     A,
@@ -115,7 +125,8 @@ pub const fn count(node: Node) -> usize {
 pub const MAX_PERIOD: u32 = 60;
 
 /// One feed on the rig's cabling, as the share of each camera and of the
-/// seed it carries. The shares sum to one: nothing on the path amplifies.
+/// seed it carries where the seed's key passes. The shares sum to one:
+/// nothing on the path amplifies.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Feed {
     pub(crate) cameras: [f32; CAMERAS],
@@ -140,6 +151,18 @@ impl Feed {
         Feed {
             cameras: std::array::from_fn(|c| lerp(one.cameras[c], two.cameras[c])),
             seed: lerp(one.seed, two.seed),
+        }
+    }
+
+    /// Camera `c`'s share where the seed's key cuts: the seed's whole share
+    /// goes back to the camera D keyed it over, and every other camera's
+    /// share is what it was — the key moves light between the seed and that
+    /// one camera, so the shares still sum to one.
+    pub(crate) fn cut(&self, c: usize) -> f32 {
+        if c == Cam::KEYED_OVER as usize {
+            self.cameras[c] + self.seed
+        } else {
+            self.cameras[c]
         }
     }
 }
@@ -170,7 +193,7 @@ impl Rig {
             Switcher::A => (Feed::camera(Cam::A), Feed::camera(Cam::B)),
             Switcher::B => (Feed::camera(Cam::B), self.program(Switcher::C)),
             Switcher::C => (Feed::camera(Cam::A), self.program(Switcher::D)),
-            Switcher::D => (Feed::camera(Cam::Three), Feed::SEED),
+            Switcher::D => (Feed::camera(Cam::KEYED_OVER), Feed::SEED),
         };
         Feed::mix(one, two, self.switchers[switcher as usize])
     }
@@ -363,6 +386,22 @@ mod tests {
     }
 
     #[test]
+    fn where_the_key_cuts_the_seed_hands_its_share_to_camera_three() {
+        let [b, c, d] = [0.4, 0.6, 0.2];
+        let rig = all(Select::Program, [0.3, b, c, d]);
+        let feed = rig.shows(Screen::UpperB);
+        let cut: [f32; CAMERAS] = std::array::from_fn(|c| feed.cut(c));
+        assert!(
+            cut.iter()
+                .zip([b * (1.0 - c), 1.0 - b, b * c])
+                .all(|(have, want)| close(*have, want)),
+            "{cut:?}"
+        );
+        let direct = rig.shows(Screen::Rotating);
+        assert_eq!(std::array::from_fn(|c| direct.cut(c)), direct.cameras);
+    }
+
+    #[test]
     fn each_select_is_its_own_monitors() {
         let mut rig = all(Select::Program, [1.0; SWITCHERS]);
         rig.selects[0] = Select::Direct;
@@ -391,8 +430,12 @@ mod tests {
                             };
                             for screen in Screen::ALL {
                                 let feed = rig.shows(screen);
-                                let sum: f32 = feed.cameras.iter().sum::<f32>() + feed.seed;
-                                assert!(close(sum, 1.0), "{rig:?} {screen:?}: {feed:?}");
+                                let cameras: f32 = feed.cameras.iter().sum();
+                                let cut: f32 = (0..CAMERAS).map(|c| feed.cut(c)).sum();
+                                assert!(
+                                    close(cameras + feed.seed, 1.0) && close(cut, 1.0),
+                                    "{rig:?} {screen:?}: {feed:?}"
+                                );
                             }
                         }
                     }

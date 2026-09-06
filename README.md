@@ -55,14 +55,15 @@ else.
 The cameras stand on **one shaft**: `zoom` and `rotation` are the rig's, one
 value each.
 
-Four **switchers**, the M/Es, each a crossfade between two feeds:
+Four **switchers**, the M/Es, each a crossfade between two feeds — and D a
+keyer, since its In2 is the seed:
 
 | | In1 | In2 |
 | --- | --- | --- |
 | A | camera A | camera B |
 | B | camera B | C's program |
 | C | camera A | D's program |
-| D | camera 3 | the seed |
+| D | camera 3 | the seed, keyed |
 
 and one **router select** per structure monitor: its own camera direct, or its
 switcher's program. One or the other, never a mix — mixing is the switcher's
@@ -87,7 +88,9 @@ is asked for and held nowhere. Switcher A and the four selects land on it
 directly; B, C and D reach a monitor only as products of one another, so a
 stored matrix would be a second state standing beside the levers that set it,
 free to drift from them. At every setting of the eight, on every monitor, the
-shares sum to exactly one: nothing on the rig's cabling amplifies.
+shares sum to exactly one: nothing on the rig's cabling amplifies. The key
+moves the shares per pixel without breaking that: where it cuts the seed, the
+seed's whole share goes back to camera 3, which D keyed it over.
 
 It starts at **identity**: every monitor on its program — on Direct the
 switchers would feed nothing — and every switcher run to In2, the end away
@@ -172,9 +175,14 @@ passes none of them.
 On its way in it meets the switcher's **luma key**: passing from mid-grey up
 and cutting to nothing a little below, which is a lit subject against an unlit
 room — what a camera pointed at a couch faces. The lit subject feeds the rig
-and the room behind it does not. That is where a key can sit at all; on a
-loop's own camera it would gate the trail it is building, so there would never
-be a trail. It is fixed character, not a control: the board has no key.
+and the room behind it does not. M/E D **keys** the seed over camera 3 rather
+than fading to it: where the key passes, the crossfade takes its share; where
+it cuts, camera 3 stands whole. That is the difference between a trail that
+survives the seed and one that does not — a crossfade at `d` would dim the
+loop to `1-d` everywhere, dark room included, on every pass. That is also where
+a key can sit at all; on a loop's own camera it would gate the trail it is
+building, so there would never be a trail. It is fixed character, not a
+control: the board has no key.
 
 How much of it reaches a monitor is the switchers' business, which is what
 makes it playable without a knob of its own. Near unity a little goes a long
@@ -557,7 +565,8 @@ monitor on the whole target. So does the seed: it shows on the monitor the
 switcher sends it to, its layer is current however the ring turns and sits
 past the whole ring, blanking the monitors leaves it alone, the switcher sums
 it with a camera on one monitor, it arrives whole however the cameras are set,
-and the luma key cuts the dark, passes the bright and blends the edge between.
+the luma key cuts the dark, passes the bright and blends the edge between, and
+where it cuts the switcher leaves the loop whole.
 A camera with a frame delay hands on the frame it saw that many passes ago,
 byte for byte, a slow router output holds a frame for as long as its cadence
 says and a camera on it sees exactly that hold, delayed or not, and blanking

@@ -364,12 +364,14 @@ things stand between the two, and only one of them is technique:
   is hardcoded to one camera device, while the original's second input is a media
   player showing whatever the piece needs — two dots, a word, a painting, a fish
   tank. **#74**
-- **The switchers crossfade; they cannot key.** A crossfade at `d` dims the
-  background loop to `1-d` *everywhere*, including where the incoming picture is
-  black. A keyer leaves the background whole and replaces it only where the key
-  passes. Inside a loop running at a gain just under one, that difference is
+- **The switchers crossfaded where the original keys.** A crossfade at `d` dims
+  the background loop to `1-d` *everywhere*, including where the incoming picture
+  is black. A keyer leaves the background whole and replaces it only where the
+  key passes. Inside a loop running at a gain just under one, that difference is
   whether the trail survives the seed at all — and keying a second loop over the
-  first is how the original's densest scenes are made. **#71**
+  first is how the original's densest scenes are made. Fixed: M/E D now keys the
+  seed over camera 3. The frames here predate it and still show the crossfade.
+  **#71**
 - **One shaft.** Both cameras share one zoom and one rotation, so two structures
   crossed into each other evolve identically and Insanity Mode comes out a
   mirror. **#75**

@@ -10,10 +10,11 @@ struct Tap {
     // affine::sample_transform.
     row0: vec4<f32>,
     row1: vec4<f32>,
-    // rgb: routing x splitter x gain, per channel. a: source layer.
-    weight: vec4<f32>,
-    // The switcher's keyer: x luma threshold, y softness, zw padding.
-    key: vec4<f32>,
+    // rgb: routing x splitter x gain, per channel, where the seed's key
+    // passes. a: source layer.
+    passes: vec4<f32>,
+    // rgb: the same where the key cuts. a: padding.
+    cuts: vec4<f32>,
 };
 
 struct Uniforms {
@@ -31,6 +32,10 @@ struct Uniforms {
     // xyz: FCC NTSC luma, handed over rather than written here so the crate
     // has one copy of it.
     luma: vec4<f32>,
+    // The switcher's keyer, judged on the seed: x luma threshold, y softness,
+    // z the seed's tap index, or -1 when no seed reaches this monitor and the
+    // key passes everything. w: padding.
+    key: vec4<f32>,
     // As long as feedback::MAX_TAPS, which is every camera through every
     // monitor plus the seed. A second spelling of that number: a static
     // assertion beside it fails the build if the Rust side grows, since wgpu
@@ -91,10 +96,10 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
 }
 
 // What one camera sees of one source monitor at one point — the sampling,
-// not `Camera::look`, whose splitter weights are already folded into
-// `tap.weight`. Past a monitor's
-// edge the camera sees an unlit room, but a clamped sampler returns the
-// border texel there, which would smear across the frame.
+// not `Camera::look`, whose splitter weights are already folded into the
+// tap's shares. Past a monitor's edge the camera sees an unlit room, but a
+// clamped sampler returns the border texel there, which would smear across
+// the frame.
 //
 // textureSampleLevel, not textureSample, throughout this shader: the monitor
 // textures have a single mip level, so the derivatives textureSample computes
@@ -126,19 +131,34 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
 
     var fed_back = vec3<f32>(0.0);
     let count = u32(u.info.x);
+    // The keyer, judged once per fragment on the seed's own sample: it is
+    // switcher D's, so what it gates is the whole hand-over — the seed in,
+    // and the taps it is keyed over out, share for share. It passes
+    // everything at or above its threshold and finishes cutting one softness
+    // below it, so a threshold of zero is exactly inert — inside a loop,
+    // "almost passes" is a ratchet. The epsilon keeps smoothstep's edges
+    // apart at zero softness, where it would otherwise divide by nothing.
+    var alpha = 1.0;
+    let keyed = i32(u.key.z);
+    if keyed >= 0 {
+        let seed = u.taps[keyed];
+        let seed_uv = vec2<f32>(dot(seed.row0.xyz, p), dot(seed.row1.xyz, p));
+        let soft = max(u.key.y, 1e-4);
+        alpha = smoothstep(u.key.x - soft, u.key.x, dot(u.luma.xyz, seen_at(seed_uv, i32(seed.passes.a))));
+    }
+
     for (var t = 0u; t < count; t++) {
         let tap = u.taps[t];
         let src_uv = vec2<f32>(dot(tap.row0.xyz, p), dot(tap.row1.xyz, p));
-        let layer = i32(tap.weight.a);
+        let layer = i32(tap.passes.a);
         let raw = seen_at(src_uv, layer);
         var signal = raw;
 
         // The monitor's sharpness, an unsharp mask a texel wide on the signal
         // the switcher hands it. That signal is summed per fragment and never
-        // re-read, so the mask is taken per tap from the bank texels, the
-        // neighbours' keyer verdicts taken as the centre's. The arms are
-        // summed in pairs so four equal samples come back as exactly the
-        // centre.
+        // re-read, so the mask is taken per tap from the bank texels. The
+        // arms are summed in pairs so four equal samples come back as
+        // exactly the centre.
         // Skipped at rest — four reads a texel on every tap of every monitor,
         // for nothing — and past the source's edge, where the centre is the
         // dark room and an arm that lands back inside would cut a dark rim
@@ -154,16 +174,7 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
             signal += sharpness * (raw - blurred);
         }
 
-        // The keyer, judged on the centre sample: what it gates is the
-        // switcher's whole hand-over, the way the gain scales it. It passes
-        // everything at or above its threshold and finishes cutting one
-        // softness below it, so a threshold of zero is exactly inert —
-        // inside a loop, "almost passes" is a ratchet. The epsilon keeps
-        // smoothstep's edges apart at zero softness, where it would
-        // otherwise divide by nothing.
-        let soft = max(tap.key.y, 1e-4);
-        let alpha = smoothstep(tap.key.x - soft, tap.key.x, dot(u.luma.xyz, raw));
-        fed_back += signal * tap.weight.rgb * alpha;
+        fed_back += signal * mix(tap.cuts.rgb, tap.passes.rgb, alpha);
     }
 
     return vec4<f32>(front_panel(fed_back), 1.0);

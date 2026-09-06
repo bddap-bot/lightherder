@@ -126,9 +126,11 @@ mod tests {
     fn the_instrument_is_contracting() {
         // The light monitor `i` shows next frame is at most `sum` times the
         // brightest thing on any monitor this frame, so `sum < 1` means it
-        // settles instead of blooming to white. The seed is left out: it is light entering the graph,
-        // so it belongs to what the loop is driven *by*, not to what it
-        // multiplies.
+        // settles instead of blooming to white. The seed is left out: it is
+        // light entering the graph, so it belongs to what the loop is driven
+        // *by*, not to what it multiplies. Where its key cuts, the cameras it
+        // was keyed over stand at their larger share, so that is the share
+        // measured.
         //
         // At every setting of the switchers, not only the one it starts on:
         // a crossfade is a fader, and a rig that blooms at the top of one is
@@ -144,13 +146,14 @@ mod tests {
                         _ => crate::rig::Select::Program,
                     });
                     for m in 0..params.monitors.len() {
+                        let feed = params.rig.feed(m);
                         let sum = (0..3)
                             .map(|ch| {
                                 (0..params.cameras.len())
                                     .map(|c| {
                                         let cam = &params.cameras[c];
                                         let round: f32 = cam.look.iter().sum();
-                                        params.route(m, c) * cam.gain[ch] * round
+                                        feed.cut(c) * cam.gain[ch] * round
                                     })
                                     .sum::<f32>()
                             })
