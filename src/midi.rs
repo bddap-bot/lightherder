@@ -392,7 +392,10 @@ impl Precision {
         self.gain
     }
 
-    fn at(x: f32) -> Precision {
+    /// Where the rotary stands, as the fraction of a knob's travel a full
+    /// throw of a fader moves it: the one place that curve is written, so a
+    /// recipe played off the panel and one played into the graph agree.
+    pub fn at(x: f32) -> Precision {
         Precision {
             gain: 2.0f32.powf(-6.0 * (1.0 - x)),
         }

@@ -4,7 +4,9 @@ Eight scenes from Dave Blair's published Light Herder work, and what it takes to
 reach each one on this rig. Every recipe starts from **■ stop** — the whole panel
 back to identity — and is written in the control surface's own vocabulary: a select
 row picks a node, a fader turns the knob it points at by how far it moves, and
-**S6/S7** halve or double what a full throw is worth. `+1 throw` is fader 8 run from
+the **precision rotary** (rotary 5) says what a full throw is worth, from a
+sixty-fourth of a knob's travel to the whole of it; it sits at a quarter until
+a hand moves it. `+1 throw` is fader 8 run from
 one end of its travel to the other; a fraction is that fraction of the travel.
 
 Each section carries the reference frame beside ours, the rig-state the recipe lands
@@ -14,7 +16,8 @@ The frames here were rendered off screen by `examples/recipe`, which plays the s
 written sequence into `Feedback` and writes the frame with the same `Capture` the
 marker-set button uses. Every `recipes/<slug>.txt` beside this file is the script
 that produced the right-hand half of that scene's image, and re-running it
-reproduces the frame exactly:
+reproduces the frame byte for byte — every seed here is frozen on one frame, so
+nothing in a run is left to when the machine got round to it:
 
 ```
 nix-shell --run "cargo run --release --example recipe -- recipes/single-spiral.txt ours.png"
@@ -33,9 +36,8 @@ recipe looks close but coarse.
 The artist's own seeds are exactly that: two dots on a phone, the word "Fractal", a
 painting, a live fish tank. **The instrument cannot yet be told to use one** — the
 seed is hardcoded to `/dev/video0` — so these recipes name theirs on a `seed` line
-the harness reads, and the fix rides in [PR-SEED]. On the instrument as it stands
-you get the equivalent by pointing the camera at a second screen playing the same
-thing.
+the harness reads, and the fix rides in #74. On the instrument as it stands you get
+the equivalent by pointing the camera at a second screen playing the same thing.
 
 ## The three levers that shape a scene
 
@@ -69,10 +71,10 @@ A sparse white nautilus of dotted circle-outlines, one clean logarithmic spiral 
 ```
 S1                       focus camera A — the structure the cool tail comes from
 R1                       focus switcher A
-S7 S7                    precision + twice: a full throw is now the whole travel
+rotary 5 to the top       precision 1/1: a full throw is now the whole travel
 fader 8  -0.95 throw     switcher A almost to In1: camera A's own loop, a twentieth of a
                          seed left in to keep feeding it
-S6 S6                    precision - twice: back to a quarter throw
+rotary 5 to two-thirds    precision 1/4 again, which is where it starts
 rotary 1 -0.02 throw     zoom 0.986 — the copies walk inward
 rotary 2 +0.09 throw     rotation +0.141 rad a pass — about eight degrees, far enough
                          apart that each copy reads
@@ -105,9 +107,9 @@ A dense orange and cream spiral: about fifteen nested scalloped crescents unwind
 ```
 S2                       focus camera B — the structure whose red survives
 R2                       focus switcher B
-S7 S7                    precision +
+rotary 5 to the top       precision 1/1
 fader 8  -0.95 throw     switcher B to 0.05: structure B's own loop
-S6 S6                    precision -
+rotary 5 to two-thirds    precision 1/4
 rotary 1 -0.05 throw     zoom 0.966 — a strong pull inward, so the arm is short and steep
 rotary 2 +0.22 throw     rotation +0.346 rad — twenty degrees a copy
 M3                       focus monitor upper B
@@ -171,9 +173,9 @@ A radially symmetric rosette: scalloped arms pinwheeling around a saturated core
 
 ```
 S2 / R2
-S7 S7
+rotary 5 to the top
 fader 8  -0.90 throw     switcher B to 0.10
-S6 S6
+rotary 5 to two-thirds
 rotary 1 -0.03 throw     zoom 0.979
 rotary 2 +0.80 throw     rotation +1.257 rad = 2π/5 exactly. Every fifth copy lands on
                          the first, so the arm closes into a rosette instead of a spiral
@@ -205,9 +207,9 @@ A circular disc of dense white lace — hundreds of tiny cell-shaped copies fill
 
 ```
 S2 / R2
-S7 S7
+rotary 5 to the top
 fader 8  -0.90 throw
-S6 S6
+rotary 5 to two-thirds
 rotary 1 -0.012 throw    zoom 0.992 — barely inward, so the copies pile up rather than
                          run away
 rotary 2 +0.05 throw     rotation +0.079 rad — four degrees, tight enough that the copies
@@ -240,9 +242,9 @@ A hot-magenta annulus on black: a speckled outer ring and about twenty swept com
 
 ```
 S2 / R2
-S7 S7
+rotary 5 to the top
 fader 8  -0.95 throw
-S6 S6
+rotary 5 to two-thirds
 rotary 1 +0.04 throw     zoom 1.028 — above one, so the copies blow OUTWARD and leave the
                          middle empty. This is the only lever that turns a spiral into a
                          ring
@@ -275,7 +277,7 @@ A tiled field rather than a spiral: copies of one loop's whole picture scattered
 
 ```
 R3                       focus switcher C
-S7 S7
+rotary 5 to the top
 fader 8  -0.80 throw     switcher C to 0.20: camera A's picture, plus a fifth of the seed
                          chain still coming through
 R2
@@ -283,7 +285,7 @@ fader 8  -0.50 throw     switcher B to the middle: structure B shows half its ow
                          half structure A's — which is what makes B's spiral out of A's
 R1
 fader 8  -0.85 throw     switcher A to 0.15: structure A keeps its own loop
-S6 S6
+rotary 5 to two-thirds
 rotary 1 -0.02 throw     zoom 0.986
 rotary 2 +0.09 throw     rotation +0.141
 M3
@@ -315,12 +317,12 @@ The artist's own side-by-side of both monitor structures, each composed entirely
 
 ```
 R3                       focus switcher C
-S7 S7
+rotary 5 to the top
 fader 8  -0.95 throw     switcher C to In1 = camera A. Switchers A and B are already at
                          In2 out of the box, so structure A now shows camera B and
                          structure B shows camera A: each is made of the other, and that
                          is the whole of Insanity Mode — one fader from reset
-S6 S6
+rotary 5 to two-thirds
 rotary 1 -0.02 throw     zoom 0.986
 rotary 2 +0.10 throw     rotation +0.157
 M1  fader 2 +0.30        saturation 1.30 on upper A
@@ -339,7 +341,7 @@ mon 1/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 
 mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
 ```
 
-**Not reproduced: the two structures cannot differ → PR-SHAFT.** The mutual composition
+**Not reproduced: the two structures cannot differ → #75.** The mutual composition
 is right and takes one fader, but every monitor lands on the *same* picture. On the
 original the two panels differ because the two cameras are moved independently — they
 stand on separate floor stands in the artist's own photographs of the rig. Here `zoom`
@@ -361,20 +363,23 @@ things stand between the two, and only one of them is technique:
   on these images. But the instrument gives no way to plug anything in: the seed
   is hardcoded to one camera device, while the original's second input is a media
   player showing whatever the piece needs — two dots, a word, a painting, a fish
-  tank. **[PR-SEED]**
+  tank. **#74**
 - **The switchers crossfade; they cannot key.** A crossfade at `d` dims the
   background loop to `1-d` *everywhere*, including where the incoming picture is
   black. A keyer leaves the background whole and replaces it only where the key
   passes. Inside a loop running at a gain just under one, that difference is
   whether the trail survives the seed at all — and keying a second loop over the
-  first is how the original's densest scenes are made. **[ISSUE-KEY]**
+  first is how the original's densest scenes are made. **#71**
 - **One shaft.** Both cameras share one zoom and one rotation, so two structures
   crossed into each other evolve identically and Insanity Mode comes out a
-  mirror. **[PR-SHAFT]**
+  mirror. **#75**
 
-And one bug found on the way, unrelated to any scene: the delay units reach two
-frames, hardcoded, where the bank affords more than twenty at the default
-resolution and the original dials up to thirty. **[PR-DELAY]**
+Three more found on the way, none of them the reason a scene missed: the playable
+band of every continuous knob is a few MIDI codes wide against a travel nobody can
+use (**#73**); the delay units reach two frames, hardcoded, where the bank affords
+more than twenty at the default resolution and the original dials up to thirty; and
+the schematics wire a direct loop between camera 3 and the rotating monitor that
+this rig can only close the long way round (**#72**).
 
 ## The harness
 
@@ -390,7 +395,7 @@ control to a line —
 | `seed FORMAT:NAME` | what is on the switcher, as ffmpeg's `-f` and `-i` |
 | `cam N` / `mon N` / `sw N` | the S, M and R select rows |
 | `turn KNOB THROW` | a fader or rotary moved `THROW` of its travel, signed |
-| `finer` / `coarser` | S6 / S7 |
+| `precision X` | rotary 5, where X is its travel: the precision is 2^-6(1-X) |
 | `select` / `reverse` / `flip x` / `flip y` | R8 / R5 / R6 / R7 |
 | `cut` / `release` | marker prev, down and up |
 | `blank` | marker next |

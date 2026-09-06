@@ -1,12 +1,10 @@
 resolution 1920x1080
-seed lavfi:life=s=40x30:r=30:ratio=0.2:mold=6,scale=200:150:flags=neighbor,pad=640:480:400:180:black
+seed lavfi:life=s=40x30:r=30:ratio=0.2:mold=6:random_seed=7,select=eq(n\,60),loop=loop=-1:size=1,scale=200:150:flags=neighbor,pad=640:480:400:180:black
 run 40
-coarser
-coarser
+precision 1
 sw 2
 turn switcher -0.95
-finer
-finer
+precision 0.666667
 turn zoom -0.05
 turn rotation 0.22
 mon 3

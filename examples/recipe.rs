@@ -19,6 +19,7 @@ use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::gpu::Gpu;
 use lightherder::input::{Input, Pattern, Source};
+use lightherder::midi::Precision;
 use lightherder::params::{Focus, Knob, Limit, Node, Params};
 use lightherder::present::{Present, View};
 use lightherder::rig::{self, Rig};
@@ -32,7 +33,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 struct Board {
     params: Params,
     focus: Focus,
-    halvings: u8,
+    precision: Precision,
     owed: [f32; Knob::ALL.len()],
     cut: Option<usize>,
     solo: bool,
@@ -44,7 +45,7 @@ impl Board {
         Board {
             params,
             focus: Focus::default(),
-            halvings: 2,
+            precision: Precision::DEFAULT,
             owed: [0.0; Knob::ALL.len()],
             cut: None,
             solo: false,
@@ -63,7 +64,7 @@ impl Board {
                 *owed -= paid;
                 paid
             }
-            _ => moved / f32::from(1u8 << self.halvings),
+            _ => moved * self.precision.gain(),
         };
         self.params.nudge(knob, paid, self.focus);
     }
@@ -184,8 +185,7 @@ fn play(board: &mut Board, rig: &mut Rig3, words: &[String]) -> Result<(), Strin
             let knob = knob(arg(1).ok_or("turn needs a knob")?)?;
             board.turn(knob, number(arg(2), "turn")?);
         }
-        Some("finer") => board.halvings = (board.halvings + 1).min(4),
-        Some("coarser") => board.halvings = board.halvings.saturating_sub(1),
+        Some("precision") => board.precision = Precision::at(number(arg(1), "precision")?),
         Some("select") => {
             board.params.rig.select(board.focus.monitor);
         }
