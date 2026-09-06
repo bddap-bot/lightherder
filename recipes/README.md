@@ -89,7 +89,7 @@ fader 2  +0.20 throw     saturation 1.20 — lifts the tint the camera's own gai
 **Lands on:**
 
 ```
-rig: zoom 0.9862 rotation +0.1414
+shafts 1: zoom 0.9862 rotation +0.1414  2: zoom 1.0000 rotation +0.0000
 switchers [0.050, 1.000, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 1/5: hue +0.000  sat 1.200  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
@@ -125,10 +125,10 @@ fader 2  +0.30 throw     saturation 1.30
 **Lands on:**
 
 ```
-rig: zoom 0.9659 rotation +0.3456
+shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9659 rotation +0.3456
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 1
+mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
 ```
 
 **Reproduced.** Same coil, same warm core against a cream outer arm — the warmth is
@@ -157,10 +157,10 @@ fader 1  +0.05 throw     hue +0.079 rad a pass — the phase walks the trail thr
 **Lands on:**
 
 ```
-rig: zoom 0.9727 rotation +0.2827
+shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9727 rotation +0.2827
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.079  sat 1.400  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 1
+mon 3/5: hue +0.079  sat 1.400  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
 ```
 
 **Reproduced.** Hue is a phase here, so it turns chroma that is already there and does
@@ -192,10 +192,10 @@ fader 2  +0.25 throw     saturation 1.25
 **Lands on:**
 
 ```
-rig: zoom 0.9794 rotation +1.2566
+shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9794 rotation +1.2566
 switchers [1.000, 0.100, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.250  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 1
+mon 3/5: hue +0.000  sat 1.250  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
 ```
 
 **Reproduced.** The arm count is the rotation: set it to 2π/n and the spiral becomes an
@@ -227,10 +227,10 @@ fader 2  +0.10 throw     saturation 1.10 — almost none: this one is a luminanc
 **Lands on:**
 
 ```
-rig: zoom 0.9917 rotation +0.0785
+shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9917 rotation +0.0785
 switchers [1.000, 0.100, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.100  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 1
+mon 3/5: hue +0.000  sat 1.100  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
 ```
 
 **Reproduced** in structure. The lace itself is the seed's grain magnified a little each
@@ -264,10 +264,10 @@ fader 2  +0.50 throw     saturation 1.50
 **Lands on:**
 
 ```
-rig: zoom 1.0281 rotation +0.3142
+shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 1.0281 rotation +0.3142
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.500  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 1
+mon 3/5: hue +0.000  sat 1.500  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
 ```
 
 **Reproduced.** The comma-shaped copies and the black middle are the outward zoom; the
@@ -303,15 +303,15 @@ fader 2  +0.30 throw     saturation 1.30
 **Lands on:**
 
 ```
-rig: zoom 0.9862 rotation +0.1414
+shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9862 rotation +0.1414
 switchers [0.150, 0.500, 0.200, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.400 of cam 1
+mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.500 of cam 2
 ```
 
 **Reproduced.** Structure B's copies each carry structure A's spiral, which is the
-scene. The two spirals share a turn rate, though, because the shaft is one — see
-insanity-mode-pair below.
+scene, and the two spirals turn at rates of their own because the two structures'
+cameras stand on shafts of their own.
 
 ## insanity-mode-pair — Insanity Mode
 
@@ -329,8 +329,12 @@ fader 8  -0.95 throw     switcher C to In1 = camera A. Switchers A and B are alr
                          structure B shows camera A: each is made of the other, and that
                          is the whole of Insanity Mode — one fader from reset
 rotary 5 to two-thirds
-rotary 1 -0.02 throw     zoom 0.986
-rotary 2 +0.10 throw     rotation +0.157
+S1                       focus camera A, which is shaft 1
+rotary 1 -0.012 throw    zoom 0.992 — barely inward
+rotary 2 +0.04 throw     rotation +0.063 rad, under four degrees a pass
+S2                       focus camera B, which is its own shaft
+rotary 1 -0.05 throw     zoom 0.966 — a much stronger pull
+rotary 2 -0.35 throw     rotation -0.550 rad, and the other way round
 M1  fader 2 +0.30        saturation 1.30 on upper A
 M3  fader 2 +0.30        saturation 1.30 on upper B
                          (300 passes)
@@ -340,29 +344,33 @@ M3  fader 2 +0.30        saturation 1.30 on upper B
 **Lands on:**
 
 ```
-rig: zoom 0.9862 rotation +0.1571
+shafts 1: zoom 0.9917 rotation +0.0628  2: zoom 0.9659 rotation -0.5498
 switchers [1.000, 1.000, 0.050, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 1/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 1
-mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
+mon 1/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 1.000 of cam 2
+mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 2
 ```
 
-**Not reproduced: the two structures cannot differ → #75.** The mutual composition
-is right and takes one fader, but every monitor lands on the *same* picture. On the
-original the two panels differ because the two cameras are moved independently — they
-stand on separate floor stands in the artist's own photographs of the rig. Here `zoom`
-and `rotation` are the rig's, one value each, so once the structures are crossed they
-evolve identically and Insanity Mode is a mirror rather than a dialogue.
+**Reproduced.** The mutual composition takes one fader from reset, and the two
+structures land on different pictures because their cameras are framed apart —
+structure A on a slow, barely-shrinking shaft, structure B on a fast one turning the
+other way. With one shaft this scene came out a mirror: all five monitors on the same
+picture, since crossed structures sharing a framing evolve identically. That is the
+whole of what this change buys, and it is what the artist's frame shows — the two
+panels are the same loops in two different hands.
+
+Ours still differs from his by degree rather than by kind: he moves the cameras
+through a piece and the two forms diverge much further than two parked shafts can.
 
 ---
 
 ## What did not come out, and why
 
-Seven of the eight scenes reproduce as *form*: the coil, the turn count, the
-n-fold rosette, the annulus, the tiling of one loop's picture by another. What
-this rig does not reach is the original's **density** — the reference frames carry
-a second and third level of copy inside every crescent, and ours carry one. Three
-things stand between the two, and only one of them is technique:
+All eight scenes reproduce as *form*: the coil, the turn count, the n-fold rosette,
+the annulus, the tiling of one loop's picture by another, the two structures
+composing each other. What this rig does not reach is the original's **density** —
+the reference frames carry a second and third level of copy inside every crescent,
+and ours carry one. Three things stood between them, and only one is technique:
 
 - **The seed.** Fine structure in the picture comes from fine structure in the
   light that entered. That part is technique, and it is the single biggest lever
@@ -377,9 +385,10 @@ things stand between the two, and only one of them is technique:
   whether the trail survives the seed at all — and keying a second loop over the
   first is how the original's densest scenes are made. Fixed: M/E D now keys the
   seed over camera 3, and the frames here are rendered with it. **#71**
-- **One shaft.** Both cameras share one zoom and one rotation, so two structures
-  crossed into each other evolve identically and Insanity Mode comes out a
-  mirror. **#75**
+- **One shaft.** Both cameras shared one zoom and one rotation, so two structures
+  crossed into each other evolved identically and Insanity Mode came out a
+  mirror. Fixed: each camera is framed on its own shaft, as the schematic draws
+  them, and the pair above is rendered that way. **#75**
 
 Three more found on the way, none of them the reason a scene missed: the playable
 band of every continuous knob is a few MIDI codes wide against a travel nobody can
@@ -400,7 +409,7 @@ control to a line —
 | --- | --- |
 | `resolution WxH` | how big every monitor is, before the first pass |
 | `seed FORMAT:NAME` | what is on the switcher, as ffmpeg's `-f` and `-i` |
-| `cam N` / `mon N` / `sw N` | the S, M and R select rows |
+| `cam N` / `mon N` / `sw N` | the S, M and R select rows; `cam N` also says which shaft a later `turn zoom` or `turn rotation` lands on |
 | `turn KNOB THROW` | a fader or rotary moved `THROW` of its travel, signed |
 | `precision X` | rotary 5, where X is its travel: the precision is 2^-6(1-X) |
 | `select` / `reverse` / `flip x` / `flip y` | R8 / R5 / R6 / R7 |
