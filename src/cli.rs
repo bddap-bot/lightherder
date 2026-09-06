@@ -1,6 +1,9 @@
-//! The command line: how much detail the instrument carries, and whether the
-//! window covers the display it opens on. Which instrument is not on it —
-//! there is one.
+//! The command line: how much detail the instrument carries, what is plugged
+//! into the switcher, and whether the window covers the display it opens on.
+//! Which instrument is not on it — there is one.
+
+use crate::input::Input;
+use crate::params::Params;
 
 /// How big every monitor in the bank is, and with it the resolution the whole
 /// loop runs at: a camera pass is one fragment per texel of the monitor it
@@ -38,6 +41,7 @@ pub enum Mode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cli {
     pub resolution: (u32, u32),
+    pub seed: Input,
     /// Deployed, this instrument is the only thing on its display, so the
     /// window covers it unless asked otherwise — `--windowed` is there
     /// because a machine being worked on is not a machine being played.
@@ -49,9 +53,29 @@ impl Default for Cli {
     fn default() -> Cli {
         Cli {
             resolution: DEFAULT_RESOLUTION,
+            seed: default_seed(),
             fullscreen: true,
             mode: Mode::Play,
         }
+    }
+}
+
+fn default_seed() -> Input {
+    let (format, device) = crate::rig::SEED;
+    Input::Capture {
+        format: format.into(),
+        device: device.into(),
+    }
+}
+
+impl Cli {
+    /// The graph this run asks for: the instrument, with whatever the room
+    /// has on the switcher. The one place a command line reaches the rig, so
+    /// a flag that never lands here is a flag that does nothing.
+    pub fn instrument(&self) -> Params {
+        let mut params = crate::config::instrument();
+        params.input.source = self.seed.clone();
+        params
     }
 }
 
@@ -60,10 +84,13 @@ pub fn usage() -> String {
         "usage: lightherder [options]\n\
          \x20 --windowed          open a window instead of covering the display\n\
          \x20 --resolution WxH    how big every monitor is (default {}x{})\n\
+         \x20 --seed FORMAT:NAME  what is on the switcher (default {}:{})\n\
          \x20 --bench             time {} frames off screen and exit\n\
          \x20 --help              this\n",
         DEFAULT_RESOLUTION.0,
         DEFAULT_RESOLUTION.1,
+        crate::rig::SEED.0,
+        crate::rig::SEED.1,
         crate::bench::FRAMES,
     )
 }
@@ -89,9 +116,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
                     .ok_or_else(|| format!("--resolution needs a size\n{}", usage()))?;
                 cli.resolution = resolution(&value)?;
             }
+            "--seed" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| format!("--seed needs a source\n{}", usage()))?;
+                cli.seed = crate::input::capture(&value)?;
+            }
             _ => {
                 if let Some(value) = arg.strip_prefix("--resolution=") {
                     cli.resolution = resolution(value)?;
+                } else if let Some(value) = arg.strip_prefix("--seed=") {
+                    cli.seed = crate::input::capture(value)?;
                 } else if arg.starts_with('-') {
                     return Err(format!("no such option: {arg}\n{}", usage()));
                 } else {
@@ -205,9 +240,63 @@ mod tests {
     }
 
     #[test]
+    fn the_switcher_takes_whatever_ffmpeg_can_open() {
+        // The graph and not the parse: a flag the run never applies is a flag
+        // that does nothing, and every earlier spelling of this test passed
+        // with the line in `main` deleted.
+        let source = |args: &[&str]| parse_argv(args).unwrap().instrument().input.source;
+        for spelling in [
+            vec!["--seed=lavfi:testsrc2=size=640x480:rate=30"],
+            vec!["--seed", "lavfi:testsrc2=size=640x480:rate=30"],
+        ] {
+            assert_eq!(
+                source(&spelling),
+                Input::Capture {
+                    format: "lavfi".into(),
+                    device: "testsrc2=size=640x480:rate=30".into(),
+                }
+            );
+        }
+        assert_eq!(source(&[]), crate::config::instrument().input.source);
+        let mut asked = parse_argv(&["--seed=lavfi:testsrc2"]).unwrap().instrument();
+        asked.input.source = crate::config::instrument().input.source;
+        assert_eq!(asked, crate::config::instrument());
+    }
+
+    #[test]
+    fn the_default_the_usage_prints_is_one_the_parser_takes_back() {
+        // A display label in that line is a default nobody can copy: it
+        // parses as some other format, and fails inside ffmpeg instead.
+        let printed = usage()
+            .lines()
+            .filter(|line| line.contains("--seed"))
+            .find_map(|line| line.split_once("(default ")?.1.strip_suffix(')'))
+            .expect("the usage names the seed's default")
+            .to_string();
+        assert_eq!(
+            crate::input::capture(&printed).unwrap(),
+            crate::config::instrument().input.source
+        );
+    }
+
+    #[test]
+    fn a_seed_that_names_no_source_says_so() {
+        // Each half by itself, since one message for both is a message that
+        // is wrong half the time.
+        let why = |bad: &str| parse_argv(&[&format!("--seed={bad}")]).unwrap_err();
+        assert!(why("/dev/video0").contains("FORMAT:NAME"));
+        assert!(why("v4l2:").contains("names no device"));
+        assert!(why(":/dev/video0").contains("names no format"));
+        assert!(why(":").contains("names no format and no device"));
+        assert!(parse_argv(&["--seed"])
+            .unwrap_err()
+            .contains("needs a source"));
+    }
+
+    #[test]
     fn the_usage_names_every_flag_the_parser_answers_to() {
         let usage = usage();
-        for flag in ["--windowed", "--resolution", "--bench"] {
+        for flag in ["--windowed", "--resolution", "--bench", "--seed"] {
             assert!(usage.contains(flag), "{flag} is not in the usage");
         }
     }

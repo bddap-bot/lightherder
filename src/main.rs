@@ -22,7 +22,7 @@ fn play() -> Result<(), Box<dyn std::error::Error>> {
         print!("{}", lightherder::cli::usage());
         return Ok(());
     }
-    let params = lightherder::config::instrument();
+    let params = cli.instrument();
     match cli.mode {
         Mode::Bench => Ok(pollster::block_on(lightherder::bench::run(
             &params,
