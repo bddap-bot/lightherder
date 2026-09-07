@@ -1393,6 +1393,27 @@ mod tests {
     }
 
     #[test]
+    fn one_code_of_a_fine_knob_moves_what_the_overlay_reads() {
+        let mut params = crate::config::instrument();
+        let focus = Focus::default();
+        let mut midi = Midi::default();
+        for (control, knob) in [(16, Knob::Zoom), (2, Knob::Brightness)] {
+            let before = params.knob(knob, focus);
+            let mut wire = cc(control, 64);
+            wire.extend(cc(control, 65));
+            for action in feed(&mut midi, &params, &wire) {
+                match action {
+                    Action::Turn(turned, by) if turned == knob => params.nudge(knob, by, focus),
+                    other => panic!("{other:?}"),
+                }
+            }
+            let after = params.knob(knob, focus);
+            assert!(after > before, "{knob:?}: {before} -> {after}");
+            assert_ne!(knob.reads(after), knob.reads(before), "{knob:?}");
+        }
+    }
+
+    #[test]
     fn an_unplug_throws_nothing() {
         let (mut midi, params) = surface();
         assert_eq!(turned(&mut midi, &params, 40), None);

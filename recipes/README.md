@@ -77,7 +77,7 @@ rotary 5 to the top       precision 1/1: a full throw is now the whole travel
 fader 8  -0.95 throw     switcher A almost to In1: camera A's own loop, a twentieth of a
                          seed left in to keep feeding it
 rotary 5 to two-thirds    precision 1/4 again, which is where it starts
-rotary 1 -0.02 throw     zoom 0.986 — the copies walk inward
+rotary 1 -0.291 throw    zoom 0.986 — the copies walk inward
 rotary 2 +0.09 throw     rotation +0.141 rad a pass — about eight degrees, far enough
                          apart that each copy reads
 M1                       focus monitor upper A
@@ -92,7 +92,7 @@ fader 2  +0.20 throw     saturation 1.20 — lifts the tint the camera's own gai
 shafts A+3: zoom 0.9862 rotation +0.1414  B: zoom 1.0000 rotation +0.0000
 switchers [0.050, 1.000, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 1/5: hue +0.000  sat 1.200  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
+mon 1/5: hue +0.000  sat 1.200  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
 ```
 
 **Reproduced** in form. The turn count and the arm's taper land; the core comes out
@@ -113,7 +113,7 @@ R2                       focus switcher B
 rotary 5 to the top       precision 1/1
 fader 8  -0.95 throw     switcher B to 0.05: structure B's own loop
 rotary 5 to two-thirds    precision 1/4
-rotary 1 -0.05 throw     zoom 0.966 — a strong pull inward, so the arm is short and steep
+rotary 1 -0.727 throw    zoom 0.966 — a strong pull inward, so the arm is short and steep
 rotary 2 +0.22 throw     rotation +0.346 rad — twenty degrees a copy
 M3                       focus monitor upper B
 fader 2  +0.30 throw     saturation 1.30
@@ -127,7 +127,7 @@ fader 2  +0.30 throw     saturation 1.30
 shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9659 rotation +0.3456
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
+mon 3/5: hue +0.000  sat 1.300  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
 ```
 
 **Reproduced.** Same coil, same warm core against a cream outer arm — the warmth is
@@ -143,7 +143,7 @@ One spiral arm sweeping across the frame, about ten nested copies, the colour ru
 
 ```
 as dense-orange-spiral, with a coloured seed, and then
-rotary 1 -0.04 throw     zoom 0.973
+rotary 1 -0.581 throw    zoom 0.973
 rotary 2 +0.18 throw     rotation +0.283 rad
 M3
 fader 2  +0.40 throw     saturation 1.40
@@ -159,7 +159,7 @@ fader 1  +0.05 throw     hue +0.079 rad a pass — the phase walks the trail thr
 shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9727 rotation +0.2827
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.079  sat 1.400  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
+mon 3/5: hue +0.079  sat 1.400  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
 ```
 
 **Reproduced.** Hue is a phase here, so it turns chroma that is already there and does
@@ -179,7 +179,7 @@ S2 / R2
 rotary 5 to the top
 fader 8  -0.90 throw     switcher B to 0.10
 rotary 5 to two-thirds
-rotary 1 -0.03 throw     zoom 0.979
+rotary 1 -0.436 throw    zoom 0.979
 rotary 2 +0.80 throw     rotation +1.257 rad = 2π/5 exactly. Every fifth copy lands on
                          the first, so the arm closes into a rosette instead of a spiral
 M3
@@ -194,7 +194,7 @@ fader 2  +0.25 throw     saturation 1.25
 shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9794 rotation +1.2566
 switchers [1.000, 0.100, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.250  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
+mon 3/5: hue +0.000  sat 1.250  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
 ```
 
 **Reproduced.** The arm count is the rotation: set it to 2π/n and the spiral becomes an
@@ -213,7 +213,7 @@ S2 / R2
 rotary 5 to the top
 fader 8  -0.90 throw
 rotary 5 to two-thirds
-rotary 1 -0.012 throw    zoom 0.992 — barely inward, so the copies pile up rather than
+rotary 1 -0.175 throw    zoom 0.992 — barely inward, so the copies pile up rather than
                          run away
 rotary 2 +0.05 throw     rotation +0.079 rad — four degrees, tight enough that the copies
                          overlap into lace
@@ -229,7 +229,7 @@ fader 2  +0.10 throw     saturation 1.10 — almost none: this one is a luminanc
 shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9917 rotation +0.0785
 switchers [1.000, 0.100, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.100  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
+mon 3/5: hue +0.000  sat 1.100  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
 ```
 
 **Reproduced** in structure. The lace itself is the seed's grain magnified a little each
@@ -250,7 +250,7 @@ S2 / R2
 rotary 5 to the top
 fader 8  -0.95 throw
 rotary 5 to two-thirds
-rotary 1 +0.04 throw     zoom 1.028 — above one, so the copies blow OUTWARD and leave the
+rotary 1 +0.582 throw    zoom 1.028 — above one, so the copies blow OUTWARD and leave the
                          middle empty. This is the only lever that turns a spiral into a
                          ring
 rotary 2 +0.20 throw     rotation +0.314 rad
@@ -266,7 +266,7 @@ fader 2  +0.50 throw     saturation 1.50
 shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 1.0281 rotation +0.3142
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.500  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
+mon 3/5: hue +0.000  sat 1.500  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
 ```
 
 **Reproduced.** The comma-shaped copies and the black middle are the outward zoom; the
@@ -292,7 +292,7 @@ R1
 fader 8  -0.85 throw     switcher A to 0.15: structure A keeps its own loop
 rotary 5 to two-thirds
 S2                       focus camera B; camera A stays square on
-rotary 1 -0.02 throw     zoom 0.986
+rotary 1 -0.291 throw    zoom 0.986
 rotary 2 +0.09 throw     rotation +0.141
 M3
 fader 2  +0.30 throw     saturation 1.30
@@ -306,7 +306,7 @@ fader 2  +0.30 throw     saturation 1.30
 shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9862 rotation +0.1414
 switchers [0.150, 0.500, 0.200, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.500 of cam 2
+mon 3/5: hue +0.000  sat 1.300  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.500 of cam 2
 ```
 
 **Reproduced.** Structure A holds still, so its picture is a legible copy of the
@@ -331,10 +331,10 @@ fader 8  -0.95 throw     switcher C to In1 = camera A. Switchers A and B are alr
                          is the whole of Insanity Mode — one fader from reset
 rotary 5 to two-thirds
 S1                       focus camera A
-rotary 1 -0.012 throw    zoom 0.992 — barely inward
+rotary 1 -0.175 throw    zoom 0.992 — barely inward
 rotary 2 +0.04 throw     rotation +0.063 rad, under four degrees a pass
 S2                       focus camera B
-rotary 1 -0.05 throw     zoom 0.966 — a much stronger pull
+rotary 1 -0.727 throw    zoom 0.966 — a much stronger pull
 rotary 2 -0.35 throw     rotation -0.550 rad, and the other way round
 M1  fader 2 +0.30        saturation 1.30 on upper A
 M3  fader 2 +0.30        saturation 1.30 on upper B
@@ -348,8 +348,8 @@ M3  fader 2 +0.30        saturation 1.30 on upper B
 shafts A+3: zoom 0.9917 rotation +0.0628  B: zoom 0.9659 rotation -0.5498
 switchers [1.000, 1.000, 0.050, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
-mon 1/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 1.000 of cam 2
-mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 2
+mon 1/5: hue +0.000  sat 1.300  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 1.000 of cam 2
+mon 3/5: hue +0.000  sat 1.300  bright +0.0000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 2
 ```
 
 **Reproduced in form, not in degree.** The mutual composition takes one fader from
@@ -393,11 +393,12 @@ and ours carry one. Three things stood between them, and only one is technique:
   riding camera A's, as the schematic draws them. **#75**
 
 Three more found on the way, none of them the reason a scene missed: the playable
-band of every continuous knob is a few MIDI codes wide against a travel nobody can
-use (**#73**); the delay units reach two frames, hardcoded, where the bank affords
-more than twenty at the default resolution and the original dials up to thirty; and
-the schematics wire a direct loop between camera 3 and the rotating monitor that
-this rig can only close the long way round (**#72**).
+band of zoom and brightness was a few MIDI codes wide against a travel nobody could
+use — fixed, the rails are now where a pass rate destroys the picture (**#73**); the
+delay units reach two frames, hardcoded, where the bank affords more than twenty at
+the default resolution and the original dials up to thirty; and the schematics wire
+a direct loop between camera 3 and the rotating monitor that this rig can only close
+the long way round (**#72**).
 
 ## The harness
 

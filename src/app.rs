@@ -1078,7 +1078,7 @@ mod tests {
 
     fn off_identity() -> Params {
         let mut params = config::instrument();
-        params.shafts[1].zoom = 0.9;
+        params.shafts[1].zoom = 0.95;
         params
     }
 

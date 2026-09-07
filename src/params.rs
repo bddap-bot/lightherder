@@ -521,10 +521,12 @@ impl Knob {
 
     pub fn reads(self, value: f32) -> String {
         match self {
-            Knob::Zoom | Knob::Saturation | Knob::Contrast | Knob::Sharpness | Knob::Switcher => {
+            Knob::Zoom => format!("{value:.4}"),
+            Knob::Brightness => format!("{value:+.4}"),
+            Knob::Saturation | Knob::Contrast | Knob::Sharpness | Knob::Switcher => {
                 format!("{value:.3}")
             }
-            Knob::Rotation | Knob::Hue | Knob::Brightness => format!("{value:+.3}"),
+            Knob::Rotation | Knob::Hue => format!("{value:+.3}"),
             Knob::Temperature => format!("{value:+.1}"),
             Knob::Delay | Knob::Period => format!("{}", value as u32),
             Knob::FrameRate => format!("{}", Cadence::ALL[value as usize].fps()),
@@ -553,16 +555,13 @@ impl Knob {
         match self {
             // Whole frames, as far as the ring the graph bought goes.
             Knob::Delay => Limit::Whole(params.delay),
-            // Zero would divide by zero in the sampling transform.
-            Knob::Zoom => Limit::Ratio(0.25, 4.0),
+            Knob::Zoom => Limit::Ratio(1.0 / 1.1, 1.1),
             // Spinning one way for long enough must not run the number away.
             Knob::Rotation => Limit::Wrap,
             // A phase: it comes back round instead of running away.
             Knob::Hue => Limit::Wrap,
             Knob::Saturation | Knob::Contrast => Limit::Clamp(0.0, 4.0),
-            // Potent inside a loop, so the rails are close: a tenth of a unit
-            // added every pass floods the monitor to white in under a second.
-            Knob::Brightness => Limit::Clamp(-0.5, 0.5),
+            Knob::Brightness => Limit::Clamp(-0.1, 0.1),
             // Candlelight to open shade, in mired from D65; both ends well
             // inside the 1667 K to 25 000 K the locus fit is good for.
             Knob::Temperature => Limit::Clamp(-100.0, 340.0),
@@ -866,6 +865,7 @@ mod tests {
             assert!(low > 0.0, "{knob:?}");
             let focus = Focus::default();
             let middle = (low * high).sqrt();
+            assert!((middle - knob.identity()).abs() < 1e-6, "{knob:?}");
             let half = knob.limit(&p()).travel() / 2.0;
             let mut params = p();
             params.set(knob, low, focus);
@@ -874,8 +874,8 @@ mod tests {
             params.set(knob, high, focus);
             params.nudge(knob, -half, focus);
             assert!((params.knob(knob, focus) - middle).abs() < 1e-5, "{knob:?}");
-            params.nudge(knob, 0.3, focus);
-            params.nudge(knob, -0.3, focus);
+            params.nudge(knob, half / 3.0, focus);
+            params.nudge(knob, -half / 3.0, focus);
             assert!((params.knob(knob, focus) - middle).abs() < 1e-5, "{knob:?}");
             params.nudge(knob, 2.0 * half + 1.0, focus);
             assert_eq!(params.knob(knob, focus), high, "{knob:?}");
@@ -940,12 +940,12 @@ mod tests {
             }
         }
         let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
-        assert_eq!(params.shafts[0].zoom, 4.0);
+        assert_eq!(params.shafts[0].zoom, 1.1);
         assert_eq!(cam.delay, params.delay);
         assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.switchers[0], 1.0);
         assert_eq!(mon.colour.saturation, 4.0);
-        assert_eq!(mon.colour.brightness, 0.5);
+        assert_eq!(mon.colour.brightness, 0.1);
         assert_eq!(mon.colour.contrast, 4.0);
         assert_eq!(mon.colour.temperature, 340.0);
         assert_eq!(mon.sharpness, 2.0);
@@ -956,12 +956,12 @@ mod tests {
             }
         }
         let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
-        assert_eq!(params.shafts[0].zoom, 0.25);
+        assert_eq!(params.shafts[0].zoom, 1.0 / 1.1);
         assert_eq!(cam.delay, 0);
         assert_eq!(params.rig.periods[0], 0);
         assert_eq!(params.rig.switchers[0], 0.0);
         assert_eq!(mon.colour.saturation, 0.0);
-        assert_eq!(mon.colour.brightness, -0.5);
+        assert_eq!(mon.colour.brightness, -0.1);
         assert_eq!(mon.colour.contrast, 0.0);
         assert_eq!(mon.colour.temperature, -100.0);
         assert_eq!(mon.sharpness, 0.0);

@@ -6,7 +6,7 @@ sw 2
 turn switcher -0.90
 precision 0.666667
 cam 2
-turn zoom -0.03
+turn zoom -0.436
 turn rotation 0.80
 mon 3
 turn saturation 0.25

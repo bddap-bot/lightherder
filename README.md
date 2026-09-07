@@ -266,11 +266,17 @@ at its top. Nothing jumps: a hot-plug, a change of focus, a reset, a cut
 or a beat of the period all leave every fader turning on from wherever the
 knob now is, and a fresh cable, a select, a reset or a rewind forgives a
 count knob the part of a step it was owed. The rails clamp — a step past one
-is dropped, not owed. Rotation and hue wrap instead of clamping, a whole revolution end to end. Zoom is a
-ratio and a step multiplies instead of adding: a throw doubles it from
-wherever it stands, one code moves it half a percent, and unity sits in the
-middle of the travel, so the thousandths either side of 1.0 get the same hand
-as the doublings above. The three whole-number knobs — the delay, the period
+is dropped, not owed. Rotation and hue wrap instead of clamping, a whole
+revolution end to end: `2π/n` a pass is what closes a spiral into an `n`-fold
+rosette, so every angle is one to play. Zoom is a ratio and a step multiplies
+instead of adding, so a step is the same fraction of the picture wherever the
+knob stands and unity sits in the middle of the travel. Its rails are a tenth
+either way, and brightness's a tenth of a unit: both compound sixty times a
+second, so a zoom of 1.1 a pass has emptied the frame within a second and a
+brightness of 0.1 has flooded it — the rail is where the picture dies, and the
+scenes in `recipes/` all play within four percent of unity. At the default
+precision a throw of zoom is five percent and a code four ten-thousandths.
+The three whole-number knobs — the delay, the period
 and the frame rate — run their whole count over the throw, deaf to the
 precision, and are turned a step at a time, ticking over at the half like a
 detent.
@@ -521,7 +527,7 @@ it: switcher B run toward In1 closes structure B's loop on the seed, and the
 saturation fader swept is the quickest way to see what a stage inside that
 loop does.
 
-Zoom is the sensitive one. A few thousandths either side of `zoom 1.000` is
+Zoom is the sensitive one. A few thousandths either side of `zoom 1.0000` is
 the difference between an image that walks inward, one that stands still, and
 one that blows outward — and since camera A and camera 3 share a shaft, a
 thousandth there moves both readings at once.

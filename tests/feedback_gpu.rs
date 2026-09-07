@@ -13,7 +13,7 @@ use lightherder::affine::Framing;
 use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
-use lightherder::params::{Cadence, Camera, Colour, Key, Monitor, Params, Plug};
+use lightherder::params::{Cadence, Camera, Colour, Key, Knob, Monitor, Params, Plug};
 use lightherder::present::{Present, View};
 use lightherder::rig::{Rig, Select, MONITORS, SELECTS, SHAFTS, SWITCHERS};
 
@@ -595,7 +595,7 @@ fn temperature_tints_grey_at_constant_luma_and_leaves_it_grey_at_rest() {
 #[test]
 fn brightness_lifts_black_itself() {
     let Some(mut h) = square() else { return };
-    let lift = 0.2;
+    let lift = 0.1;
     let before = tinted(&mut h);
     let after = recolour(
         &mut h,
@@ -656,11 +656,11 @@ fn the_amplifier_lifts_after_it_expands() {
     // Turning one knob at a time leaves the other stages at identity, where
     // every order of them looks alike. Contrast and brightness together is
     // the case that can tell them apart: lifting before the expansion would
-    // scale the lift too, and land a fifth of full scale higher.
+    // scale the lift too, and land a tenth of full scale higher.
     let Some(mut h) = square() else { return };
     let before = tinted(&mut h);
 
-    let (brightness, contrast) = (0.2, 2.0);
+    let (brightness, contrast) = (0.1, 2.0);
     let after = recolour(
         &mut h,
         Colour {
@@ -731,7 +731,7 @@ fn a_level_pushed_below_black_comes_back_black() {
 
     // Black, and still a number: lifting the black level brings it back.
     // Not-a-number would have stayed not-a-number for the rest of the run.
-    let lift = 0.3;
+    let lift = 0.1;
     let lifted = recolour(
         &mut h,
         Colour {
@@ -948,15 +948,15 @@ fn what_the_camera_sees_past_the_monitor_is_black() {
         loop_gain: [1.0; 3],
         colour: Colour::NEUTRAL,
         framing: Framing {
-            zoom: 0.7,
+            zoom: zoom_floor(),
             rotation: 0.0,
         },
     });
     let img = h.read();
     assert!(
-        img.at(0.02, 0.5) < 2.0,
+        img.at(0.0, 0.5) < 2.0,
         "outside the monitor read {}, not black",
-        img.at(0.02, 0.5)
+        img.at(0.0, 0.5)
     );
     assert!(
         img.brightest() > 50.0,
@@ -1056,6 +1056,12 @@ fn silent_monitor() -> Monitor {
 /// wiring tests below build on. Every switcher at In1 and every monitor on
 /// its own camera direct, so the seed reaches none of them — what a test wants of the matrix it says with the switchers,
 /// and what it wants each camera to see it says with `look`.
+/// The zoom rail the loop can hold, which is as far as a hand can pull
+/// the camera back.
+fn zoom_floor() -> f32 {
+    Knob::Zoom.limit(&blank()).ends().0
+}
+
 fn blank() -> Params {
     let mut p = lightherder::config::instrument();
     p.rig = Rig {
@@ -1773,7 +1779,7 @@ fn the_switcher_mixes_the_seed_with_a_camera_on_one_monitor() {
 fn the_seed_arrives_whole_however_the_cameras_are_set() {
     // There is no camera between the switcher and an input, so nothing a
     // camera does can reach one. The camera here is loaded with every stage
-    // that could leak — pulled back by two, scattering, smearing, graining,
+    // that could leak — pulled back to its rail, scattering, smearing, graining,
     // keyed above the picture and down to a tenth of the light — and *is* in
     // the monitor's pass, routed at a weight low enough to leave the input's
     // levels alone on the first step, so this is a graph where the stages
@@ -1786,7 +1792,7 @@ fn the_seed_arrives_whole_however_the_cameras_are_set() {
     const SEED_SHARE: f32 = 0.98;
     p.rig.switchers = [0.0, 1.0, 1.0, SEED_SHARE];
     p.cameras[2].look = one_hot(SEEDED);
-    p.shafts[0].zoom = 0.5;
+    p.shafts[0].zoom = zoom_floor();
     p.cameras[2].gain = [0.1; 3];
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
@@ -1797,9 +1803,9 @@ fn the_seed_arrives_whole_however_the_cameras_are_set() {
     h.step_solo(&p, SEEDED);
 
     let img = h.read();
-    // Corners a half zoom would have left unlit, and either side of the
+    // Corners the pull-back would have left unlit, and either side of the
     // quarters' seam — a hard edge is what no halo, smear or key survives.
-    for (quarter, (u, v)) in [(0.05, 0.05), (0.95, 0.05), (0.95, 0.95), (0.05, 0.95)]
+    for (quarter, (u, v)) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
         .into_iter()
         .enumerate()
         .chain([(0, (0.47, 0.25)), (1, (0.53, 0.25))])
@@ -2102,7 +2108,7 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
         let mut p = blank();
         p.cameras[0].delay = delay;
         p.cameras[0].gain = [0.9; 3];
-        p.shafts[0].zoom = 0.9;
+        p.shafts[0].zoom = zoom_floor();
         p.cameras[0].look = one_hot(SEEDED);
         p.delay = Params::MAX_DELAY;
         seeding(&mut p);
