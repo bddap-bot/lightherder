@@ -96,8 +96,8 @@ mon 1/5: hue +0.000  sat 1.200  bright +0.000  contrast 1.000  temp +0.0  sharp 
 ```
 
 **Reproduced** in form. The turn count and the arm's taper land; the core comes out
-warm where the original's is cool, and ours is coarser at the outer end, where the original's copies each carry a spiral of
-their own.
+warm where the original's is cool, and ours is coarser at the outer end, where the
+original's copies each carry a spiral of their own.
 
 ## dense-orange-spiral
 
@@ -355,9 +355,9 @@ mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 
 **Reproduced in form, not in degree.** The mutual composition takes one fader from
 reset. Each structure's panel is the other's picture seen through its own camera, so
 the two can differ by one framing step and no more: upper A is upper B turned and
-shrunk by camera B's shaft, and a rosette turned a third of a radian reads as the
-same rosette. With one shaft the five monitors were one picture to the byte; framed
-apart they differ by that step, measurably and not by much. The artist's cluster on
+shrunk by camera B's shaft, and a rosette turned half a radian reads as the same
+rosette. With one shaft the five monitors were one picture but for a camera's tint;
+framed apart they differ by that step, measurably and not by much. The artist's cluster on
 one side and crescent on the other is a wider gap than a crossfade crossing can open,
 whichever way the shafts stand.
 
