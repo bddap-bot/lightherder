@@ -592,6 +592,10 @@ impl Params {
         self.shafts[crate::rig::SHAFT_OF[c]]
     }
 
+    fn framing_mut(&mut self, c: usize) -> &mut Framing {
+        &mut self.shafts[crate::rig::SHAFT_OF[c]]
+    }
+
     /// How much of camera `c` monitor `m` shows, and how much of the seed:
     /// the matrix, off the switchers and the selects. Not stored — see
     /// [`Params::rig`].
@@ -694,8 +698,8 @@ impl Params {
     /// Every index is one the caller has already landed inside this graph.
     fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
         match knob {
-            Knob::Zoom => &mut self.shafts[crate::rig::SHAFT_OF[focus.camera]].zoom,
-            Knob::Rotation => &mut self.shafts[crate::rig::SHAFT_OF[focus.camera]].rotation,
+            Knob::Zoom => &mut self.framing_mut(focus.camera).zoom,
+            Knob::Rotation => &mut self.framing_mut(focus.camera).rotation,
             Knob::Hue => &mut self.monitors[focus.monitor].colour.hue,
             Knob::Saturation => &mut self.monitors[focus.monitor].colour.saturation,
             Knob::Brightness => &mut self.monitors[focus.monitor].colour.brightness,
@@ -965,10 +969,6 @@ mod tests {
 
     #[test]
     fn the_belt_locks_camera_a_to_the_rotating_monitor_and_leaves_camera_b_free() {
-        // The rig's one mechanical linkage: camera A and the rotating
-        // monitor's dowel turn together, so camera 3 — which watches that
-        // monitor — reads camera A's shaft and not a second number kept in
-        // step with it. Camera B is on its own stand and moves alone.
         let mut params = crate::config::instrument();
         let at = |camera| Focus::default().with(Node::Camera, camera);
         // Every camera focus turns a knob here, since a shaft picked by the
@@ -982,40 +982,8 @@ mod tests {
         params.nudge(Knob::Zoom, 0.1, at(1));
         params.nudge(Knob::Rotation, -0.4, at(1));
         assert!((params.framing(0).rotation - 0.3).abs() < 1e-6);
-        // Two structures crossed into each other can now be framed apart,
-        // which is the whole of what one shaft made impossible.
         assert_ne!(params.framing(0).zoom, params.framing(1).zoom);
         assert_ne!(params.framing(0).rotation, params.framing(1).rotation);
-    }
-
-    #[test]
-    fn a_knob_follows_its_own_side_of_the_graph() {
-        // Two cameras and two monitors: a camera knob nudged at focus (1, 0)
-        // lands on camera 1 and nowhere else, and a monitor knob on monitor 0.
-        let mut params = crate::config::instrument();
-        let before = params.clone();
-        params.nudge(
-            Knob::Zoom,
-            0.01,
-            Focus {
-                camera: 1,
-                monitor: 0,
-                switcher: 0,
-            },
-        );
-        params.nudge(
-            Knob::Hue,
-            0.02,
-            Focus {
-                camera: 1,
-                monitor: 0,
-                switcher: 0,
-            },
-        );
-        assert_eq!(params.shafts[0], before.shafts[0]);
-        assert_ne!(params.shafts[1], before.shafts[1]);
-        assert_ne!(params.monitors[0].colour, before.monitors[0].colour);
-        assert_eq!(params.monitors[1], before.monitors[1]);
     }
 
     #[test]

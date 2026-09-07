@@ -621,12 +621,9 @@ impl Feedback {
         }
         let aspect = self.aspect();
 
-        // Shafts move every frame; the affine per camera is the same for all
-        // of its taps, so it is worked out once. Two cameras on one shaft get
-        // the same one, which is the lock.
-        let framings = std::array::from_fn::<_, { crate::rig::CAMERAS }, _>(|c| {
-            sample_transform(&params.framing(c), aspect)
-        });
+        // Shafts move every frame and every tap through a camera samples
+        // through its shaft, so the affine is worked out once per shaft.
+        let framings = params.shafts.map(|shaft| sample_transform(&shaft, aspect));
         // What the seed's tap samples through. It is plugged into the
         // switcher, so nothing frames it: it arrives square on and fills the
         // monitor, which is the identity framing carried through the same
@@ -654,7 +651,9 @@ impl Feedback {
                 // every stage a camera would have takes its identity and the
                 // layer arrives as itself.
                 let (sampled, gain) = match edge.through {
-                    Through::Camera(c) => (&framings[c], params.cameras[c].gain),
+                    Through::Camera(c) => {
+                        (&framings[crate::rig::SHAFT_OF[c]], params.cameras[c].gain)
+                    }
                     Through::Seed => {
                         seed = count as f32;
                         (&square_on, [1.0; 3])

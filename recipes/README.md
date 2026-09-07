@@ -89,7 +89,7 @@ fader 2  +0.20 throw     saturation 1.20 — lifts the tint the camera's own gai
 **Lands on:**
 
 ```
-shafts 1: zoom 0.9862 rotation +0.1414  2: zoom 1.0000 rotation +0.0000
+shafts A+3: zoom 0.9862 rotation +0.1414  B: zoom 1.0000 rotation +0.0000
 switchers [0.050, 1.000, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 1/5: hue +0.000  sat 1.200  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
@@ -125,7 +125,7 @@ fader 2  +0.30 throw     saturation 1.30
 **Lands on:**
 
 ```
-shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9659 rotation +0.3456
+shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9659 rotation +0.3456
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
@@ -157,7 +157,7 @@ fader 1  +0.05 throw     hue +0.079 rad a pass — the phase walks the trail thr
 **Lands on:**
 
 ```
-shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9727 rotation +0.2827
+shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9727 rotation +0.2827
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.079  sat 1.400  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
@@ -192,7 +192,7 @@ fader 2  +0.25 throw     saturation 1.25
 **Lands on:**
 
 ```
-shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9794 rotation +1.2566
+shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9794 rotation +1.2566
 switchers [1.000, 0.100, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.250  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
@@ -227,7 +227,7 @@ fader 2  +0.10 throw     saturation 1.10 — almost none: this one is a luminanc
 **Lands on:**
 
 ```
-shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9917 rotation +0.0785
+shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9917 rotation +0.0785
 switchers [1.000, 0.100, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.100  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
@@ -264,7 +264,7 @@ fader 2  +0.50 throw     saturation 1.50
 **Lands on:**
 
 ```
-shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 1.0281 rotation +0.3142
+shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 1.0281 rotation +0.3142
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.500  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
@@ -303,7 +303,7 @@ fader 2  +0.30 throw     saturation 1.30
 **Lands on:**
 
 ```
-shafts 1: zoom 1.0000 rotation +0.0000  2: zoom 0.9862 rotation +0.1414
+shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9862 rotation +0.1414
 switchers [0.150, 0.500, 0.200, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.500 of cam 2
@@ -344,7 +344,7 @@ M3  fader 2 +0.30        saturation 1.30 on upper B
 **Lands on:**
 
 ```
-shafts 1: zoom 0.9917 rotation +0.0628  2: zoom 0.9659 rotation -0.5498
+shafts A+3: zoom 0.9917 rotation +0.0628  B: zoom 0.9659 rotation -0.5498
 switchers [1.000, 1.000, 0.050, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 1/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 1.000 of cam 2

@@ -937,8 +937,6 @@ mod tests {
         turn(&mut app, Knob::Zoom, 0.5);
         assert_ne!(app.params, before);
 
-        // Only the last one turned, and only on the focused node — the other
-        // camera's zoom is a different number in the same field.
         app.act(Action::ResetLastKnob);
         assert_eq!(
             app.params.knob(Knob::Zoom, app.focus),

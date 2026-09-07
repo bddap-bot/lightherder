@@ -15,7 +15,7 @@ use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Cadence, Camera, Colour, Key, Monitor, Params, Plug};
 use lightherder::present::{Present, View};
-use lightherder::rig::{Rig, Select, MONITORS, SELECTS, SWITCHERS};
+use lightherder::rig::{Rig, Select, MONITORS, SELECTS, SHAFTS, SWITCHERS};
 
 /// Where the spot this suite lights sits, in screen units — off-centre on
 /// purpose: a radially symmetric spot at the centre is a fixed point of
@@ -65,7 +65,7 @@ fn graph(s: &Single) -> Params {
     let mut p = blank();
     p.rig.selects[2] = Select::Program;
     p.rig.switchers = [0.0, 1.0, 1.0, s.seed];
-    p.shafts = [s.framing; 2];
+    p.shafts = [s.framing; SHAFTS];
     p.cameras[2].gain = s.loop_gain;
     p.cameras[2].look = one_hot(SEEDED);
     p.monitors[SEEDED].colour = s.colour;
@@ -1064,7 +1064,7 @@ fn blank() -> Params {
         periods: [0; SWITCHERS],
     };
     p.delay = 0;
-    p.shafts = [Framing::identity(); 2];
+    p.shafts = [Framing::identity(); SHAFTS];
     for camera in &mut p.cameras {
         *camera = plain_camera([0.0; MONITORS]);
     }
