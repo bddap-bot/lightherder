@@ -38,10 +38,8 @@ made of hundreds of legible copies, and it is the first thing to change when a
 recipe looks close but coarse.
 
 The artist's own seeds are exactly that: two dots on a phone, the word "Fractal", a
-painting, a live fish tank. **The instrument cannot yet be told to use one** — the
-seed is hardcoded to `/dev/video0` — so these recipes name theirs on a `seed` line
-the harness reads, and the fix rides in #74. On the instrument as it stands you get
-the equivalent by pointing the camera at a second screen playing the same thing.
+painting, a live fish tank. These recipes name theirs on a `seed` line the harness
+reads, and the instrument takes the same spelling as `--seed FORMAT:NAME`.
 
 ## The three levers that shape a scene
 
@@ -368,10 +366,9 @@ things stand between the two, and only one of them is technique:
 
 - **The seed.** Fine structure in the picture comes from fine structure in the
   light that entered. That part is technique, and it is the single biggest lever
-  on these images. But the instrument gives no way to plug anything in: the seed
-  is hardcoded to one camera device, while the original's second input is a media
-  player showing whatever the piece needs — two dots, a word, a painting, a fish
-  tank. **#74**
+  on these images. Fixed: the seed was one camera device written into the graph,
+  while the original's second input is a media player showing whatever the piece
+  needs — two dots, a word, a painting, a fish tank; `--seed FORMAT:NAME` names it.
 - **The switchers crossfaded where the original keys.** A crossfade at `d` dims
   the background loop to `1-d` *everywhere*, including where the incoming picture
   is black. A keyer leaves the background whole and replaces it only where the
