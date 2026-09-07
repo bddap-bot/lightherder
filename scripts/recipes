@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+[ -n "${IN_NIX_SHELL:-}" ] || exec nix-shell --run "scripts/recipes ${1:-}"
+target=${CARGO_TARGET_DIR:-$PWD/target}
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+
+cargo build --release --example recipe >&2
+
+composite() {
+  local slug=$1 out=$2
+  "$target/release/examples/recipe" "recipes/$slug.txt" "$scratch/$slug.png" >&2
+  ffmpeg -hide_banner -loglevel error -y \
+    -i "recipes/ref/$slug.jpg" -i "$scratch/$slug.png" \
+    -filter_complex '[0:v]scale=1280:720,pad=1288:720:0:0:black[ref];[1:v]scale=1280:720[ours];[ref][ours]hstack' \
+    "$out"
+}
+
+case ${1:-} in
+  render)
+    for txt in recipes/*.txt; do
+      slug=$(basename "$txt" .txt)
+      composite "$slug" "recipes/$slug.png"
+    done ;;
+  check)
+    ok=0
+    for txt in recipes/*.txt; do
+      slug=$(basename "$txt" .txt)
+      composite "$slug" "$scratch/$slug.composite.png"
+      if ! cmp -s "$scratch/$slug.composite.png" "recipes/$slug.png"; then
+        echo "recipes/$slug.png is not what this checkout renders: run scripts/recipes render"
+        ok=1
+      fi
+    done
+    if [ $ok = 0 ]; then echo "recipes check passed: every frame reproduces"; fi
+    exit $ok ;;
+  *) echo "usage: scripts/recipes render|check" >&2; exit 2 ;;
+esac

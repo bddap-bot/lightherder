@@ -9,18 +9,18 @@
     },
     {
       "paths": ["scripts/**"],
-      "tests": ["nix-shell --run 'shellcheck scripts/landing'"],
-      "why": "the landing contract's one script; shellcheck is what a shell script has, and running it for real is the gate's job"
-    },
-    {
-      "paths": ["recipes/**"],
-      "tests": [],
-      "why": "the reference frames, the frames this rig answered them with, and the written control sequences that produced them: data a reader compares by eye, and the harness that plays them is Rust under the crate rule below"
+      "tests": ["nix-shell --run 'shellcheck scripts/landing scripts/recipes'", "scripts/recipes check"],
+      "why": "the landing contract and the recipe compositor; shellcheck is what a shell script has, running the landing for real is the gate's job, and a moved gutter or scale in the compositor stales every committed composite"
     },
     {
       "paths": ["**/*.md", ".gitignore", "LICENSE-*"],
       "tests": [],
       "why": "prose and licenses — nothing executes them"
+    },
+    {
+      "paths": ["recipes/**"],
+      "tests": ["scripts/recipes check"],
+      "why": "the reference frames, the frames this rig answered them with, and the written control sequences that produced them. The composites claim to be what main renders from the scripts beside them, and re-rendering is the only thing that checks the claim; the verdicts in the README are a reader's by eye"
     },
     {
       "paths": ["web/**"],
@@ -45,9 +45,10 @@
       "tests": [
         "nix-shell --run 'cargo fmt --check'",
         "nix-shell --run 'cargo clippy --all-targets -- --deny warnings'",
-        "nix-shell --run 'cargo test'"
+        "nix-shell --run 'cargo test'",
+        "scripts/recipes check"
       ],
-      "why": "one crate, one suite. The WGSL rides the same rule because nothing parses it until a pipeline is built, which only the GPU tests in tests/ do — a shader typo is a runtime error, so `cargo build` alone would pass it. `cargo test` needs no --test-threads: the suite shares one wgpu device precisely so parallel tests cannot fight over device creation"
+      "why": "one crate, one suite, and the recipe frames re-rendered: the committed composites are what this crate draws, so a shader or knob change that moves a picture lands with the frames and the README's verdicts re-done, not two commits later. The WGSL rides the same rule because nothing parses it until a pipeline is built, which only the GPU tests in tests/ do — a shader typo is a runtime error, so `cargo build` alone would pass it. `cargo test` needs no --test-threads: the suite shares one wgpu device precisely so parallel tests cannot fight over device creation"
     }
   ]
 }

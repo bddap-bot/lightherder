@@ -15,9 +15,13 @@ on so it can be checked against the code, and whether it came out.
 The frames here were rendered off screen by `examples/recipe`, which plays the same
 written sequence into `Feedback` and writes the frame with the same `Capture` the
 marker-set button uses. Every `recipes/<slug>.txt` beside this file is the script
-that produced the right-hand half of that scene's image, and re-running it
-reproduces the frame byte for byte — every seed here is frozen on one frame, so
-nothing in a run is left to when the machine got round to it:
+that produced the right-hand half of that scene's image — the reference frame,
+an 8 px gutter, ours, each half scaled to 1280×720 — and `scripts/recipes render`
+rebuilds every composite from the scripts. Every seed here is frozen on one
+frame, so nothing in a run is left to when the machine got round to it, and
+`scripts/recipes check` renders the lot again and fails on any byte that differs
+from what is committed: a change to the instrument that moves a picture has to
+land with the frames re-rendered and the verdicts below re-read. One scene alone:
 
 ```
 nix-shell --run "cargo run --release --example recipe -- recipes/single-spiral.txt ours.png"
@@ -93,8 +97,10 @@ selects ["program", "program", "program", "program"]
 mon 1/5: hue +0.000  sat 1.200  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
 ```
 
-**Reproduced.** The turn count, the arm's taper and the cool cast all land; ours is
-coarser at the outer end, where the original's copies each carry a spiral of their own.
+**Reproduced** in form. The turn count and the arm's taper land, and the outer arm
+carries the cool cast; the core comes out warm where the original's is cool, and
+ours is coarser at the outer end, where the original's copies each carry a spiral of
+their own.
 
 ## dense-orange-spiral
 
@@ -230,7 +236,9 @@ mon 3/5: hue +0.000  sat 1.100  bright +0.000  contrast 1.000  temp +0.0  sharp 
 ```
 
 **Reproduced** in structure. The lace itself is the seed's grain magnified a little each
-pass; with a flat seed the same recipe gives smooth rings and nothing else.
+pass; with a flat seed the same recipe gives smooth rings and nothing else. The core
+comes out a saturated red where the original's is a pale disc — the loop keeps more of
+itself than it did, and what it keeps is camera B's warmth.
 
 ## magenta-donut
 
@@ -370,8 +378,7 @@ things stand between the two, and only one of them is technique:
   key passes. Inside a loop running at a gain just under one, that difference is
   whether the trail survives the seed at all — and keying a second loop over the
   first is how the original's densest scenes are made. Fixed: M/E D now keys the
-  seed over camera 3. The frames here predate it and still show the crossfade.
-  **#71**
+  seed over camera 3, and the frames here are rendered with it. **#71**
 - **One shaft.** Both cameras share one zoom and one rotation, so two structures
   crossed into each other evolve identically and Insanity Mode comes out a
   mirror. **#75**
