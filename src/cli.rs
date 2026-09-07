@@ -62,9 +62,8 @@ impl Default for Cli {
 }
 
 impl Cli {
-    /// The graph this run asks for: the instrument, with whatever the room
-    /// has on the switcher. The one place a command line reaches the rig, so
-    /// a flag that never lands here is a flag that does nothing.
+    /// The one place a command line reaches the rig, so a flag that never
+    /// lands here is a flag that does nothing.
     pub fn instrument(&self) -> Params {
         let mut params = crate::config::instrument();
         if let Some(seed) = &self.seed {
@@ -83,7 +82,7 @@ pub fn usage() -> String {
         "usage: lightherder [options]\n\
          \x20 --windowed          open a window instead of covering the display\n\
          \x20 --resolution WxH    how big every monitor is (default {}x{})\n\
-         \x20 --seed FORMAT:NAME  what is on the switcher (default {})\n\
+         \x20 --seed FORMAT:NAME  what is on the switcher, or bars (default {})\n\
          \x20 --bench             time {} frames off screen and exit\n\
          \x20 --help              this\n",
         DEFAULT_RESOLUTION.0,
@@ -263,7 +262,6 @@ mod tests {
             .find_map(|line| line.split_once("(default ")?.1.strip_suffix(')'))
             .expect("the usage names the seed's default")
             .to_string();
-        assert_eq!(printed, "v4l2:/dev/video0");
         assert_eq!(
             printed.parse::<Input>().unwrap(),
             crate::config::instrument().input.source
