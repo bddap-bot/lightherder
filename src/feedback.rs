@@ -621,8 +621,6 @@ impl Feedback {
         }
         let aspect = self.aspect();
 
-        // Shafts move every frame and every tap through a camera samples
-        // through its shaft, so the affine is worked out once per shaft.
         let framings = params.shafts.map(|shaft| sample_transform(&shaft, aspect));
         // What the seed's tap samples through. It is plugged into the
         // switcher, so nothing frames it: it arrives square on and fills the
