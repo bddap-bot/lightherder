@@ -1210,14 +1210,15 @@ fn the_focused_tile_is_framed_and_only_in_the_bank() {
 
 #[test]
 fn a_crossfade_delivers_the_fractions_it_names() {
-    // Two cameras on one monitor, crossfaded 3:1. Their framings differ —
-    // one holds still, one turns the picture a quarter round — so the two
-    // contributions land in different places and each share can be read off
-    // on its own.
+    // Two cameras on one monitor, crossfaded 3:1, told apart twice over: by
+    // channel, and by camera B's shaft turning its picture a quarter round
+    // so the two shares land in different places.
     let Some(mut h) = square() else { return };
     let mut p = blank();
     p.cameras[0].look = one_hot(SEEDED);
+    p.cameras[0].gain = [1.0, 0.0, 0.0];
     p.cameras[1].look = one_hot(SEEDED);
+    p.cameras[1].gain = [0.0, 1.0, 0.0];
     p.shafts[1].rotation = std::f32::consts::FRAC_PI_2;
     // Monitor 3 takes the whole seed; monitor 1 takes switcher A's program,
     // a quarter of the way from camera A toward camera B.
@@ -1227,21 +1228,33 @@ fn a_crossfade_delivers_the_fractions_it_names() {
 
     h.step_solo(&p, SEEDED);
     let at = h.spot_uv();
-    let base = h.read().at(at[0], at[1]);
-    assert!(base > 200.0, "the seed never lit: {base}");
+    let base = h.read().rgb_at(at[0], at[1]);
+    assert!(
+        base.iter().all(|c| *c > 200.0),
+        "the seed never lit: {base:?}"
+    );
 
     h.step_solo(&p, 0);
     let img = h.read();
     // The spot sits a quarter of the monitor's height right of centre, so a
     // quarter turn counter-clockwise puts it the same distance above centre.
-    let (held, turned) = (img.at(at[0], at[1]), img.at(0.5, 0.25));
+    let held = img.rgb_at(at[0], at[1]);
+    let turned = img.rgb_at(0.5, 0.25);
     assert!(
-        (held / base - 0.75).abs() < 0.04,
-        "the crossfade delivered {held} of {base}, not three quarters"
+        (held[0] / base[0] - 0.75).abs() < 0.04,
+        "the crossfade delivered {} of {}, not three quarters",
+        held[0],
+        base[0]
     );
     assert!(
-        (turned / base - 0.25).abs() < 0.04,
-        "the crossfade delivered {turned} of {base}, not a quarter"
+        (turned[1] / base[1] - 0.25).abs() < 0.04,
+        "the crossfade delivered {} of {}, not a quarter",
+        turned[1],
+        base[1]
+    );
+    assert!(
+        held[1] < 2.0 && turned[0] < 2.0 && held[2] < 2.0 && turned[2] < 2.0,
+        "a share landed where its shaft did not put it: {held:?} {turned:?}"
     );
 }
 

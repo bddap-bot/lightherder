@@ -32,7 +32,7 @@ impl Cam {
 
 /// In [`Params::monitors`] order. A structure is an upper and a lower monitor
 /// at a right angle with 50/50 glass at 45° between them; the fifth turns on
-/// a shaft of its own.
+/// camera A's shaft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
     UpperA,

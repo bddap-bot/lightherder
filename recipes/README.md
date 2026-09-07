@@ -95,9 +95,8 @@ selects ["program", "program", "program", "program"]
 mon 1/5: hue +0.000  sat 1.200  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
 ```
 
-**Reproduced** in form. The turn count and the arm's taper land, and the outer arm
-carries the cool cast; the core comes out warm where the original's is cool, and
-ours is coarser at the outer end, where the original's copies each carry a spiral of
+**Reproduced** in form. The turn count and the arm's taper land; the core comes out
+warm where the original's is cool, and ours is coarser at the outer end, where the original's copies each carry a spiral of
 their own.
 
 ## dense-orange-spiral
@@ -292,6 +291,7 @@ fader 8  -0.50 throw     switcher B to the middle: structure B shows half its ow
 R1
 fader 8  -0.85 throw     switcher A to 0.15: structure A keeps its own loop
 rotary 5 to two-thirds
+S2                       focus camera B; camera A stays square on
 rotary 1 -0.02 throw     zoom 0.986
 rotary 2 +0.09 throw     rotation +0.141
 M3
@@ -309,9 +309,10 @@ selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.500 of cam 2
 ```
 
-**Reproduced.** Structure B's copies each carry structure A's spiral, which is the
-scene, and the two spirals turn at rates of their own because the two structures'
-cameras stand on shafts of their own.
+**Reproduced.** Structure A holds still, so its picture is a legible copy of the
+seed and structure B's spiral is tiled with it, one whole copy per cell — which is
+the scene. Turn camera A too, by any amount, and the copies smear into a disc: the
+lattice needs one structure parked, which is what two shafts allow and one did not.
 
 ## insanity-mode-pair — Insanity Mode
 
@@ -329,10 +330,10 @@ fader 8  -0.95 throw     switcher C to In1 = camera A. Switchers A and B are alr
                          structure B shows camera A: each is made of the other, and that
                          is the whole of Insanity Mode — one fader from reset
 rotary 5 to two-thirds
-S1                       focus camera A, which is shaft 1
+S1                       focus camera A
 rotary 1 -0.012 throw    zoom 0.992 — barely inward
 rotary 2 +0.04 throw     rotation +0.063 rad, under four degrees a pass
-S2                       focus camera B, which is its own shaft
+S2                       focus camera B
 rotary 1 -0.05 throw     zoom 0.966 — a much stronger pull
 rotary 2 -0.35 throw     rotation -0.550 rad, and the other way round
 M1  fader 2 +0.30        saturation 1.30 on upper A
@@ -351,13 +352,14 @@ mon 1/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 
 mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.000 of cam 2
 ```
 
-**Reproduced.** The mutual composition takes one fader from reset, and the two
-structures land on different pictures because their cameras are framed apart —
-structure A on a slow, barely-shrinking shaft, structure B on a fast one turning the
-other way. With one shaft this scene came out a mirror: all five monitors on the same
-picture, since crossed structures sharing a framing evolve identically. That is the
-whole of what this change buys, and it is what the artist's frame shows — the two
-panels are the same loops in two different hands.
+**Reproduced in form, not in degree.** The mutual composition takes one fader from
+reset. Each structure's panel is the other's picture seen through its own camera, so
+the two can differ by one framing step and no more: upper A is upper B turned and
+shrunk by camera B's shaft, and a rosette turned a third of a radian reads as the
+same rosette. With one shaft the five monitors were one picture to the byte; framed
+apart they differ by that step, measurably and not by much. The artist's cluster on
+one side and crescent on the other is a wider gap than a crossfade crossing can open,
+whichever way the shafts stand.
 
 Ours still differs from his by degree rather than by kind: he moves the cameras
 through a piece and the two forms diverge much further than two parked shafts can.
@@ -387,8 +389,8 @@ and ours carry one. Three things stood between them, and only one is technique:
   seed over camera 3, and the frames here are rendered with it. **#71**
 - **One shaft.** Both cameras shared one zoom and one rotation, so two structures
   crossed into each other evolved identically and Insanity Mode came out a
-  mirror. Fixed: each camera is framed on its own shaft, as the schematic draws
-  them, and the pair above is rendered that way. **#75**
+  mirror. Fixed: each structure's camera is framed on its own shaft, camera 3
+  riding camera A's, as the schematic draws them. **#75**
 
 Three more found on the way, none of them the reason a scene missed: the playable
 band of every continuous knob is a few MIDI codes wide against a travel nobody can

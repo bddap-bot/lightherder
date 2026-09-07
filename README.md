@@ -48,7 +48,7 @@ unlit room.
 Two **structures**, A and B. Each is an upper and a lower monitor at a right
 angle with 50/50 glass at 45° between them, and a camera looking into the
 glass: it sees its upper monitor directly and its lower one in the reflection,
-at half each. The fifth monitor turns on a shaft of its own and shows camera
+at half each. The fifth monitor turns on camera A's shaft and shows camera
 B, always. **Camera 3** is fixed on that rotating monitor and sees nothing
 else.
 
@@ -212,8 +212,9 @@ read ends and it goes back to looking. ALSA raw MIDI and no library — a
 controller is `/dev/snd/midiC<card>D0`, and reading it gives the wire bytes.
 
 The layout is fixed. Twelve knobs on sixteen continuous controls, so there is
-no page button, the fifth rotary is the precision and the last three are dead. Every channel
-is listened to, so a surface set to some other MIDI channel still works.
+no page button, the fifth rotary is the precision and the last three are dead.
+Every channel is listened to, so a surface set to some other MIDI channel
+still works.
 
 | control | is |
 |---|---|
