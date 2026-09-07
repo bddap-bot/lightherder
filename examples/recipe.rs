@@ -135,11 +135,9 @@ fn read(path: &Path) -> Result<Script, String> {
             }
             Some("seed") => {
                 let value = arg(1).ok_or("seed needs FORMAT:NAME")?;
-                script.seed = match value {
-                    "bars" => Input::Pattern(Pattern::Bars),
-                    value => lightherder::input::capture(value)
-                        .map_err(|why| format!("line {}: {why}", n + 1))?,
-                };
+                script.seed = value
+                    .parse()
+                    .map_err(|why| format!("line {}: seed {why}", n + 1))?;
             }
             _ => script.lines.push((n + 1, words)),
         }

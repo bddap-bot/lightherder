@@ -58,13 +58,13 @@ pub fn start() {
     console_error_panic_hook::set_once();
     let _ = console_log::init_with_level(log::Level::Info);
     wasm_bindgen_futures::spawn_local(async {
-        let params = crate::config::instrument();
         // Windowed: the canvas already covers the viewport, and asking the
         // browser for real fullscreen without a click is refused anyway.
         let cli = crate::cli::Cli {
             fullscreen: false,
             ..crate::cli::Cli::default()
         };
+        let params = cli.instrument();
         if let Err(why) = crate::app::run(params, &cli).await {
             complain(&format!("{why}"));
         }

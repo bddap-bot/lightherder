@@ -33,31 +33,6 @@ use ffmpeg::Feed;
 #[cfg(target_arch = "wasm32")]
 use video::Feed;
 
-/// `FORMAT:NAME` off a command line or a recipe, which is ffmpeg's `-f` and
-/// its `-i`. Split at the first colon and no other, because a name is free to
-/// hold more of them: `lavfi:testsrc2=size=640x480:rate=30` is one source and
-/// not three.
-pub fn capture(value: &str) -> Result<Input, String> {
-    let (format, device) = value.split_once(':').ok_or_else(|| {
-        let (f, d) = crate::rig::SEED;
-        format!("seed {value:?} is not FORMAT:NAME, e.g. {f}:{d}")
-    })?;
-    if format.is_empty() || device.is_empty() {
-        return Err(format!(
-            "seed {value:?} names no {}",
-            match (format.is_empty(), device.is_empty()) {
-                (true, true) => "format and no device",
-                (true, false) => "format",
-                _ => "device",
-            }
-        ));
-    }
-    Ok(Input::Capture {
-        format: format.into(),
-        device: device.into(),
-    })
-}
-
 /// One external source in the graph.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
@@ -86,8 +61,31 @@ pub enum Pattern {
 impl fmt::Display for Input {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Input::Pattern(p) => write!(f, "pattern {p:?}"),
-            Input::Capture { format, device } => write!(f, "capture {format}:{device}"),
+            Input::Pattern(Pattern::Bars) => write!(f, "bars"),
+            Input::Capture { format, device } => write!(f, "{format}:{device}"),
+        }
+    }
+}
+
+/// The spelling [`Display`](fmt::Display) writes: `bars`, or `FORMAT:NAME` —
+/// ffmpeg's `-f` and its `-i`, split at the first colon and no other, because
+/// a name is free to hold more of them: `lavfi:testsrc2=size=640x480:rate=30`
+/// is one source and not three.
+impl std::str::FromStr for Input {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Input, String> {
+        if value == "bars" {
+            return Ok(Input::Pattern(Pattern::Bars));
+        }
+        match value.split_once(':') {
+            Some((format, device)) if !format.is_empty() && !device.is_empty() => {
+                Ok(Input::Capture {
+                    format: format.into(),
+                    device: device.into(),
+                })
+            }
+            _ => Err(format!("{value:?} is not bars or FORMAT:NAME")),
         }
     }
 }

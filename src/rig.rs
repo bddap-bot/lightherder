@@ -52,11 +52,6 @@ impl Screen {
     ];
 }
 
-/// The one physical camera the rig is wired to, as ffmpeg opens it. Named
-/// here because the command line prints it and parses it back, and a second
-/// spelling of it is one the two could differ on.
-pub const SEED: (&str, &str) = ("v4l2", "/dev/video0");
-
 /// The luma key switcher D keys the seed over its In1 with: passing from
 /// mid-grey up and cutting to nothing a little below it, which is a lit
 /// subject against an unlit room — what a camera pointed at a couch faces.
@@ -287,8 +282,8 @@ impl Rig {
             monitors: [Monitor::default(); MONITORS],
             input: Plug {
                 source: Input::Capture {
-                    format: SEED.0.into(),
-                    device: SEED.1.into(),
+                    format: "v4l2".into(),
+                    device: "/dev/video0".into(),
                 },
                 key: SEED_KEY,
             },
