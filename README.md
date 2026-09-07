@@ -368,7 +368,7 @@ able to.
 | --- | --- |
 | `--windowed` | a window rather than the whole display |
 | `--resolution 3840x2160` | how big every monitor is (default 1920x1080) |
-| `--seed lavfi:testsrc2` | what is on the switcher, as ffmpeg's `-f` and `-i` (default `v4l2:/dev/video0`) |
+| `--seed lavfi:testsrc2` | what is on the switcher, as ffmpeg's `-f` and `-i`, or `bars` (default `v4l2:/dev/video0`) |
 | `--bench` | what a frame costs, off screen, and exit |
 | `--help` | how to start it, and exit |
 

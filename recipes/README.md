@@ -368,7 +368,8 @@ things stand between the two, and only one of them is technique:
   light that entered. That part is technique, and it is the single biggest lever
   on these images. Fixed: the seed was one camera device written into the graph,
   while the original's second input is a media player showing whatever the piece
-  needs — two dots, a word, a painting, a fish tank; `--seed FORMAT:NAME` names it.
+  needs — two dots, a word, a painting, a fish tank. `--seed FORMAT:NAME` names
+  it. **#74**
 - **The switchers crossfaded where the original keys.** A crossfade at `d` dims
   the background loop to `1-d` *everywhere*, including where the incoming picture
   is black. A keyer leaves the background whole and replaces it only where the
