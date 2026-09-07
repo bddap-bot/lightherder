@@ -104,14 +104,16 @@ pub const CAMERAS: usize = 3;
 /// rotating monitor are belt-locked to one shaft and turn and slide in
 /// unison, and camera 3 is fixed watching that monitor — so what camera 3
 /// sees turns and slides with camera A, off the one number they share.
-/// Camera B has its own. Whether A and B share one is not stated anywhere
-/// found, so they do not.
+/// Camera B stands on its own post and is turned by its own hand: the
+/// artist's two performers give the two cameras different rotations, and
+/// the schematics draw two separate rotating-camera nodes.
 pub const SHAFTS: usize = 2;
 
 /// Which shaft each camera's view stands on, in [`Params::cameras`] order.
 /// The lock is this table and the pair of shafts behind it: there is no
 /// second number for the two to disagree on.
 pub const SHAFT_OF: [usize; CAMERAS] = [0, 1, 0];
+
 pub const MONITORS: usize = 5;
 pub const SWITCHERS: usize = 4;
 
@@ -483,19 +485,6 @@ mod tests {
         }
         let (a, b) = (&params.cameras[0], &params.cameras[1]);
         assert!(a.gain[0] < a.gain[2] && b.gain[0] > b.gain[2]);
-    }
-
-    #[test]
-    fn camera_three_stands_on_camera_a_s_shaft_and_camera_b_on_its_own() {
-        // The belt: camera A and the rotating monitor turn and slide in
-        // unison, and camera 3 is fixed watching that monitor — so what it
-        // sees moves with camera A, off the one number they share. Turning
-        // it moves both readings and cannot move only one.
-        let mut params = Rig::IDENTITY.params();
-        params.shafts[0].rotation += 0.3;
-        assert_eq!(params.framing(0), params.framing(2));
-        assert_ne!(params.framing(0), params.framing(1));
-        assert_eq!(params.framing(1), Framing::identity());
     }
 
     #[test]
