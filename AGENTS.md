@@ -18,3 +18,17 @@ the botq gate runs before it accepts a `done`.
 ## Boundaries
 
 This lightherder repository names only its own components. Name another project only as a declared, versioned dependency, never through its internals. Give a needed shared service a neutral name owned by this project. Do not import the environment of machines running agents: hostnames, addresses, paths outside the repository, service or queue names, credentials, camera frames, or renders of private places. No person's name, schedule or presence enters the repository. Before landing, grep the diff for other projects' names and host details. Remove host details and undeclared project references; dependency declarations expose only the dependency's name and version.
+
+## Build and test details
+
+Use `nix-shell --run 'cargo test'` for the full native suite. The shell supplies
+ffmpeg and the dynamically loaded Vulkan/windowing libraries; GPU tests report
+`SKIPPED` when no adapter is available, and ffmpeg-dependent tests can skip when
+ffmpeg is absent. Check the output as well as the exit code.
+
+For a display connected to an integrated GPU, `WGPU_POWER_PREF=low` selects the
+low-power adapter if the default adapter cannot present to that display.
+
+`nix-shell --run './web/build.sh'` builds the browser module into `web/dist`.
+The wasm-bindgen CLI must match the exact crate version in `Cargo.toml`;
+`shell.nix` supplies it and `web/build.sh` checks the match.
