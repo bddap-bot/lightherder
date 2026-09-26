@@ -255,13 +255,14 @@ mod tests {
 
     #[test]
     fn a_take_keeps_its_last_ten_minutes_and_stays_armed() {
+        let ten_minutes = 10 * 60 * Cadence::SECOND as usize;
         let mut params = crate::config::instrument();
         let mut automation = Automation::default();
         automation.press();
         params.nudge(Knob::Hue, 1.0, at(0));
         automation.pass(&mut params);
         params.nudge(Knob::Hue, 1.0, at(0));
-        for _ in 1..LONGEST {
+        for _ in 1..ten_minutes {
             automation.pass(&mut params);
         }
         params.nudge(Knob::Sharpness, 1.0, at(0));
@@ -270,7 +271,7 @@ mod tests {
         automation.press();
         assert_eq!(
             automation.to_string(),
-            format!("looping 1 of the monitor knobs over {LONGEST} passes")
+            format!("looping 1 of the monitor knobs over {ten_minutes} passes")
         );
         automation.pass(&mut params);
         assert_eq!(params.knob(Knob::Sharpness, at(0)), 0.0);
