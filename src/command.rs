@@ -46,6 +46,8 @@ pub enum Action {
     /// a camera.
     Flip(Axis),
     Automate,
+    Pattern,
+    Quantize,
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -85,6 +87,8 @@ impl Action {
             Action::Flip(Axis::X) => "flip x".into(),
             Action::Flip(Axis::Y) => "flip y".into(),
             Action::Automate => "loop".into(),
+            Action::Pattern => "tap in".into(),
+            Action::Quantize => "16ths".into(),
         }
     }
 }
@@ -121,6 +125,8 @@ mod tests {
             Action::Select,
             Action::Flip(Axis::X),
             Action::Automate,
+            Action::Pattern,
+            Action::Quantize,
             Action::Focus(Node::Camera, 0),
             Action::Record(Edge::Up),
             Action::Cut(Edge::Up),

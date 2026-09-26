@@ -54,6 +54,8 @@ monitor or switcher; Cycle shows their values on screen.
 | Rotary 4 | Monitor frame rate: 60, 30 or 24. |
 | Rotary 5 | Precision: a full movement spans 1/64 to all of a continuous control's range. |
 | R5 / Marker ◀ | Reverse the switcher crossfade / reverse while held. |
+| S5 | While lit, each R5 press is also a beat of the switcher's pattern, repeated every bar of 128 passes; a press landing on a beat removes it. Pressing S5 again keeps the pattern; pressing it on a switcher starts that switcher's pattern empty. |
+| S6 | Land each beat on the nearest sixteenth of the bar. |
 | R6 / R7 | Flip the monitor horizontally / vertically. |
 | R8 | Select direct camera feed or switcher output on a structure monitor. |
 | Rewind / Stop | Reset the last knob moved / reset all knobs. |
@@ -62,9 +64,10 @@ monitor or switcher; Cycle shows their values on screen.
 | Marker Set / Record | Save a still / record while held, in `~/lightherder`. |
 | Play | While Play is lit, record how faders 1–6 move on every monitor, keeping the last ten minutes; press again to loop those moves, and again to stop the loop and record anew. Moving or resetting a looping fader takes it out of the loop. |
 
-Faders and rotaries 1–4 change values by movement. To start feedback, select
-switcher B with R2 and lower fader 8, then select camera B with S2 and turn its
-zoom and rotation slightly.
+Faders and rotaries 1–4 change values by movement. Each switcher keeps its own
+period and pattern, all beating on one grid counted from the start or the last
+reset. To start feedback, select switcher B with R2 and lower fader 8, then
+select camera B with S2 and turn its zoom and rotation slightly.
 
 ## Topology
 

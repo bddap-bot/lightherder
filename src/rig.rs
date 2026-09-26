@@ -11,6 +11,8 @@
 //! second state standing beside the levers that set it, free to drift from
 //! them.
 
+use std::fmt::{self, Write};
+
 use crate::affine::Framing;
 use crate::input::Input;
 use crate::params::{Camera, Key, Monitor, Node, Params, Plug};
@@ -95,6 +97,7 @@ pub struct Rig {
     /// Passes between reversals of each switcher. Zero is the mode off, and
     /// the only latch it has: the knob at its floor.
     pub periods: [u32; SWITCHERS],
+    pub patterns: [Pattern; SWITCHERS],
 }
 
 /// The rig's counts, which are the instrument's: nothing chooses them.
@@ -137,6 +140,32 @@ pub const fn count(node: Node) -> usize {
 /// unverified; a beat slower than that is a hand on the reversal, not a
 /// rhythm.
 pub const MAX_PERIOD: u32 = 60;
+
+pub const SIXTEENTH: u64 = 8;
+pub const BAR: u64 = 16 * SIXTEENTH;
+const _: () = assert!(BAR == u128::BITS as u64);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pattern(u128);
+
+impl Pattern {
+    pub fn beats(self, pass: u64) -> bool {
+        (self.0 >> (pass % BAR)) & 1 == 1
+    }
+
+    fn toggle(&mut self, pass: u64) {
+        self.0 ^= 1 << (pass % BAR);
+    }
+}
+
+impl fmt::Display for Pattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        (0..BAR / SIXTEENTH).try_for_each(|sixteenth| {
+            let heard = (self.0 >> (sixteenth * SIXTEENTH)) & ((1 << SIXTEENTH) - 1) != 0;
+            f.write_char(if heard { 'x' } else { '.' })
+        })
+    }
+}
 
 /// One feed on the rig's cabling, as the share of each camera and of the
 /// seed it carries where the seed's key passes. The shares sum to one:
@@ -200,6 +229,7 @@ impl Rig {
         switchers: [1.0; SWITCHERS],
         selects: [Select::Program; SELECTS],
         periods: [0; SWITCHERS],
+        patterns: [Pattern(0); SWITCHERS],
     };
 
     fn program(&self, switcher: Switcher) -> Feed {
@@ -248,17 +278,24 @@ impl Rig {
         self.switchers[switcher] = 1.0 - self.switchers[switcher];
     }
 
-    /// Every switcher whose period divides `pass` reverses. Counted from the
-    /// start of the run rather than from when a period was dialled in, so
-    /// every switcher in the mode beats on one grid — which is what the
-    /// original's quantizing is for. The grid is in passes, so nothing here
-    /// reads a clock.
     pub fn beat(&mut self, pass: u64) {
         for i in 0..SWITCHERS {
             let period = u64::from(self.periods[i]);
-            if period != 0 && pass.is_multiple_of(period) {
+            let on_period = period != 0 && pass.is_multiple_of(period);
+            if on_period != self.patterns[i].beats(pass) {
                 self.flip(i);
             }
+        }
+    }
+
+    pub fn tap(&mut self, switcher: usize, pass: u64, quantize: bool) {
+        let at = match quantize {
+            true => (pass + SIXTEENTH / 2) / SIXTEENTH * SIXTEENTH,
+            false => pass,
+        };
+        self.patterns[switcher].toggle(at);
+        if at < pass {
+            self.flip(switcher);
         }
     }
 
@@ -331,7 +368,7 @@ mod tests {
         Rig {
             switchers,
             selects: [select; SELECTS],
-            periods: [0; SWITCHERS],
+            ..Rig::IDENTITY
         }
     }
 
@@ -440,7 +477,7 @@ mod tests {
                             let rig = Rig {
                                 switchers: [a, b, c, d],
                                 selects: std::array::from_fn(|i| select(bits >> i & 1 != 0)),
-                                periods: [0; SWITCHERS],
+                                ..Rig::IDENTITY
                             };
                             for screen in Screen::ALL {
                                 let feed = rig.shows(screen);
@@ -511,5 +548,78 @@ mod tests {
         assert_eq!(params.cameras[0].look, [0.5, 0.5, 0.0, 0.0, 0.0]);
         assert_eq!(params.cameras[1].look, [0.0, 0.0, 0.5, 0.5, 0.0]);
         assert_eq!(params.cameras[2].look, [0.0, 0.0, 0.0, 0.0, 1.0]);
+    }
+
+    fn heard(
+        rig: &mut Rig,
+        passes: std::ops::RangeInclusive<u64>,
+        taps: &[(u64, usize, bool)],
+    ) -> [Vec<u64>; SWITCHERS] {
+        let mut heard: [Vec<u64>; SWITCHERS] = Default::default();
+        for pass in passes {
+            let was = rig.switchers;
+            for &(_, switcher, quantize) in taps.iter().filter(|tap| tap.0 == pass) {
+                rig.tap(switcher, pass, quantize);
+            }
+            rig.beat(pass);
+            for (i, reversals) in heard.iter_mut().enumerate() {
+                if rig.switchers[i] != was[i] {
+                    reversals.push(pass);
+                }
+            }
+        }
+        heard
+    }
+
+    #[test]
+    fn a_tapped_beat_reverses_its_switcher_on_its_own_pass_every_bar() {
+        let mut rig = Rig::IDENTITY;
+        let heard = heard(&mut rig, 1..=3 * BAR, &[(5, 1, false), (43, 1, false)]);
+        assert_eq!(
+            heard,
+            [
+                vec![],
+                vec![5, 43, BAR + 5, BAR + 43, 2 * BAR + 5, 2 * BAR + 43],
+                vec![],
+                vec![],
+            ]
+        );
+        assert_eq!(rig.patterns[1].to_string(), "x....x..........");
+        assert_eq!(rig.patterns[0].to_string(), "................");
+    }
+
+    #[test]
+    fn a_quantized_tap_lands_on_the_nearest_sixteenth_of_one_grid_for_every_switcher() {
+        let mut rig = Rig::IDENTITY;
+        let taps = [(12, 3, true), (19, 0, true), (29, 2, true), (29, 1, false)];
+        let heard = heard(&mut rig, 1..=2 * BAR + 40, &taps);
+        assert_eq!(
+            heard,
+            [
+                vec![19, BAR + 16, 2 * BAR + 16],
+                vec![29, BAR + 29, 2 * BAR + 29],
+                vec![32, BAR + 32, 2 * BAR + 32],
+                vec![16, BAR + 16, 2 * BAR + 16],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_tap_on_a_beat_takes_it_out_and_takes_back_its_reversal() {
+        let mut rig = Rig::IDENTITY;
+        rig.tap(0, 9, true);
+        assert_ne!(rig, Rig::IDENTITY);
+        rig.tap(0, 11, true);
+        rig.tap(2, 40, false);
+        rig.tap(2, 40, false);
+        assert_eq!(rig, Rig::IDENTITY);
+    }
+
+    #[test]
+    fn a_period_and_a_pattern_beating_on_one_pass_are_no_reversal() {
+        let mut rig = Rig::IDENTITY;
+        rig.periods[0] = 4;
+        let heard = heard(&mut rig, 1..=12, &[(8, 0, false)]);
+        assert_eq!(heard[0], [4, 12]);
     }
 }

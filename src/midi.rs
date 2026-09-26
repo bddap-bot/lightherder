@@ -182,14 +182,14 @@ const _: () = assert!(
     "a count past the strips would name selects no button can carry"
 );
 
-/// The tails of the Record and Solo rows, which the rig leaves dead — the
-/// switchers and the cameras stop short of them — so they are the select
-/// buttons no rig can claim, and these seven cost the transport nothing.
 pub(crate) const SELECT: u8 = R_ROW + STRIPS as u8 - 1;
 pub(crate) const FLIP_X: u8 = SELECT - 2;
 pub(crate) const FLIP_Y: u8 = SELECT - 1;
 pub(crate) const REVERSE: u8 = FLIP_X - 1;
 const _: () = assert!(crate::rig::count(Node::Switcher) as u8 + R_ROW <= REVERSE);
+pub(crate) const PATTERN: u8 = S_ROW + 4;
+pub(crate) const QUANTIZE: u8 = PATTERN + 1;
+const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= PATTERN);
 pub(crate) const PRECISION: u8 = ROTARY_ROW + 4;
 
 pub(crate) fn spot(cc: u8) -> Option<Spot> {
@@ -233,7 +233,7 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 /// explains all of the above — the one button whose job survives not
 /// knowing what any button does. Marker set takes a still of the display,
 /// and record records it for as long as a hand stays on it.
-pub(crate) const BUTTONS: [Button; 25] = [
+pub(crate) const BUTTONS: [Button; 27] = [
     button(S_ROW, Action::Focus(Node::Camera, 0)),
     button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
     button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
@@ -259,6 +259,8 @@ pub(crate) const BUTTONS: [Button; 25] = [
     button(FLIP_X, Action::Flip(Axis::X)),
     button(FLIP_Y, Action::Flip(Axis::Y)),
     button(SELECT, Action::Select),
+    button(PATTERN, Action::Pattern),
+    button(QUANTIZE, Action::Quantize),
 ];
 
 /// Every control number a button answers to, which is the whole of what the
@@ -279,6 +281,8 @@ pub struct Shown {
     pub overlay: bool,
     pub solo: bool,
     pub armed: bool,
+    pub tapping: bool,
+    pub quantize: bool,
 }
 
 /// One thing off the wire. A knob or a button is a control change; a system
@@ -616,7 +620,9 @@ impl Midi {
         }) | when(shown.overlay, Action::Overlay)
             | when(shown.solo, Action::Solo)
             | when(shown.program, Action::Select)
-            | when(shown.armed, Action::Automate);
+            | when(shown.armed, Action::Automate)
+            | when(shown.tapping, Action::Pattern)
+            | when(shown.quantize, Action::Quantize);
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
@@ -1079,6 +1085,20 @@ mod tests {
             lamp(41),
             "the knob recorder is play"
         );
+        assert_eq!(
+            lit(Shown {
+                tapping: true,
+                ..Shown::default()
+            }),
+            lamp(PATTERN)
+        );
+        assert_eq!(
+            lit(Shown {
+                quantize: true,
+                ..Shown::default()
+            }),
+            lamp(QUANTIZE)
+        );
     }
 
     #[test]
@@ -1211,9 +1231,11 @@ mod tests {
                 button(69, Action::Flip(Axis::X)),
                 button(70, Action::Flip(Axis::Y)),
                 button(71, Action::Select),
+                button(36, Action::Pattern),
+                button(37, Action::Quantize),
             ]
         );
-        for cc in [21, 22, 23, 37, 38, 39, 58, 59] {
+        for cc in [21, 22, 23, 35, 38, 39, 53, 54, 55, 58, 59] {
             assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
             assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
         }
@@ -1250,6 +1272,8 @@ mod tests {
             Action::Flip(Axis::Y),
             Action::Select,
             Action::Automate,
+            Action::Pattern,
+            Action::Quantize,
         ] {
             let on = BUTTONS.iter().filter(|b| b.action == action).count();
             assert_eq!(on, 1, "{action:?} is on {on} buttons");
@@ -1509,7 +1533,7 @@ mod tests {
     #[test]
     fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        for dead in [37, 38, 39, 58, 59, 100] {
+        for dead in [35, 38, 39, 53, 54, 55, 58, 59, 100] {
             assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
             assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
         }

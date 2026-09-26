@@ -715,7 +715,7 @@ impl Params {
             "cam {}/{}: zoom {}  rot {}  delay {}/{}\n\
              mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \
              temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}\n\
-             sw {}/{}: switcher {}  period {}",
+             sw {}/{}: switcher {}  period {}  pattern {}",
             focus.camera + 1,
             self.cameras.len(),
             reads(Knob::Zoom),
@@ -743,6 +743,7 @@ impl Params {
             self.rig.switchers.len(),
             reads(Knob::Switcher),
             reads(Knob::Period),
+            self.rig.patterns[focus.switcher],
         )
     }
 }

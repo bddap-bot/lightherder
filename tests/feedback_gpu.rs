@@ -1061,7 +1061,7 @@ fn blank() -> Params {
     p.rig = Rig {
         switchers: [0.0; SWITCHERS],
         selects: [Select::Direct; SELECTS],
-        periods: [0; SWITCHERS],
+        ..Rig::IDENTITY
     };
     p.delay = 0;
     p.shafts = [Framing::identity(); SHAFTS];
