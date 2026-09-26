@@ -299,7 +299,7 @@ impl Rig {
         };
         let heard = self.reverses(switcher, at);
         self.patterns[switcher].add(at);
-        if at < pass && !heard {
+        if at < pass && !heard && !self.reverses(switcher, pass) {
             self.flip(switcher);
         }
     }
@@ -624,6 +624,7 @@ mod tests {
         let once = rig;
         assert_ne!(once, Rig::IDENTITY);
         rig.tap(0, 11, true);
+        assert_eq!(rig, once);
         rig.tap(0, 8, false);
         assert_eq!(rig, once);
     }
@@ -636,6 +637,16 @@ mod tests {
         let mut want: Vec<u64> = (1..=(BAR + 16) / 8).map(|k| 8 * k).collect();
         want.extend([12, BAR + 12]);
         want.sort_unstable();
+        assert_eq!(heard[0], want);
+    }
+
+    #[test]
+    fn a_late_tap_on_a_pass_that_reverses_anyway_is_that_reversal() {
+        let mut rig = Rig::IDENTITY;
+        rig.periods[0] = 7;
+        let heard = heard(&mut rig, 1..=BAR + 48, &[(49, 0, true)]);
+        let mut want: Vec<u64> = (1..=(BAR + 48) / 7).map(|k| 7 * k).collect();
+        want.push(BAR + 48);
         assert_eq!(heard[0], want);
     }
 }
