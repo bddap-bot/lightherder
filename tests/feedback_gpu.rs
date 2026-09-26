@@ -1058,11 +1058,9 @@ fn silent_monitor() -> Monitor {
 /// and what it wants each camera to see it says with `look`.
 fn blank() -> Params {
     let mut p = lightherder::config::instrument();
-    p.rig = Rig {
-        switchers: [0.0; SWITCHERS],
-        selects: [Select::Direct; SELECTS],
-        ..Rig::IDENTITY
-    };
+    p.rig = Rig::IDENTITY;
+    p.rig.switchers = [0.0; SWITCHERS];
+    p.rig.selects = [Select::Direct; SELECTS];
     p.delay = 0;
     p.shafts = [Framing::identity(); SHAFTS];
     for camera in &mut p.cameras {

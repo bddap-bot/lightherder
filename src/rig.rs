@@ -98,6 +98,7 @@ pub struct Rig {
     /// the only latch it has: the knob at its floor.
     pub periods: [u32; SWITCHERS],
     pub patterns: [Pattern; SWITCHERS],
+    owed: [bool; SWITCHERS],
 }
 
 /// The rig's counts, which are the instrument's: nothing chooses them.
@@ -231,6 +232,7 @@ impl Rig {
         selects: [Select::Program; SELECTS],
         periods: [0; SWITCHERS],
         patterns: [Pattern(0); SWITCHERS],
+        owed: [false; SWITCHERS],
     };
 
     fn program(&self, switcher: Switcher) -> Feed {
@@ -286,7 +288,7 @@ impl Rig {
 
     pub fn beat(&mut self, pass: u64) {
         for i in 0..SWITCHERS {
-            if self.reverses(i, pass) {
+            if std::mem::take(&mut self.owed[i]) || self.reverses(i, pass) {
                 self.flip(i);
             }
         }
@@ -297,11 +299,8 @@ impl Rig {
             true => (pass + SIXTEENTH / 2) / SIXTEENTH * SIXTEENTH,
             false => pass,
         };
-        let heard = self.reverses(switcher, at);
+        self.owed[switcher] |= at < pass && !self.reverses(switcher, at);
         self.patterns[switcher].add(at);
-        if at < pass && !heard && !self.reverses(switcher, pass) {
-            self.flip(switcher);
-        }
     }
 
     fn shows(&self, screen: Screen) -> Feed {
@@ -644,9 +643,15 @@ mod tests {
     fn a_late_tap_on_a_pass_that_reverses_anyway_is_that_reversal() {
         let mut rig = Rig::IDENTITY;
         rig.periods[0] = 7;
-        let heard = heard(&mut rig, 1..=BAR + 48, &[(49, 0, true)]);
         let mut want: Vec<u64> = (1..=(BAR + 48) / 7).map(|k| 7 * k).collect();
         want.push(BAR + 48);
-        assert_eq!(heard[0], want);
+        assert_eq!(heard(&mut rig, 1..=BAR + 48, &[(49, 0, true)])[0], want);
+        for taps in [
+            [(17, 1, true), (17, 1, false)],
+            [(17, 1, false), (17, 1, true)],
+        ] {
+            let mut rig = Rig::IDENTITY;
+            assert_eq!(heard(&mut rig, 1..=20, &taps)[1], [17], "{taps:?}");
+        }
     }
 }
