@@ -153,15 +153,16 @@ impl Pattern {
         (self.0 >> (pass % BAR)) & 1 == 1
     }
 
-    fn toggle(&mut self, pass: u64) {
-        self.0 ^= 1 << (pass % BAR);
+    fn add(&mut self, pass: u64) {
+        self.0 |= 1 << (pass % BAR);
     }
 }
 
 impl fmt::Display for Pattern {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let centred = self.0.rotate_left((SIXTEENTH / 2) as u32);
         (0..BAR / SIXTEENTH).try_for_each(|sixteenth| {
-            let heard = (self.0 >> (sixteenth * SIXTEENTH)) & ((1 << SIXTEENTH) - 1) != 0;
+            let heard = (centred >> (sixteenth * SIXTEENTH)) & ((1 << SIXTEENTH) - 1) != 0;
             f.write_char(if heard { 'x' } else { '.' })
         })
     }
@@ -278,11 +279,14 @@ impl Rig {
         self.switchers[switcher] = 1.0 - self.switchers[switcher];
     }
 
+    fn reverses(&self, switcher: usize, pass: u64) -> bool {
+        let period = u64::from(self.periods[switcher]);
+        (period != 0 && pass.is_multiple_of(period)) || self.patterns[switcher].beats(pass)
+    }
+
     pub fn beat(&mut self, pass: u64) {
         for i in 0..SWITCHERS {
-            let period = u64::from(self.periods[i]);
-            let on_period = period != 0 && pass.is_multiple_of(period);
-            if on_period != self.patterns[i].beats(pass) {
+            if self.reverses(i, pass) {
                 self.flip(i);
             }
         }
@@ -293,8 +297,9 @@ impl Rig {
             true => (pass + SIXTEENTH / 2) / SIXTEENTH * SIXTEENTH,
             false => pass,
         };
-        self.patterns[switcher].toggle(at);
-        if at < pass {
+        let heard = self.reverses(switcher, at);
+        self.patterns[switcher].add(at);
+        if at < pass && !heard {
             self.flip(switcher);
         }
     }
@@ -584,8 +589,16 @@ mod tests {
                 vec![],
             ]
         );
-        assert_eq!(rig.patterns[1].to_string(), "x....x..........");
-        assert_eq!(rig.patterns[0].to_string(), "................");
+    }
+
+    #[test]
+    fn the_log_shows_each_beat_on_the_sixteenth_it_is_nearest() {
+        let mut rig = Rig::IDENTITY;
+        for pass in [3, 4, 67, BAR - 4] {
+            rig.tap(0, pass, false);
+        }
+        assert_eq!(rig.patterns[0].to_string(), "xx......x.......");
+        assert_eq!(rig.patterns[1].to_string(), "................");
     }
 
     #[test]
@@ -605,21 +618,24 @@ mod tests {
     }
 
     #[test]
-    fn a_second_tap_on_a_beat_takes_it_out_and_takes_back_its_reversal() {
+    fn a_tap_on_a_beat_already_there_adds_nothing() {
         let mut rig = Rig::IDENTITY;
         rig.tap(0, 9, true);
-        assert_ne!(rig, Rig::IDENTITY);
+        let once = rig;
+        assert_ne!(once, Rig::IDENTITY);
         rig.tap(0, 11, true);
-        rig.tap(2, 40, false);
-        rig.tap(2, 40, false);
-        assert_eq!(rig, Rig::IDENTITY);
+        rig.tap(0, 8, false);
+        assert_eq!(rig, once);
     }
 
     #[test]
-    fn a_period_and_a_pattern_beating_on_one_pass_are_no_reversal() {
+    fn a_period_and_a_pattern_beating_on_one_pass_reverse_it_once() {
         let mut rig = Rig::IDENTITY;
-        rig.periods[0] = 4;
-        let heard = heard(&mut rig, 1..=12, &[(8, 0, false)]);
-        assert_eq!(heard[0], [4, 12]);
+        rig.periods[0] = 8;
+        let heard = heard(&mut rig, 1..=BAR + 16, &[(12, 0, false), (19, 0, true)]);
+        let mut want: Vec<u64> = (1..=(BAR + 16) / 8).map(|k| 8 * k).collect();
+        want.extend([12, BAR + 12]);
+        want.sort_unstable();
+        assert_eq!(heard[0], want);
     }
 }

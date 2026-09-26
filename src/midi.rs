@@ -187,9 +187,9 @@ pub(crate) const FLIP_X: u8 = SELECT - 2;
 pub(crate) const FLIP_Y: u8 = SELECT - 1;
 pub(crate) const REVERSE: u8 = FLIP_X - 1;
 const _: () = assert!(crate::rig::count(Node::Switcher) as u8 + R_ROW <= REVERSE);
-pub(crate) const PATTERN: u8 = S_ROW + 4;
-pub(crate) const QUANTIZE: u8 = PATTERN + 1;
-const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= PATTERN);
+pub(crate) const TAP_IN: u8 = S_ROW + 4;
+pub(crate) const QUANTIZE: u8 = TAP_IN + 1;
+const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= TAP_IN);
 pub(crate) const PRECISION: u8 = ROTARY_ROW + 4;
 
 pub(crate) fn spot(cc: u8) -> Option<Spot> {
@@ -259,7 +259,7 @@ pub(crate) const BUTTONS: [Button; 27] = [
     button(FLIP_X, Action::Flip(Axis::X)),
     button(FLIP_Y, Action::Flip(Axis::Y)),
     button(SELECT, Action::Select),
-    button(PATTERN, Action::Pattern),
+    button(TAP_IN, Action::TapIn),
     button(QUANTIZE, Action::Quantize),
 ];
 
@@ -621,7 +621,7 @@ impl Midi {
             | when(shown.solo, Action::Solo)
             | when(shown.program, Action::Select)
             | when(shown.armed, Action::Automate)
-            | when(shown.tapping, Action::Pattern)
+            | when(shown.tapping, Action::TapIn)
             | when(shown.quantize, Action::Quantize);
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
@@ -1090,7 +1090,7 @@ mod tests {
                 tapping: true,
                 ..Shown::default()
             }),
-            lamp(PATTERN)
+            lamp(TAP_IN)
         );
         assert_eq!(
             lit(Shown {
@@ -1231,7 +1231,7 @@ mod tests {
                 button(69, Action::Flip(Axis::X)),
                 button(70, Action::Flip(Axis::Y)),
                 button(71, Action::Select),
-                button(36, Action::Pattern),
+                button(36, Action::TapIn),
                 button(37, Action::Quantize),
             ]
         );
@@ -1272,7 +1272,7 @@ mod tests {
             Action::Flip(Axis::Y),
             Action::Select,
             Action::Automate,
-            Action::Pattern,
+            Action::TapIn,
             Action::Quantize,
         ] {
             let on = BUTTONS.iter().filter(|b| b.action == action).count();

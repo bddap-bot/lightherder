@@ -84,7 +84,7 @@ pub struct App {
     /// a select pressed mid-hold cannot hand the release to another one.
     cut: Option<usize>,
     automation: Automation,
-    tapping: Option<usize>,
+    tapping: bool,
     quantize: bool,
     played: u64,
     /// Passes and presents since the last rate line, and when that was. Two
@@ -196,7 +196,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             solo: false,
             cut: None,
             automation: Automation::default(),
-            tapping: None,
+            tapping: false,
             quantize: false,
             played: 0,
             passes: 0,
@@ -390,7 +390,7 @@ impl App {
         // and so was the knob "the last knob turned" names.
         self.cut = None;
         self.automation = Automation::default();
-        self.tapping = None;
+        self.tapping = false;
         self.last_knob = None;
         self.midi.forgive(Knob::ALL);
         log::info!("reset: {}", self.params.describe(self.focus));
@@ -408,7 +408,7 @@ impl App {
             overlay: self.overlay_shown,
             solo: self.solo,
             armed: self.automation.armed(),
-            tapping: self.tapping == Some(self.focus.switcher),
+            tapping: self.tapping,
             quantize: self.quantize,
         }
     }
@@ -444,6 +444,9 @@ impl App {
         }
         self.midi
             .forgive(Knob::ALL.into_iter().filter(|knob| moved_under(*knob)));
+        if node == Node::Switcher && index != self.focus.switcher {
+            self.tapping = false;
+        }
         self.focus = self.focus.with(node, index);
         log::info!("{}", self.params.describe(self.focus));
     }
@@ -558,7 +561,7 @@ impl App {
             }
             Action::Reverse => {
                 let switcher = self.focus.switcher;
-                match self.tapping == Some(switcher) {
+                match self.tapping {
                     true => self
                         .params
                         .rig
@@ -587,18 +590,15 @@ impl App {
                 self.automation.press();
                 log::info!("automation {}", self.automation);
             }
-            Action::Pattern => {
+            Action::TapIn => {
+                self.tapping = !self.tapping;
                 let switcher = self.focus.switcher;
-                self.tapping = match self.tapping == Some(switcher) {
-                    true => None,
-                    false => {
-                        self.params.rig.patterns[switcher] = Pattern::default();
-                        Some(switcher)
-                    }
-                };
                 match self.tapping {
-                    Some(_) => log::info!("tapping a pattern into switcher {}", switcher + 1),
-                    None => log::info!("{}", self.params.describe(self.focus)),
+                    true => {
+                        self.params.rig.patterns[switcher] = Pattern::default();
+                        log::info!("tapping a pattern into switcher {}", switcher + 1);
+                    }
+                    false => log::info!("{}", self.params.describe(self.focus)),
                 }
             }
             Action::Quantize => {
@@ -908,7 +908,7 @@ mod tests {
             solo: false,
             cut: None,
             automation: Automation::default(),
-            tapping: None,
+            tapping: false,
             quantize: false,
             played: 0,
             passes: 0,
@@ -1756,45 +1756,45 @@ mod tests {
     #[test]
     fn reverse_taps_a_pattern_while_tap_in_is_lit_and_the_bar_repeats_it() {
         use crate::lamps::lamp;
-        use crate::midi::{PATTERN, REVERSE};
+        use crate::midi::{REVERSE, TAP_IN};
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let mut board = plugged(&mut app);
         app.act(Action::Focus(Node::Switcher, 1));
         let panel = lamp(32) | lamp(48) | lamp(65) | lamp(71);
-        press(&mut app, &board, PATTERN);
+        press(&mut app, &board, TAP_IN);
         assert!(
-            board.wire.panel_becomes(panel | lamp(PATTERN)),
+            board.wire.panel_becomes(panel | lamp(TAP_IN)),
             "tap in is dark while it takes taps"
         );
         assert_eq!(
             bars(&mut app, &board, 1, &[5, 6, 40]),
             [vec![], vec![5, 6, 40], vec![], vec![]]
         );
-        press(&mut app, &board, PATTERN);
+        press(&mut app, &board, TAP_IN);
         assert!(board.wire.panel_becomes(panel), "tap in stayed lit");
         assert_eq!(
             bars(&mut app, &board, 2, &[]),
             [vec![], vec![5, 6, 40, 5, 6, 40], vec![], vec![]]
         );
         let line = app.params.describe(app.focus);
-        assert!(line.ends_with("pattern x....x.........."), "{line}");
+        assert!(line.ends_with("pattern .x...x.........."), "{line}");
 
         let stood = app.params.rig.switchers[1];
         press(&mut app, &board, REVERSE);
         assert_eq!(app.params.rig.switchers[1], 1.0 - stood);
         assert_eq!(bars(&mut app, &board, 1, &[])[1], [5, 6, 40]);
 
-        press(&mut app, &board, PATTERN);
-        press(&mut app, &board, PATTERN);
+        press(&mut app, &board, TAP_IN);
+        press(&mut app, &board, TAP_IN);
         assert!(bars(&mut app, &board, 2, &[]).iter().all(Vec::is_empty));
     }
 
     #[test]
     fn with_16ths_lit_a_tap_lands_on_the_nearest_sixteenth() {
         use crate::lamps::lamp;
-        use crate::midi::{PATTERN, QUANTIZE};
+        use crate::midi::{QUANTIZE, TAP_IN};
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
@@ -1802,13 +1802,13 @@ mod tests {
         let panel = lamp(32) | lamp(48) | lamp(64) | lamp(71);
         press(&mut app, &board, QUANTIZE);
         assert!(board.wire.panel_becomes(panel | lamp(QUANTIZE)));
-        press(&mut app, &board, PATTERN);
+        press(&mut app, &board, TAP_IN);
         assert_eq!(
             bars(&mut app, &board, 1, &[19, 29])[0],
             [19, 32],
             "a late tap reverses at once, an early one waits for its sixteenth"
         );
-        press(&mut app, &board, PATTERN);
+        press(&mut app, &board, TAP_IN);
         press(&mut app, &board, QUANTIZE);
         assert!(board.wire.panel_becomes(panel), "16ths stayed lit");
         assert_eq!(bars(&mut app, &board, 1, &[])[0], [16, 32]);
@@ -1816,19 +1816,30 @@ mod tests {
 
     #[test]
     fn every_switcher_keeps_its_rhythm_while_the_select_row_moves_the_controls_on() {
-        use crate::midi::PATTERN;
+        use crate::midi::{REVERSE, TAP_IN};
         use crate::rig::BAR;
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let board = plugged(&mut app);
-        press(&mut app, &board, PATTERN);
+        press(&mut app, &board, TAP_IN);
         bars(&mut app, &board, 1, &[10]);
         app.act(Action::Focus(Node::Switcher, 2));
-        press(&mut app, &board, PATTERN);
+        assert!(
+            !app.shown().tapping,
+            "selecting another switcher lets go of the taps"
+        );
+        let stood = app.params.rig.switchers[2];
+        press(&mut app, &board, REVERSE);
+        assert_eq!(
+            app.params.rig.switchers[2],
+            1.0 - stood,
+            "R5 reverses again"
+        );
+        assert_eq!(app.params.rig.patterns[2], Pattern::default());
+        press(&mut app, &board, TAP_IN);
         bars(&mut app, &board, 1, &[BAR + 20]);
         app.act(Action::Focus(Node::Switcher, 3));
-        assert!(!app.shown().tapping, "the lamp is the focused switcher's");
         surface(&mut app, &board, 6, 0);
         surface(&mut app, &board, 6, 68);
         assert_eq!(app.params.rig.periods, [0, 0, 0, 32]);
@@ -1837,7 +1848,7 @@ mod tests {
             [vec![10], vec![], vec![20], vec![32, 64, 96, 0]]
         );
 
-        app.act(Action::Focus(Node::Switcher, 2));
+        press(&mut app, &board, TAP_IN);
         assert!(app.shown().tapping);
         app.act(Action::Reset);
         assert!(!app.shown().tapping);
