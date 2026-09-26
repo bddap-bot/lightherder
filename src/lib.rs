@@ -4,6 +4,7 @@
 
 pub mod affine;
 pub mod app;
+pub(crate) mod automation;
 pub mod bench;
 pub mod capture;
 pub mod cli;

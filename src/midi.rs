@@ -232,9 +232,8 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 /// puts the whole panel back. Cycle shows and hides the overlay that
 /// explains all of the above — the one button whose job survives not
 /// knowing what any button does. Marker set takes a still of the display,
-/// and record records it for as long as a hand stays on it. The track pair
-/// and play are dead.
-pub(crate) const BUTTONS: [Button; 24] = [
+/// and record records it for as long as a hand stays on it.
+pub(crate) const BUTTONS: [Button; 25] = [
     button(S_ROW, Action::Focus(Node::Camera, 0)),
     button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
     button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
@@ -254,6 +253,7 @@ pub(crate) const BUTTONS: [Button; 24] = [
     button(44, Action::Solo),
     button(60, Action::Screencap),
     button(45, Action::Record(Edge::Down)),
+    button(41, Action::Automate),
     button(61, Action::Cut(Edge::Down)),
     button(REVERSE, Action::Reverse),
     button(FLIP_X, Action::Flip(Axis::X)),
@@ -278,6 +278,7 @@ pub struct Shown {
     pub program: bool,
     pub overlay: bool,
     pub solo: bool,
+    pub armed: bool,
 }
 
 /// One thing off the wire. A knob or a button is a control change; a system
@@ -614,7 +615,8 @@ impl Midi {
             want | self.lamp_of(Action::Focus(node, focus.at(node)))
         }) | when(shown.overlay, Action::Overlay)
             | when(shown.solo, Action::Solo)
-            | when(shown.program, Action::Select);
+            | when(shown.program, Action::Select)
+            | when(shown.armed, Action::Automate);
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
@@ -1069,6 +1071,14 @@ mod tests {
             }),
             lamp(FLIP_X) | lamp(FLIP_Y)
         );
+        assert_eq!(
+            lit(Shown {
+                armed: true,
+                ..Shown::default()
+            }),
+            lamp(41),
+            "the knob recorder is play"
+        );
     }
 
     #[test]
@@ -1195,6 +1205,7 @@ mod tests {
                 button(44, Action::Solo),
                 button(60, Action::Screencap),
                 button(45, Action::Record(Edge::Down)),
+                button(41, Action::Automate),
                 button(61, Action::Cut(Edge::Down)),
                 button(68, Action::Reverse),
                 button(69, Action::Flip(Axis::X)),
@@ -1202,7 +1213,7 @@ mod tests {
                 button(71, Action::Select),
             ]
         );
-        for cc in [21, 22, 23, 37, 38, 39, 41, 58, 59] {
+        for cc in [21, 22, 23, 37, 38, 39, 58, 59] {
             assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
             assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
         }
@@ -1238,6 +1249,7 @@ mod tests {
             Action::Flip(Axis::X),
             Action::Flip(Axis::Y),
             Action::Select,
+            Action::Automate,
         ] {
             let on = BUTTONS.iter().filter(|b| b.action == action).count();
             assert_eq!(on, 1, "{action:?} is on {on} buttons");
@@ -1497,7 +1509,7 @@ mod tests {
     #[test]
     fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        for dead in [37, 38, 39, 41, 58, 59, 100] {
+        for dead in [37, 38, 39, 58, 59, 100] {
             assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
             assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
         }

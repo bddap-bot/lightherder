@@ -45,6 +45,7 @@ pub enum Action {
     /// the focused monitor, because the rig mirrors a router output and not
     /// a camera.
     Flip(Axis),
+    Automate,
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -83,6 +84,7 @@ impl Action {
             Action::Select => "select".into(),
             Action::Flip(Axis::X) => "flip x".into(),
             Action::Flip(Axis::Y) => "flip y".into(),
+            Action::Automate => "auto".into(),
         }
     }
 }
@@ -118,6 +120,7 @@ mod tests {
             Action::Reverse,
             Action::Select,
             Action::Flip(Axis::X),
+            Action::Automate,
             Action::Focus(Node::Camera, 0),
             Action::Record(Edge::Up),
             Action::Cut(Edge::Up),

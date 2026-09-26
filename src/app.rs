@@ -9,6 +9,7 @@ use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+use crate::automation::Automation;
 use crate::capture::Capture;
 use crate::cli::Cli;
 use crate::clock::Clock;
@@ -32,9 +33,10 @@ fn finished(capture: Capture) {
 
 /// One beat of the clock, before the pass it falls on. Not said on the log:
 /// at a period of one it would be a line a pass.
-fn beat(played: &mut u64, params: &mut Params) {
+fn beat(played: &mut u64, params: &mut Params, automation: &mut Automation) {
     *played += 1;
     params.rig.beat(*played);
+    automation.pass(params);
 }
 
 struct Live {
@@ -80,6 +82,7 @@ pub struct App {
     /// on the button. Named rather than taken from the focus at release, so
     /// a select pressed mid-hold cannot hand the release to another one.
     cut: Option<usize>,
+    automation: Automation,
     /// Passes since the run began, or the last reset: the grid the period
     /// mode beats on.
     played: u64,
@@ -191,6 +194,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             overlay_shown: false,
             solo: false,
             cut: None,
+            automation: Automation::default(),
             played: 0,
             passes: 0,
             presents: 0,
@@ -382,6 +386,7 @@ impl App {
         // The column the cut took was a column of the panel that is gone,
         // and so was the knob "the last knob turned" names.
         self.cut = None;
+        self.automation = Automation::default();
         self.last_knob = None;
         self.midi.forgive(Knob::ALL);
         log::info!("reset: {}", self.params.describe(self.focus));
@@ -389,7 +394,7 @@ impl App {
 
     #[cfg(test)]
     fn beat(&mut self) {
-        beat(&mut self.played, &mut self.params);
+        beat(&mut self.played, &mut self.params, &mut self.automation);
     }
 
     fn shown(&self) -> Shown {
@@ -398,6 +403,7 @@ impl App {
             program: self.params.rig.on_program(self.focus.monitor),
             overlay: self.overlay_shown,
             solo: self.solo,
+            armed: self.automation.armed(),
         }
     }
 
@@ -471,6 +477,7 @@ impl App {
             return log::info!("no knob has been turned yet");
         };
         self.params.reset(knob, self.focus);
+        self.automation.take_back(knob, self.focus);
         self.midi.forgive([knob]);
         log::info!(
             "{} reset: {}",
@@ -488,6 +495,7 @@ impl App {
     fn act(&mut self, action: Action) {
         match action {
             Action::Turn(knob, delta) => {
+                self.automation.take_back(knob, self.focus);
                 self.params.nudge(knob, delta, self.focus);
                 self.last_knob = Some(knob);
                 log::info!("{}", self.params.describe(self.focus));
@@ -561,6 +569,10 @@ impl App {
                     self.focus.monitor + 1,
                     monitor.flip
                 );
+            }
+            Action::Automate => {
+                self.automation.press();
+                log::info!("automation {}", self.automation);
             }
         }
     }
@@ -784,7 +796,7 @@ impl ApplicationHandler for App {
                 // an expose, a resize or the overlay unanswered.
                 let passes = self.clock.take_due(Instant::now());
                 for _ in 0..passes {
-                    beat(&mut self.played, &mut self.params);
+                    beat(&mut self.played, &mut self.params, &mut self.automation);
                     live.pass(&self.gpu, &self.params, &mut self.source);
                 }
                 // Nothing is drawn to a window nothing can see. The
@@ -864,6 +876,7 @@ mod tests {
             overlay_shown: false,
             solo: false,
             cut: None,
+            automation: Automation::default(),
             played: 0,
             passes: 0,
             presents: 0,
@@ -1374,6 +1387,103 @@ mod tests {
         );
         app.beat();
         assert_ne!(app.params.rig.switchers[1], stood);
+    }
+
+    fn press(app: &mut App, board: &TestSurface, control: u8) {
+        surface(app, board, control, 127);
+        surface(app, board, control, 0);
+    }
+
+    fn brightness(app: &App) -> f32 {
+        app.params.knob(Knob::Brightness, app.focus)
+    }
+
+    #[test]
+    fn play_loops_what_the_monitor_faders_did_until_the_fader_takes_it_back() {
+        use crate::lamps::lamp;
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let mut board = plugged(&mut app);
+        let panel = lamp(32) | lamp(48) | lamp(64) | lamp(71);
+        press(&mut app, &board, 41);
+        assert!(app.shown().armed);
+        assert!(
+            board.wire.panel_becomes(panel | lamp(41)),
+            "play is dark under the take"
+        );
+        surface(&mut app, &board, 2, 64);
+        let mut taken = Vec::new();
+        for value in [60, 52, 40] {
+            surface(&mut app, &board, 2, value);
+            app.beat();
+            taken.push(brightness(&app));
+        }
+        assert!(taken[2] < taken[0]);
+        press(&mut app, &board, 41);
+        assert!(!app.shown().armed);
+        assert!(
+            board.wire.panel_becomes(panel),
+            "play stayed lit over the loop"
+        );
+        for pass in 0..7 {
+            app.beat();
+            assert_eq!(brightness(&app), taken[pass % 3], "pass {pass}");
+        }
+        surface(&mut app, &board, 2, 44);
+        let held = brightness(&app);
+        assert_ne!(held, taken[1]);
+        for _ in 0..4 {
+            app.beat();
+            assert_eq!(
+                brightness(&app),
+                held,
+                "the loop kept the knob from the fader"
+            );
+        }
+    }
+
+    #[test]
+    fn rewind_and_stop_take_the_loop_back_too() {
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        press(&mut app, &board, 41);
+        app.beat();
+        surface(&mut app, &board, 1, 64);
+        surface(&mut app, &board, 1, 100);
+        surface(&mut app, &board, 2, 64);
+        surface(&mut app, &board, 2, 30);
+        app.beat();
+        press(&mut app, &board, 41);
+        app.beat();
+        let looping = app.params.clone();
+        press(&mut app, &board, 43);
+        app.beat();
+        assert_eq!(
+            brightness(&app),
+            Knob::Brightness.identity(),
+            "the loop kept the knob from the rewind"
+        );
+        assert_ne!(
+            app.params.knob(Knob::Saturation, app.focus),
+            looping.knob(Knob::Saturation, app.focus),
+            "the rewind stopped a knob it did not reset"
+        );
+
+        press(&mut app, &board, 41);
+        app.beat();
+        surface(&mut app, &board, 2, 0);
+        app.beat();
+        press(&mut app, &board, 41);
+        assert!(matches!(app.automation, Automation::Looping { .. }));
+        press(&mut app, &board, 42);
+        assert_eq!(app.params, app.initial);
+        for _ in 0..3 {
+            app.beat();
+        }
+        assert_eq!(app.params, app.initial, "the loop outlived the stop");
     }
 
     #[test]

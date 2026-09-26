@@ -621,12 +621,6 @@ impl Params {
         looks.chain(feeds).filter(|f| f.share > 0.0)
     }
 
-    /// Through [`Params::place`] rather than by writing the field, so the
-    /// rails and the wrap live in one place.
-    fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
-        self.place(knob, value, focus);
-    }
-
     /// Put `knob` back where its stage does nothing to the light. Through
     /// [`Params::set`], so the rails and the wrap are unchanged.
     pub fn reset(&mut self, knob: Knob, focus: Focus) {
@@ -662,10 +656,10 @@ impl Params {
     pub fn nudge(&mut self, knob: Knob, delta: f32, focus: Focus) {
         let limit = knob.limit(self);
         let to = limit.valued(limit.stepped(self.knob(knob, focus)) + delta);
-        self.place(knob, to, focus);
+        self.set(knob, to, focus);
     }
 
-    fn place(&mut self, knob: Knob, value: f32, focus: Focus) {
+    pub(crate) fn set(&mut self, knob: Knob, value: f32, focus: Focus) {
         match knob.limit(self) {
             Limit::Whole(most) => {
                 let count = value.round().clamp(0.0, most as f32) as u32;
