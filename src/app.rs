@@ -1390,8 +1390,9 @@ mod tests {
     }
 
     fn press(app: &mut App, board: &TestSurface, control: u8) {
-        surface(app, board, control, 127);
-        surface(app, board, control, 0);
+        board.press(control);
+        board.release(control);
+        app.surface_frame();
     }
 
     fn brightness(app: &App) -> f32 {
@@ -1405,7 +1406,8 @@ mod tests {
             return;
         };
         let mut board = plugged(&mut app);
-        let panel = lamp(32) | lamp(48) | lamp(64) | lamp(71);
+        app.act(Action::Focus(Node::Monitor, 1));
+        let panel = lamp(32) | lamp(49) | lamp(64) | lamp(71);
         press(&mut app, &board, 41);
         assert!(app.shown().armed);
         assert!(
@@ -1449,6 +1451,7 @@ mod tests {
             return;
         };
         let board = plugged(&mut app);
+        app.act(Action::Focus(Node::Monitor, 1));
         press(&mut app, &board, 41);
         app.beat();
         surface(&mut app, &board, 1, 64);
@@ -1479,11 +1482,13 @@ mod tests {
         press(&mut app, &board, 41);
         assert!(matches!(app.automation, Automation::Looping { .. }));
         press(&mut app, &board, 42);
-        assert_eq!(app.params, app.initial);
-        for _ in 0..3 {
+        for pass in 0..3 {
+            assert_eq!(
+                app.params, app.initial,
+                "the loop outlived the stop: pass {pass}"
+            );
             app.beat();
         }
-        assert_eq!(app.params, app.initial, "the loop outlived the stop");
     }
 
     #[test]

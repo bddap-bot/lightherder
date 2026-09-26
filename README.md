@@ -60,7 +60,7 @@ monitor or switcher; Cycle shows their values on screen.
 | Marker ▶ | Clear the monitors. |
 | Forward / Cycle | Toggle solo monitor view / control overlay. |
 | Marker Set / Record | Save a still / record while held, in `~/lightherder`. |
-| Play | Record the monitor knobs while lit, for up to ten minutes; press again to loop the ones that moved, again to stop. Turning or resetting a looping knob takes it out of the loop. |
+| Play | While Play is lit, record how faders 1–6 move on every monitor, keeping the last ten minutes; press again to loop those moves, and again to stop the loop and record anew. Moving or resetting a looping fader takes it out of the loop. |
 
 Faders and rotaries 1–4 change values by movement. To start feedback, select
 switcher B with R2 and lower fader 8, then select camera B with S2 and turn its

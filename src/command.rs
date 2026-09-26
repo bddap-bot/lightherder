@@ -84,7 +84,7 @@ impl Action {
             Action::Select => "select".into(),
             Action::Flip(Axis::X) => "flip x".into(),
             Action::Flip(Axis::Y) => "flip y".into(),
-            Action::Automate => "auto".into(),
+            Action::Automate => "loop".into(),
         }
     }
 }

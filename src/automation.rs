@@ -1,16 +1,17 @@
+use std::collections::VecDeque;
 use std::fmt;
 
 use crate::params::{Cadence, Focus, Knob, Node, Params};
 
-pub(crate) const LONGEST: usize = 10 * 60 * Cadence::SECOND as usize;
+const LONGEST: usize = 10 * 60 * Cadence::SECOND as usize;
 
-pub(crate) struct Track {
+pub(crate) struct Lane {
     knob: Knob,
     monitor: usize,
-    values: Vec<f32>,
+    values: VecDeque<f32>,
 }
 
-impl Track {
+impl Lane {
     fn focus(&self) -> Focus {
         Focus::default().with(Node::Monitor, self.monitor)
     }
@@ -24,9 +25,9 @@ impl Track {
 pub(crate) enum Automation {
     #[default]
     Off,
-    Recording(Vec<Track>),
+    Recording(Vec<Lane>),
     Looping {
-        tracks: Vec<Track>,
+        lanes: Vec<Lane>,
         next: usize,
     },
 }
@@ -34,17 +35,17 @@ pub(crate) enum Automation {
 impl Automation {
     pub(crate) fn press(&mut self) {
         *self = match std::mem::take(self) {
-            Automation::Recording(tracks) => Automation::close(tracks),
+            Automation::Recording(lanes) => Automation::close(lanes),
             Automation::Off | Automation::Looping { .. } => Automation::Recording(
                 (0..crate::rig::MONITORS)
                     .flat_map(|monitor| {
                         Knob::ALL
                             .into_iter()
-                            .filter(|knob| knob.node() == Node::Monitor)
-                            .map(move |knob| Track {
+                            .filter(|knob| knob.node() == Node::Monitor && *knob != Knob::FrameRate)
+                            .map(move |knob| Lane {
                                 knob,
                                 monitor,
-                                values: Vec::new(),
+                                values: VecDeque::new(),
                             })
                     })
                     .collect(),
@@ -52,39 +53,38 @@ impl Automation {
         };
     }
 
-    fn close(mut tracks: Vec<Track>) -> Automation {
-        tracks.retain(Track::moved);
-        match tracks.is_empty() {
+    fn close(mut lanes: Vec<Lane>) -> Automation {
+        lanes.retain(Lane::moved);
+        match lanes.is_empty() {
             true => Automation::Off,
-            false => Automation::Looping { tracks, next: 0 },
+            false => Automation::Looping { lanes, next: 0 },
         }
     }
 
     pub(crate) fn pass(&mut self, params: &mut Params) {
         match self {
             Automation::Off => {}
-            Automation::Recording(tracks) => {
-                for track in tracks.iter_mut() {
-                    track.values.push(params.knob(track.knob, track.focus()));
-                }
-                if tracks[0].values.len() == LONGEST {
-                    *self = Automation::close(std::mem::take(tracks));
-                    log::info!("automation {self}");
+            Automation::Recording(lanes) => {
+                for lane in lanes.iter_mut() {
+                    if lane.values.len() == LONGEST {
+                        lane.values.pop_front();
+                    }
+                    lane.values.push_back(params.knob(lane.knob, lane.focus()));
                 }
             }
-            Automation::Looping { tracks, next } => {
-                for track in tracks.iter() {
-                    params.set(track.knob, track.values[*next], track.focus());
+            Automation::Looping { lanes, next } => {
+                for lane in lanes.iter() {
+                    params.set(lane.knob, lane.values[*next], lane.focus());
                 }
-                *next = (*next + 1) % tracks[0].values.len();
+                *next = (*next + 1) % lanes[0].values.len();
             }
         }
     }
 
     pub(crate) fn take_back(&mut self, knob: Knob, focus: Focus) {
-        if let Automation::Looping { tracks, .. } = self {
-            tracks.retain(|track| track.knob != knob || track.monitor != focus.monitor);
-            if tracks.is_empty() {
+        if let Automation::Looping { lanes, .. } = self {
+            lanes.retain(|lane| lane.knob != knob || lane.monitor != focus.monitor);
+            if lanes.is_empty() {
                 *self = Automation::Off;
             }
         }
@@ -100,11 +100,11 @@ impl fmt::Display for Automation {
         match self {
             Automation::Off => write!(f, "off"),
             Automation::Recording(_) => write!(f, "recording the monitor knobs"),
-            Automation::Looping { tracks, .. } => write!(
+            Automation::Looping { lanes, .. } => write!(
                 f,
                 "looping {} of the monitor knobs over {} passes",
-                tracks.len(),
-                tracks[0].values.len()
+                lanes.len(),
+                lanes[0].values.len()
             ),
         }
     }
@@ -133,13 +133,14 @@ mod tests {
     fn a_take_loops_the_monitor_knobs_that_moved_pass_for_pass_and_nothing_else() {
         let mut params = crate::config::instrument();
         let mut automation = Automation::default();
-        let tracked = [(Knob::Brightness, 1), (Knob::FrameRate, 3)];
+        let tracked = [(Knob::Brightness, 1), (Knob::Temperature, 3)];
         automation.press();
         assert!(automation.armed());
         let mut taken = Vec::new();
         for pass in 0..5 {
             params.nudge(Knob::Brightness, -0.05, at(1));
             if pass == 2 {
+                params.nudge(Knob::Temperature, 1.0, at(3));
                 params.nudge(Knob::FrameRate, 1.0, at(3));
                 params.nudge(Knob::Zoom, 0.1, Focus::default());
             }
@@ -253,21 +254,25 @@ mod tests {
     }
 
     #[test]
-    fn a_take_left_recording_closes_into_a_loop_at_the_longest() {
+    fn a_take_keeps_its_last_ten_minutes_and_stays_armed() {
         let mut params = crate::config::instrument();
         let mut automation = Automation::default();
         automation.press();
-        params.nudge(Knob::Sharpness, 1.0, at(0));
+        params.nudge(Knob::Hue, 1.0, at(0));
+        automation.pass(&mut params);
+        params.nudge(Knob::Hue, 1.0, at(0));
         for _ in 1..LONGEST {
             automation.pass(&mut params);
         }
-        assert!(automation.armed());
         params.nudge(Knob::Sharpness, 1.0, at(0));
         automation.pass(&mut params);
-        assert!(!automation.armed());
+        assert!(automation.armed());
+        automation.press();
         assert_eq!(
             automation.to_string(),
             format!("looping 1 of the monitor knobs over {LONGEST} passes")
         );
+        automation.pass(&mut params);
+        assert_eq!(params.knob(Knob::Sharpness, at(0)), 0.0);
     }
 }
