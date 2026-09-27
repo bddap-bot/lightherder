@@ -53,9 +53,7 @@ pub enum Action {
     TapIn,
     Quantize,
     Chroma,
-    /// The focused camera's shutter a step slower, and from the slowest back
-    /// round to a pass: the original sets its cameras by a switch, so it is
-    /// a button, lit while the shutter is open longer than a pass.
+    /// The original sets its cameras by a switch, so this is a button.
     Shutter,
 }
 

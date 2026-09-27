@@ -63,14 +63,14 @@ impl Default for Cli {
 
 impl Cli {
     /// The one place a command line reaches the rig, so a flag that never
-    /// lands here is a flag that does nothing. The delay units reach as far
-    /// as the bank holds at this resolution.
+    /// lands here is a flag that does nothing. The delay units and the
+    /// shutters reach as far as the bank holds at this resolution.
     pub fn instrument(&self) -> Params {
         let mut params = crate::config::instrument();
         if let Some(seed) = &self.seed {
             params.input = seed.clone();
         }
-        params.reach = crate::feedback::reach(&params, self.resolution);
+        crate::feedback::fit(&mut params, self.resolution);
         params
     }
 }
@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn the_delay_units_reach_as_far_as_the_bank_holds_at_the_resolution() {
+    fn the_delay_units_and_the_shutters_reach_as_far_as_the_bank_holds_at_the_resolution() {
         let at = |resolution| {
             Cli {
                 resolution,
@@ -301,12 +301,17 @@ mod tests {
             }
             .instrument()
         };
-        for resolution in [DEFAULT_RESOLUTION, (3840, 2160)] {
+        for resolution in [DEFAULT_RESOLUTION, (3840, 2160), (4096, 4096)] {
             let params = at(resolution);
-            let rig = crate::config::instrument();
-            assert_eq!(params.reach, crate::feedback::reach(&rig, resolution));
+            let mut rig = crate::config::instrument();
+            crate::feedback::fit(&mut rig, resolution);
+            assert_eq!(
+                (params.reach, params.shutter_reach),
+                (rig.reach, rig.shutter_reach)
+            );
             crate::feedback::bank_fits(&params, resolution).unwrap();
         }
         assert!(at((3840, 2160)).reach < at(DEFAULT_RESOLUTION).reach);
+        assert!(at((4096, 4096)).shutter_reach < at(DEFAULT_RESOLUTION).shutter_reach);
     }
 }

@@ -192,11 +192,10 @@ pub struct Camera {
     /// switcher takes it, on [`Params::send`]. That is what makes every
     /// camera recursive by construction rather than by convention.
     pub look: [f32; crate::rig::MONITORS],
-    /// The rate whose whole frame the shutter stays open for, which is the
-    /// slowest shutter a camera running at that rate has. The camera still
-    /// hands on a frame every pass: how often a monitor takes a fresh one is
-    /// its router output's [`Monitor::cadence`].
-    pub shutter: Cadence,
+    /// How long the shutter stays open. The camera still hands on a frame
+    /// every pass: how often a monitor takes a fresh one is its router
+    /// output's [`Monitor::cadence`].
+    pub shutter: Shutter,
 }
 
 impl Params {
@@ -206,10 +205,9 @@ impl Params {
     pub const MAX_DELAY: u32 = 30;
 }
 
-/// A frame rate, as the cadence of passes it takes a fresh frame on: a
-/// router output's, and the one a camera's shutter stays open a frame of. A
-/// cadence rather than a rate because the rig's clock is a pass, not a
-/// second.
+/// The frame rate of a router output, as the cadence of passes it takes a
+/// fresh frame on. A cadence rather than a rate because the rig's clock is
+/// a pass, not a second.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cadence {
     Full,
@@ -223,11 +221,8 @@ impl Cadence {
     /// counted against, and the period every cadence repeats in.
     pub const SECOND: u32 = 60;
 
-    /// Fastest to slowest: the order the knob and the shutter button turn
-    /// through them.
+    /// Fastest to slowest: the order the knob turns through them.
     pub const ALL: [Cadence; 4] = [Cadence::Full, Cadence::Pal, Cadence::Half, Cadence::Film];
-
-    pub const SLOWEST: Cadence = Cadence::ALL[Cadence::ALL.len() - 1];
 
     pub const fn fps(self) -> u32 {
         match self {
@@ -238,13 +233,6 @@ impl Cadence {
         }
     }
 
-    pub fn place(self) -> usize {
-        Cadence::ALL
-            .iter()
-            .position(|c| *c == self)
-            .expect("every cadence is on the ladder")
-    }
-
     /// Whether an output at this cadence takes a fresh frame on pass
     /// `frame` rather than holding the one it has: where a count of `fps`
     /// a second crosses a whole number.
@@ -253,27 +241,42 @@ impl Cadence {
         frame == 0
             || frame * self.fps() / Cadence::SECOND != (frame - 1) * self.fps() / Cadence::SECOND
     }
+}
 
-    pub const fn passes(self) -> u32 {
-        Cadence::SECOND.div_ceil(self.fps())
+/// A camera's shutter, open for one frame at the rate the original's
+/// switch sets its cameras to: the slowest shutter that rate allows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shutter {
+    Sixtieth,
+    Thirtieth,
+    TwentyFourth,
+}
+
+impl Shutter {
+    pub const ALL: [Shutter; 3] = [Shutter::Sixtieth, Shutter::Thirtieth, Shutter::TwentyFourth];
+
+    pub const SLOWEST: Shutter = Shutter::ALL[Shutter::ALL.len() - 1];
+
+    pub const fn fps(self) -> u32 {
+        match self {
+            Shutter::Sixtieth => Cadence::Full.fps(),
+            Shutter::Thirtieth => Cadence::Half.fps(),
+            Shutter::TwentyFourth => Cadence::Film.fps(),
+        }
     }
 
-    /// How a shutter open for one frame at this rate shares its exposure
-    /// among the passes it spans, this pass first: a whole pass each, and
-    /// the oldest what is left of the frame. The shares sum to one — the
-    /// camera stopped down to match its shutter — since a loop handed twice
-    /// the light runs to white.
+    /// The passes before this one the shutter is still open on.
+    pub const fn earlier(self) -> u32 {
+        Cadence::SECOND.div_ceil(self.fps()) - 1
+    }
+
+    /// The share of the exposure each pass it is open on gets, this pass
+    /// first. They sum to one, the camera stopped down to match its
+    /// shutter: a loop handed twice the light runs to white.
     pub fn exposure(self) -> impl Iterator<Item = f32> {
         let fps = self.fps();
-        (0..self.passes()).map(move |earlier| {
-            (Cadence::SECOND - earlier * fps).min(fps) as f32 / Cadence::SECOND as f32
-        })
-    }
-
-    /// The next rate along the ladder, and from `slowest` back round to the
-    /// first.
-    pub fn slower(self, slowest: Cadence) -> Cadence {
-        Cadence::ALL[(self.place() + 1) % (slowest.place() + 1)]
+        (0..=self.earlier())
+            .map(move |ago| (Cadence::SECOND - ago * fps).min(fps) as f32 / Cadence::SECOND as f32)
     }
 }
 
@@ -337,10 +340,10 @@ pub struct Params {
     /// keeps. Bought at load, since a frame of it is another picture per
     /// unit, so the knob runs to here and no further.
     pub reach: u32,
-    /// The slowest any camera's shutter may be set to. Bought at load like
-    /// the reach: each pass it spans past the first is another picture on
-    /// every camera's line.
-    pub slowest_shutter: Cadence,
+    /// The shutters' reach: how many passes before this one a shutter may
+    /// stay open on, and so how many more pictures every camera's line
+    /// keeps. Bought at load like the delay's.
+    pub shutter_reach: u32,
 }
 
 impl Default for Params {
@@ -676,7 +679,10 @@ impl Params {
             Knob::Contrast => mon.colour.contrast,
             Knob::Temperature => mon.colour.temperature,
             Knob::Sharpness => mon.sharpness,
-            Knob::FrameRate => mon.cadence.place() as f32,
+            Knob::FrameRate => Cadence::ALL
+                .iter()
+                .position(|c| *c == mon.cadence)
+                .expect("every cadence is on the ladder") as f32,
             Knob::Period => self.rig.periods[focus.switcher] as f32,
             Knob::CutLength => self.rig.cut_lengths[focus.switcher] as f32,
             Knob::Switcher => self.rig.switchers[focus.switcher],
@@ -748,6 +754,18 @@ impl Params {
                 unreachable!("nudge() rounds a count to whole steps")
             }
         }
+    }
+
+    /// Camera `c`'s shutter a position slower, and from the slowest the
+    /// bank holds back round to a sixtieth: a button turns one way.
+    pub fn turn_shutter(&mut self, c: usize) {
+        let (reach, at) = (self.shutter_reach, self.cameras[c].shutter);
+        self.cameras[c].shutter = Shutter::ALL
+            .into_iter()
+            .skip_while(|shutter| *shutter != at)
+            .nth(1)
+            .filter(|shutter| shutter.earlier() <= reach)
+            .unwrap_or(Shutter::Sixtieth);
     }
 
     /// The focused nodes and every knob's value: the only readout the
@@ -883,36 +901,40 @@ mod tests {
     }
 
     #[test]
-    fn a_shutter_shares_its_frame_among_the_passes_it_spans() {
-        let shares = |rate: Cadence| rate.exposure().collect::<Vec<_>>();
-        assert_eq!(shares(Cadence::Full), [1.0]);
-        assert_eq!(shares(Cadence::Pal), [50.0 / 60.0, 10.0 / 60.0]);
-        assert_eq!(shares(Cadence::Half), [0.5, 0.5]);
-        assert_eq!(shares(Cadence::Film), [0.4, 0.4, 0.2]);
-        assert_eq!(Cadence::ALL.map(Cadence::passes), [1, 2, 2, 3]);
-        for rate in Cadence::ALL {
-            let sum: f32 = shares(rate).iter().sum();
-            assert!((sum - 1.0).abs() < 1e-6, "{rate:?} sums to {sum}");
+    fn a_shutter_shares_its_frame_among_the_passes_it_is_open_on() {
+        let shares = |shutter: Shutter| shutter.exposure().collect::<Vec<_>>();
+        assert_eq!(shares(Shutter::Sixtieth), [1.0]);
+        assert_eq!(shares(Shutter::Thirtieth), [0.5, 0.5]);
+        assert_eq!(shares(Shutter::TwentyFourth), [0.4, 0.4, 0.2]);
+        assert_eq!(Shutter::ALL.map(Shutter::fps), [60, 30, 24]);
+        for shutter in Shutter::ALL {
+            let sum: f32 = shares(shutter).iter().sum();
+            assert!((sum - 1.0).abs() < 1e-6, "{shutter:?} sums to {sum}");
         }
     }
 
     #[test]
-    fn the_shutter_steps_slower_and_back_round_from_the_slowest_bought() {
-        use Cadence::*;
-        let walk = |slowest: Cadence| {
-            let mut at = Full;
-            [(); 5].map(|_| {
-                at = at.slower(slowest);
-                at
+    fn the_shutter_turns_slower_and_back_round_from_the_slowest_the_bank_holds() {
+        use Shutter::*;
+        let walk = |shutter_reach: u32| {
+            let mut params = Params {
+                shutter_reach,
+                ..p()
+            };
+            [(); 4].map(|_| {
+                params.turn_shutter(1);
+                assert_eq!(params.cameras[0].shutter, Sixtieth);
+                assert_eq!(params.cameras[2].shutter, Sixtieth);
+                params.cameras[1].shutter
             })
         };
-        assert_eq!(walk(Film), [Pal, Half, Film, Full, Pal]);
-        assert_eq!(walk(Half), [Pal, Half, Full, Pal, Half]);
-        assert_eq!(walk(Full), [Full; 5]);
+        assert_eq!(walk(2), [Thirtieth, TwentyFourth, Sixtieth, Thirtieth]);
+        assert_eq!(walk(1), [Thirtieth, Sixtieth, Thirtieth, Sixtieth]);
+        assert_eq!(walk(0), [Sixtieth; 4]);
         let mut params = p();
         let focus = Focus::default().with(Node::Camera, 2);
         assert!(params.describe(focus).contains("shutter 1/60"));
-        params.cameras[2].shutter = Film;
+        params.cameras[2].shutter = TwentyFourth;
         assert!(params
             .describe(focus)
             .contains("shutter 1/24  no delay unit"));

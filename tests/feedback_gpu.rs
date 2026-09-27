@@ -13,7 +13,7 @@ use lightherder::affine::Framing;
 use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
-use lightherder::params::{Cadence, Camera, Colour, Monitor, Params};
+use lightherder::params::{Cadence, Camera, Colour, Monitor, Params, Shutter};
 use lightherder::present::{Present, View};
 use lightherder::rig::{
     Key, Measure, Point, Rig, Select, Switcher, MONITORS, SELECTS, SHAFTS, SWITCHERS,
@@ -1041,7 +1041,7 @@ fn plain_camera(look: [f32; MONITORS]) -> Camera {
     Camera {
         gain: [1.0; 3],
         look,
-        shutter: Cadence::Full,
+        shutter: Shutter::Sixtieth,
     }
 }
 
@@ -2850,13 +2850,13 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
 }
 
 #[test]
-fn a_slow_shutter_gathers_every_pass_it_spans_each_at_its_share() {
+fn a_slow_shutter_gathers_every_pass_it_is_open_on_each_at_its_share() {
     // A one-pass flash on monitor 3, and camera A on it drawing to monitor 1
-    // `delay` frames late, its shutter open a frame of `shutter`. Monitor 1
-    // shows the flash on every pass the exposure spans, from pass delay + 1
-    // on, and on no other, each at that pass's share of the exposure: every
-    // texel is the full-shutter frame's times the share, to within a level.
-    let run = |shutter: Cadence, delay: u32| -> Option<Vec<Vec<u8>>> {
+    // `delay` frames late through its shutter. Monitor 1 shows the flash on
+    // every pass the shutter is open on, from pass delay + 1 on, and on no
+    // other, each at that pass's share of the exposure: every texel is the
+    // sixtieth's frame times the share, to within a level.
+    let run = |shutter: Shutter, delay: u32| -> Option<Vec<Vec<u8>>> {
         let mut p = blank();
         p.rig.delays[0] = delay;
         p.reach = 2;
@@ -2878,19 +2878,22 @@ fn a_slow_shutter_gathers_every_pass_it_spans_each_at_its_share() {
                 .collect(),
         )
     };
-    let Some(reference) = run(Cadence::Full, 0) else {
+    let Some(reference) = run(Shutter::Sixtieth, 0) else {
         return;
     };
     let flash = &reference[1];
     assert!(peak(flash) > 200, "the flash never reached monitor 1");
     for delay in [0u32, 2] {
-        for shutter in Cadence::ALL {
-            let shares: Vec<f32> = shutter.exposure().collect();
+        for (shutter, shares) in [
+            (Shutter::Sixtieth, &[1.0][..]),
+            (Shutter::Thirtieth, &[0.5, 0.5]),
+            (Shutter::TwentyFourth, &[0.4, 0.4, 0.2]),
+        ] {
             let frames = run(shutter, delay).expect("the adapter that ran the reference");
             for (pass, pixels) in frames.iter().enumerate() {
                 let share = (pass as u32)
                     .checked_sub(delay + 1)
-                    .and_then(|earlier| shares.get(earlier as usize).copied())
+                    .and_then(|ago| shares.get(ago as usize).copied())
                     .unwrap_or(0.0);
                 let off = pixels
                     .chunks_exact(4)
@@ -2908,26 +2911,39 @@ fn a_slow_shutter_gathers_every_pass_it_spans_each_at_its_share() {
     }
 }
 
+/// How bright monitor `m` is round the seed's spot square on, turned a
+/// quarter and turned a half, as the camera on shaft A's turns put it.
+fn spots(h: &Harness, m: usize) -> [f32; 3] {
+    h.present(Some(m));
+    let img = h.read();
+    let to_uv = lightherder::affine::screen_to_uv(1.0);
+    [SPOT, [-SPOT[1], SPOT[0]], [-SPOT[0], -SPOT[1]]].map(|at| {
+        let [u, v] = to_uv.apply(at);
+        img.brightest_in(u - 0.08, v - 0.08, u + 0.08, v + 0.08)
+    })
+}
+
+fn near(have: [f32; 3], want: [f32; 3]) -> bool {
+    have.iter()
+        .zip(want)
+        .all(|(have, want)| (have - want).abs() <= 1.5)
+}
+
 #[test]
 fn a_slow_shutter_smears_the_turn_of_the_shaft_within_its_frame() {
     // A still spot on monitor 3, and camera A on it drawing to monitor 1
-    // with its shutter open a frame of 30, two passes. The shaft turns a
+    // with its shutter open a thirtieth, two passes. The shaft turns a
     // quarter on pass 6: on that pass monitor 1 shows the spot square on and
     // turned at half its brightness each, since half the exposure was taken
     // before the turn; before it the square-on spot alone, after it the
-    // turned one. A shutter that framed its earlier passes as the camera
+    // turned one. A shutter that framed its earlier pass as the camera
     // stands now would show the turned spot whole on pass 6.
     let mut p = blank();
     p.cameras[0].look = one_hot(SEEDED);
-    p.cameras[0].shutter = Cadence::Half;
+    p.cameras[0].shutter = Shutter::Thirtieth;
     seeding(&mut p);
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
-    };
-    let square = lightherder::affine::screen_to_uv(1.0).apply(SPOT);
-    let turned = lightherder::affine::screen_to_uv(1.0).apply([-SPOT[1], SPOT[0]]);
-    let near = |img: &Image, at: [f32; 2]| {
-        img.brightest_in(at[0] - 0.08, at[1] - 0.08, at[0] + 0.08, at[1] + 0.08)
     };
     let mut seen = Vec::new();
     for pass in 0..9 {
@@ -2935,26 +2951,47 @@ fn a_slow_shutter_smears_the_turn_of_the_shaft_within_its_frame() {
             p.shafts[0].rotation = std::f32::consts::FRAC_PI_2;
         }
         h.feedback.step(h.device, h.queue, &p);
-        h.present(Some(0));
-        let img = h.read();
-        seen.push([near(&img, square), near(&img, turned)]);
+        seen.push(spots(&h, 0));
     }
     let whole = seen[5][0];
     assert!(whole > 200.0, "{seen:?}");
-    let close = |have: f32, want: f32| (have - want).abs() <= 1.5;
-    for (pass, [square, turned]) in seen.iter().copied().enumerate() {
+    for (pass, have) in seen.iter().enumerate() {
         let want = match pass {
-            0 => [0.0, 0.0],
-            1 => [whole / 2.0, 0.0],
-            2..=5 => [whole, 0.0],
-            6 => [whole / 2.0, whole / 2.0],
-            _ => [0.0, whole],
+            0 => [0.0, 0.0, 0.0],
+            1 => [whole / 2.0, 0.0, 0.0],
+            2..=5 => [whole, 0.0, 0.0],
+            6 => [whole / 2.0, whole / 2.0, 0.0],
+            _ => [0.0, whole, 0.0],
         };
-        assert!(
-            close(square, want[0]) && close(turned, want[1]),
-            "pass {pass}: [square on, turned] is {:?}, not {want:?}: {seen:?}",
-            [square, turned]
-        );
+        assert!(near(*have, want), "pass {pass}: {have:?}, not {want:?}");
+    }
+}
+
+#[test]
+fn camera_3_gathers_its_earlier_pass_as_it_framed_it() {
+    // Camera 3 has no delay unit, so its shutter is the one thing that keeps
+    // its pictures. Pass 0 puts the seed's spot on monitor 3; from pass 1
+    // monitor 3 shows camera 3 alone, a thirtieth open on it and a quarter
+    // turned on shaft A. Pass 1 is half of the spot turned, the other half
+    // of the exposure the dark before pass 0; pass 2 is half of that turned
+    // picture as it was taken, and half of the half turned again.
+    let mut p = blank();
+    p.rig.keys[Switcher::D as usize] = Key::OFF;
+    p.cameras[2].look = one_hot(SEEDED);
+    p.cameras[2].shutter = Shutter::Thirtieth;
+    p.shafts[0].rotation = std::f32::consts::FRAC_PI_2;
+    seeding(&mut p);
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    h.feedback.step(h.device, h.queue, &p);
+    let [whole, ..] = spots(&h, SEEDED);
+    assert!(whole > 200.0, "the seed never reached monitor 3: {whole}");
+    p.rig.switchers = [0.0, 1.0, 1.0, 0.0];
+    for want in [[0.0, whole / 2.0, 0.0], [0.0, whole / 2.0, whole / 4.0]] {
+        h.feedback.step(h.device, h.queue, &p);
+        let have = spots(&h, SEEDED);
+        assert!(near(have, want), "{have:?}, not {want:?}");
     }
 }
 

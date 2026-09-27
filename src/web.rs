@@ -70,7 +70,7 @@ pub fn start() {
         // are more bank than some browsers allocate in one texture.
         let params = crate::params::Params {
             reach: 0,
-            slowest_shutter: crate::params::Cadence::Full,
+            shutter_reach: 0,
             ..cli.instrument()
         };
         if let Err(why) = crate::app::run(params, &cli).await {

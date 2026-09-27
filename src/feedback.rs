@@ -25,7 +25,7 @@
 use bytemuck::Zeroable;
 
 use crate::affine::{flip_uv, sample_transform, Affine2, Framing};
-use crate::params::{Cadence, Params};
+use crate::params::{Params, Shutter};
 use crate::rig::{Measure, Origin, Rig, Step, Switcher, CAMERAS, UNITS};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
@@ -41,14 +41,13 @@ const MONITOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const HEADROOM: f32 = 2.0;
 
 /// Most taps one monitor can be fed by, and so the length of the shader's
-/// uniform array. Every camera through every monitor its glass could see and
-/// at every earlier pass the slowest shutter spans, plus the seed: the rig
-/// cannot reach it — its cameras see two monitors each and the seed is one
-/// tap, so twelve is what a pass is handed at the slowest shutters — but it
-/// is the bound a look matrix cannot cross, so nothing has to check.
+/// uniform array: every camera through every monitor its glass could see and
+/// on every earlier pass the slowest shutter is open on, plus the seed. The
+/// rig never reaches it, but it is the bound a look matrix cannot cross, so
+/// nothing has to check.
 pub const MAX_TAPS: usize = CAMERAS * (crate::rig::MONITORS + EARLIER) + 1;
 
-const EARLIER: usize = Cadence::SLOWEST.passes() as usize - 1;
+const EARLIER: usize = Shutter::SLOWEST.earlier() as usize;
 
 const _: () = assert!(
     MAX_TAPS == 22,
@@ -64,9 +63,8 @@ const _: () = assert!(STAGES == 4, "shaders/feedback.wgsl spells this number too
 /// The most GPU memory a bank may ask for. A cap in bytes rather than in
 /// pixels because it is the layers that do the multiplying — two frames of
 /// every monitor, the seed, a picture per delay unit per frame of reach and
-/// one per camera per earlier pass of the slowest shutter — and a card asked
-/// for more than it has fails inside the driver rather than at the command
-/// line.
+/// one per camera per pass of shutter reach — and a card asked for more than
+/// it has fails inside the driver rather than at the command line.
 pub const MAX_BANK_BYTES: u64 = 2 << 30;
 
 /// One texel of [`MONITOR_FORMAT`], in bytes. Asked of the format rather than
@@ -91,21 +89,31 @@ pub fn bank_fits(params: &Params, size: (u32, u32)) -> Result<(), String> {
     Shape::of(params).fits(size)
 }
 
-/// The deepest the delay units can reach on monitors of `size`: the
-/// graph's own reach, or as far short of it as a bank that fits.
-pub fn reach(params: &Params, size: (u32, u32)) -> u32 {
+/// Buy what a bank at monitors of `size` holds of the graph's reach and
+/// shutter reach: the slowest shutters that fit, then as much delay beside
+/// them as fits. A bank that fits with neither is refused as it stands.
+pub fn fit(params: &mut Params, size: (u32, u32)) {
     let shape = Shape::of(params);
-    (0..=params.reach)
+    let fits = |reach: usize, shutter_reach: usize| {
+        Shape {
+            reach,
+            shutter_reach,
+            ..shape
+        }
+        .fits(size)
+        .is_ok()
+    };
+    let (reach, shutter_reach) = (0..=shape.shutter_reach)
         .rev()
-        .find(|reach| {
-            Shape {
-                reach: *reach as usize,
-                ..shape
-            }
-            .fits(size)
-            .is_ok()
+        .find_map(|shutter_reach| {
+            (0..=shape.reach)
+                .rev()
+                .find(|reach| fits(*reach, shutter_reach))
+                .map(|reach| (reach, shutter_reach))
         })
-        .unwrap_or(0)
+        .unwrap_or((0, 0));
+    params.reach = reach as u32;
+    params.shutter_reach = shutter_reach as u32;
 }
 
 /// How many frames of every monitor the bank keeps: the one a pass reads
@@ -113,17 +121,17 @@ pub fn reach(params: &Params, size: (u32, u32)) -> u32 {
 const RING: usize = 2;
 
 /// How the bank's layers are laid out: [`RING`] slabs of the monitors,
-/// then the seed's own layer, then each camera's line: the pictures it
-/// took, as many as its delay unit's [`Params::reach`] and the passes its
-/// slowest shutter gathers before this one go back. The one place a layer
-/// index comes from, whether a tap reads it, the seed's frame is written to
-/// it or a pass draws on it — a formula apiece would be a way apiece to read
-/// the wrong frame.
+/// then the seed's own layer, then each camera's line of the pictures it
+/// took, as far back as its delay unit's [`Params::reach`] and then the
+/// [`Params::shutter_reach`] go. The one place a layer index comes from,
+/// whether a tap reads it, the seed's frame is written to it or a pass
+/// draws on it — a formula apiece would be a way apiece to read the wrong
+/// frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Shape {
     monitors: usize,
     reach: usize,
-    earlier: usize,
+    shutter_reach: usize,
 }
 
 impl Shape {
@@ -131,7 +139,7 @@ impl Shape {
         Shape {
             monitors: params.monitors.len(),
             reach: params.reach as usize,
-            earlier: params.slowest_shutter.passes() as usize - 1,
+            shutter_reach: params.shutter_reach as usize,
         }
     }
 
@@ -145,11 +153,11 @@ impl Shape {
 
     fn fits(self, size: (u32, u32)) -> Result<(), String> {
         let what = format!(
-            "{} bank layers ({RING} frames of {} monitors, the seed, {} frames of {UNITS} delay units, and {} earlier passes of {CAMERAS} shutters)",
+            "{} bank layers ({RING} frames of {} monitors, the seed, {} frames of {UNITS} delay units, and {} passes of {CAMERAS} shutters)",
             self.layers(),
             self.monitors,
             self.reach,
-            self.earlier,
+            self.shutter_reach,
         );
         // The limit every WebGPU implementation grants, since the browser
         // build asks for no more than that.
@@ -188,8 +196,8 @@ impl Shape {
 
     fn length(self, camera: usize) -> usize {
         match camera < UNITS {
-            true => self.reach + self.earlier,
-            false => self.earlier,
+            true => self.reach + self.shutter_reach,
+            false => self.shutter_reach,
         }
     }
 
@@ -236,19 +244,18 @@ struct Edge {
 
 /// The edges one origin's light arrives by on pass `pass`, each to `visit`.
 ///
-/// A camera's frame is the light of every pass its shutter spans, each at
-/// its share of the exposure. This pass's light fans out over its beam
-/// splitter, since a camera watching two monitors is two taps; an earlier
-/// pass's, and every pass a late camera hands on, is one tap on the picture
-/// its line recorded then, the glass and the framing already in it. The
-/// seed is exactly one tap and carries no camera; it reads the layer
+/// A camera's light on this pass fans out over its beam splitter, since a
+/// camera watching two monitors is two taps; on an earlier pass, which a
+/// shutter or a delay reaches back to, it is one tap on the picture its line
+/// recorded then, the glass and the framing already in it. The seed is
+/// exactly one tap and carries no camera; it reads the layer
 /// [`Feedback::write_seed`] wrote its frame to.
 fn edges(params: &Params, origin: Origin, pass: u64, mut visit: impl FnMut(Edge)) {
     let shape = Shape::of(params);
     match origin {
         Origin::Camera { camera, late } => {
-            for (earlier, exposure) in params.cameras[camera].shutter.exposure().enumerate() {
-                match late + earlier as u32 {
+            for (ago, exposure) in params.cameras[camera].shutter.exposure().enumerate() {
+                match late + ago as u32 {
                     0 => looks(params, camera, shape.newest(pass)).for_each(|edge| {
                         visit(Edge {
                             share: edge.share * exposure,
@@ -746,7 +753,7 @@ impl Feedback {
         assert_eq!(
             Shape::of(params),
             self.shape,
-            "the graph's monitors and reach are baked into the bank at creation"
+            "the bank's shape is baked in at creation"
         );
         // Everything the tap flattening assumes — the counts, the splitter
         // weights, every knob inside its rails — re-asserted here, so a
@@ -1002,7 +1009,7 @@ mod tests {
         let layers = |p: &Params| Shape::of(p).layers();
         let mut rig = crate::config::instrument();
         rig.reach = 0;
-        rig.slowest_shutter = Cadence::Full;
+        rig.shutter_reach = 0;
         assert_eq!(layers(&rig), 2 * 5 + 1);
         assert_eq!(bank_bytes(&rig, (1920, 1080)), 11 * 1920 * 1080 * 8);
         assert_eq!(Shape::of(&rig).recorded().count(), 0);
@@ -1029,10 +1036,9 @@ mod tests {
         assert_eq!(shape.late(1, 5, 3), shape.line(1, 2));
         assert_eq!(shape.late(1, 5, 3), shape.line(1, 5));
         assert_eq!(shape.late(0, 0, 3), shape.line(0, 0));
-        // A shutter a frame of 24 long spans this pass and two before it, so
-        // every camera's line keeps two more: camera 3, which has no unit,
-        // gets a line of two after B's.
-        rig.slowest_shutter = Cadence::Film;
+        // Every pass of shutter reach is another picture on every camera's
+        // line, camera 3's after B's.
+        rig.shutter_reach = 2;
         assert_eq!(layers(&rig), 2 * 5 + 1 + 2 * (3 + 2) + 2);
         let shape = Shape::of(&rig);
         assert_eq!(shape.recorded().collect::<Vec<_>>(), [0, 1, 2]);
@@ -1046,37 +1052,48 @@ mod tests {
     }
 
     #[test]
-    fn a_bank_past_the_cap_is_refused_and_the_units_reach_as_far_as_it_holds() {
-        // The rig's units reach the original's thirty frames, and at the
-        // resolution the instrument is deployed at the bank holds them all.
+    fn a_bank_past_the_cap_gives_up_delay_then_shutters_and_then_is_refused() {
         let rig = crate::config::instrument();
-        assert_eq!(rig.reach, Params::MAX_DELAY);
+        let fitted = |size: (u32, u32)| {
+            let mut params = rig.clone();
+            fit(&mut params, size);
+            (params.reach, params.shutter_reach)
+        };
+        // The deployed resolution buys everything: thirty frames of delay,
+        // and shutters open on two passes before this one.
+        assert_eq!((rig.reach, rig.shutter_reach), (Params::MAX_DELAY, 2));
         assert!(bank_fits(&rig, (1920, 1080)).is_ok());
-        assert_eq!(reach(&rig, (1920, 1080)), Params::MAX_DELAY);
+        assert_eq!(fitted((1920, 1080)), (Params::MAX_DELAY, 2));
         // At 4K the same lines are past the cap by bytes, and the refusal
         // says both halves of why, since neither the graph nor the
         // resolution alone is what went wrong.
         let why = bank_fits(&rig, (3840, 2160)).unwrap_err();
         assert!(
             why.contains(
-                "77 bank layers (2 frames of 5 monitors, the seed, 30 frames of 2 delay units, and 2 earlier passes of 3 shutters)"
+                "77 bank layers (2 frames of 5 monitors, the seed, 30 frames of 2 delay units, and 2 passes of 3 shutters)"
             ) && why.contains("3840x2160")
                 && why.contains("2.0 GiB cap"),
             "{why}"
         );
-        // Seven frames a unit is as far as a 4K bank goes beside the
-        // shutters' pictures.
-        assert_eq!(reach(&rig, (3840, 2160)), 7);
-        let at = |reach: u32| Params {
+        // The delay gives way first. 4096x4096 is sixteen layers of cap, the
+        // slowest shutter alone seventeen: one pass of shutter reach, and a
+        // frame of delay beside it.
+        assert_eq!(fitted((3840, 2160)), (7, 2));
+        assert_eq!(fitted((4096, 4096)), (1, 1));
+        let at = |reach: u32, shutter_reach: u32| Params {
             reach,
+            shutter_reach,
             ..rig.clone()
         };
-        assert!(bank_fits(&at(7), (3840, 2160)).is_ok());
-        assert!(bank_fits(&at(8), (3840, 2160)).is_err());
-        // A bank that does not fit with no reach at all has nothing to give
-        // up, and is refused as it stands.
-        assert_eq!(reach(&rig, (7680, 7680)), 0);
-        assert!(bank_fits(&at(0), (7680, 7680)).is_err());
+        assert!(bank_fits(&at(7, 2), (3840, 2160)).is_ok());
+        assert!(bank_fits(&at(8, 2), (3840, 2160)).is_err());
+        assert!(bank_fits(&at(1, 1), (4096, 4096)).is_ok());
+        assert!(bank_fits(&at(2, 1), (4096, 4096)).is_err());
+        assert!(bank_fits(&at(0, 2), (4096, 4096)).is_err());
+        // A bank that does not fit with neither has nothing to give up, and
+        // is refused as it stands.
+        assert_eq!(fitted((7680, 7680)), (0, 0));
+        assert!(bank_fits(&at(0, 0), (7680, 7680)).is_err());
     }
 
     #[test]
@@ -1089,7 +1106,8 @@ mod tests {
             edges(p, origin, 9, |edge| taps.push(edge));
             taps
         };
-        // Camera 3 at a pass is its glass alone: the rotating monitor, whole.
+        // Camera 3 at a sixtieth is its glass alone: the rotating monitor,
+        // whole.
         let three = Origin::Camera { camera: 2, late: 0 };
         let live = Edge {
             through: Through::Camera(2),
@@ -1097,14 +1115,12 @@ mod tests {
             share: 1.0,
         };
         assert_eq!(taps(&p, three), [live]);
-        // At a frame of 24, this pass is two fifths and the two before it
-        // two fifths and a fifth, off the pictures its line took then.
-        p.cameras[2].shutter = Cadence::Film;
         let line = |camera: usize, back: u32, share: f32| Edge {
             through: Through::Line(camera),
             layer: shape.late(camera, 9, back),
             share,
         };
+        p.cameras[2].shutter = Shutter::TwentyFourth;
         assert_eq!(
             taps(&p, three),
             [
@@ -1115,16 +1131,25 @@ mod tests {
         );
         // A late camera takes every pass off its line, the exposure counted
         // back from its delay.
-        p.cameras[0].shutter = Cadence::Half;
+        p.cameras[0].shutter = Shutter::Thirtieth;
         assert_eq!(
             taps(&p, Origin::Camera { camera: 0, late: 3 }),
             [line(0, 3, 0.5), line(0, 4, 0.5)]
         );
-        p.cameras[0].shutter = Cadence::Full;
+        p.cameras[0].shutter = Shutter::Sixtieth;
         assert_eq!(
             taps(&p, Origin::Camera { camera: 0, late: 3 }),
             [line(0, 3, 1.0)]
         );
+    }
+
+    #[test]
+    fn the_shader_spells_the_counts_the_crate_does() {
+        let shader = include_str!("shaders/feedback.wgsl");
+        for (array, count) in [("Stage", STAGES), ("Tap", MAX_TAPS)] {
+            let spelled = format!(": array<{array}, {count}>,");
+            assert_eq!(shader.matches(&spelled).count(), 1, "{spelled}");
+        }
     }
 
     /// binary16 back to f32, written from the format rather than from

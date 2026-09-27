@@ -63,11 +63,12 @@ pub fn validate(params: &Params) -> Result<(), String> {
                 "camera {i}'s look contains {w}; weights are finite and >= 0"
             ));
         }
-        if camera.shutter.place() > params.slowest_shutter.place() {
+        if camera.shutter.earlier() > params.shutter_reach {
             return Err(format!(
-                "camera {i}'s shutter is 1/{}; it opens 1/{} at the longest",
+                "camera {i}'s shutter is 1/{}, open on {} passes before this one; the bank holds {}",
                 camera.shutter.fps(),
-                params.slowest_shutter.fps()
+                camera.shutter.earlier(),
+                params.shutter_reach
             ));
         }
     }
@@ -208,25 +209,24 @@ mod tests {
     }
 
     #[test]
-    fn a_shutter_slower_than_the_graph_bought_is_refused() {
-        use crate::params::Cadence;
-        let with = |slowest: Cadence, shutter: Cadence| {
+    fn a_shutter_open_past_what_the_bank_holds_is_refused() {
+        use crate::params::Shutter;
+        let with = |shutter_reach: u32, c: usize, shutter: Shutter| {
             let mut p = instrument();
-            p.slowest_shutter = slowest;
-            p.cameras[2].shutter = shutter;
+            p.shutter_reach = shutter_reach;
+            p.cameras[c].shutter = shutter;
             validate(&p)
         };
-        for shutter in Cadence::ALL {
-            assert!(with(Cadence::SLOWEST, shutter).is_ok(), "{shutter:?}");
+        for c in 0..crate::rig::CAMERAS {
+            for shutter in Shutter::ALL {
+                assert!(with(2, c, shutter).is_ok(), "{shutter:?}");
+            }
+            assert!(with(1, c, Shutter::Thirtieth).is_ok());
+            assert_eq!(
+                with(1, c, Shutter::TwentyFourth).unwrap_err(),
+                format!("camera {c}'s shutter is 1/24, open on 2 passes before this one; the bank holds 1")
+            );
+            assert!(with(0, c, Shutter::Thirtieth).is_err());
         }
-        assert!(with(Cadence::Half, Cadence::Half).is_ok());
-        assert_eq!(
-            with(Cadence::Half, Cadence::Film).unwrap_err(),
-            "camera 2's shutter is 1/24; it opens 1/30 at the longest"
-        );
-        assert_eq!(
-            with(Cadence::Full, Cadence::Pal).unwrap_err(),
-            "camera 2's shutter is 1/50; it opens 1/60 at the longest"
-        );
     }
 }

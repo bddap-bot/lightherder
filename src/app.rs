@@ -19,7 +19,7 @@ use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::midi::{Midi, Shown};
 use crate::overlay::{Overlay, Readout};
-use crate::params::{Cadence, Focus, Knob, Node, Params};
+use crate::params::{Focus, Knob, Node, Params, Shutter};
 use crate::present::{Present, View};
 use crate::rig::{Measure, Pattern};
 
@@ -416,7 +416,7 @@ impl App {
             tapping: self.tapping,
             quantize: self.quantize,
             chroma: self.params.rig.keys[self.focus.switcher].measure == Measure::Chroma,
-            shutter: self.params.cameras[self.focus.camera].shutter != Cadence::Full,
+            shutter: self.params.cameras[self.focus.camera].shutter != Shutter::Sixtieth,
         }
     }
 
@@ -630,9 +630,7 @@ impl App {
                 log::info!("{}", self.params.describe(self.focus));
             }
             Action::Shutter => {
-                let slowest = self.params.slowest_shutter;
-                let camera = &mut self.params.cameras[self.focus.camera];
-                camera.shutter = camera.shutter.slower(slowest);
+                self.params.turn_shutter(self.focus.camera);
                 log::info!("{}", self.params.describe(self.focus));
             }
         }
@@ -1545,9 +1543,10 @@ mod tests {
     }
 
     #[test]
-    fn s8_steps_the_focused_cameras_shutter_and_is_lit_while_it_is_open_past_a_pass() {
+    fn s8_turns_the_focused_cameras_shutter_and_is_lit_while_it_is_open_past_a_pass() {
         use crate::lamps::lamp;
         use crate::midi::SHUTTER;
+        use Shutter::*;
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
@@ -1556,13 +1555,11 @@ mod tests {
         let shutters = |app: &App| app.params.cameras.map(|c| c.shutter);
         app.act(Action::Focus(Node::Camera, 1));
         assert!(!lit(&app));
-        for want in [Cadence::Pal, Cadence::Half, Cadence::Film, Cadence::Full] {
+        for want in [Thirtieth, TwentyFourth, Sixtieth, Thirtieth] {
             press(&mut app, &board, SHUTTER);
-            assert_eq!(shutters(&app), [Cadence::Full, want, Cadence::Full]);
-            assert_eq!(lit(&app), want != Cadence::Full, "{want:?}");
+            assert_eq!(shutters(&app), [Sixtieth, want, Sixtieth]);
+            assert_eq!(lit(&app), want != Sixtieth, "{want:?}");
         }
-        press(&mut app, &board, SHUTTER);
-        press(&mut app, &board, SHUTTER);
         assert!(app.params.describe(app.focus).contains("shutter 1/30"));
         app.act(Action::Focus(Node::Camera, 2));
         assert!(!lit(&app));
@@ -1572,9 +1569,9 @@ mod tests {
         surface(&mut app, &board, 16, 0);
         surface(&mut app, &board, 16, 40);
         press(&mut app, &board, 43);
-        assert_eq!(shutters(&app)[1], Cadence::Half);
+        assert_eq!(shutters(&app)[1], Thirtieth);
         press(&mut app, &board, 42);
-        assert_eq!(shutters(&app), [Cadence::Full; 3]);
+        assert_eq!(shutters(&app), [Sixtieth; 3]);
         assert!(!lit(&app));
     }
 
