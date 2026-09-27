@@ -5,7 +5,12 @@ cd "$(git rev-parse --show-toplevel)"
 head=$(git rev-parse HEAD)
 target=${CARGO_TARGET_DIR:-$PWD/target}
 export RUSTFLAGS="--remap-path-prefix=$PWD=/src --remap-path-prefix=$target=/target"
-installed=/home/a/lightherder/lightherder
+config=${XDG_CONFIG_HOME:-$HOME/.config}/lightherder/tv-binary
+installed=$(cat "$config" 2>/dev/null || true)
+if ! [[ $installed =~ ^/[^[:space:]]+$ ]]; then
+  echo "scripts/landing: $config must hold the TV binary's absolute install path" >&2
+  exit 2
+fi
 
 build() {
   nix-shell --run 'cargo build --release' >&2
