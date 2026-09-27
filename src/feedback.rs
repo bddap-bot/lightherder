@@ -923,6 +923,9 @@ fn half_bits(x: f32) -> u16 {
 /// hands over a frame every frame allocates on its first only. Refilled and
 /// not written in place, because a `halves` too short for `rgba8` would
 /// otherwise leave the tail of the last frame on the layer.
+///
+/// Opaque whatever the input's alpha says: in the bank, alpha is where a
+/// camera sees a monitor, and the switcher hands the seed on whole.
 fn to_half(rgba8: &[u8], halves: &mut Vec<u16>) {
     // No transfer curve on the way in. The bank holds whatever a monitor is
     // displaying, in the same convention as the rest of the instrument: the
@@ -930,7 +933,11 @@ fn to_half(rgba8: &[u8], halves: &mut Vec<u16>) {
     // a pass, not an encoding this stage is entitled to undo.
     let table = half_table();
     halves.clear();
-    halves.extend(rgba8.iter().map(|v| table[*v as usize]));
+    halves.extend(
+        rgba8
+            .chunks_exact(4)
+            .flat_map(|texel| [texel[0], texel[1], texel[2], u8::MAX].map(|v| table[v as usize])),
+    );
 }
 
 #[cfg(test)]
@@ -1034,6 +1041,19 @@ mod tests {
                 assert!(error <= theirs, "{v}: {bits:#06x} is not the nearest half");
             }
         }
+    }
+
+    #[test]
+    fn an_input_frame_lands_opaque_whatever_its_alpha() {
+        let mut halves = Vec::new();
+        to_half(&[255, 128, 0, 0, 10, 20, 30, 77], &mut halves);
+        let half = |v: u8| half_table()[v as usize];
+        assert_eq!(
+            halves,
+            [255, 128, 0, 255, 10, 20, 30, 255].map(half),
+            "the colour as it was, and alpha at one"
+        );
+        assert_eq!(half(255), 0x3c00);
     }
 
     #[test]
