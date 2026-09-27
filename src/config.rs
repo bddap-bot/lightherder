@@ -102,6 +102,13 @@ pub fn validate(params: &Params) -> Result<(), String> {
             Params::MAX_DELAY
         ));
     }
+    let longest = crate::params::Shutter::SLOWEST.earlier();
+    if params.shutter_reach > longest {
+        return Err(format!(
+            "the shutters reach {} passes; at most {longest}",
+            params.shutter_reach
+        ));
+    }
     Ok(())
 }
 
@@ -228,5 +235,9 @@ mod tests {
             );
             assert!(with(0, c, Shutter::Thirtieth).is_err());
         }
+        assert_eq!(
+            with(3, 0, Shutter::Sixtieth).unwrap_err(),
+            "the shutters reach 3 passes; at most 2"
+        );
     }
 }
