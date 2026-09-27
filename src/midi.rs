@@ -1425,7 +1425,7 @@ mod tests {
             assert_ne!(knob.reads(after), knob.reads(before));
         }
         assert_eq!(params.cameras[0].delay, 2);
-        assert_eq!(params.monitors[0].cadence, crate::params::Cadence::ALL[2]);
+        assert_eq!(params.monitors[0].cadence, crate::params::Cadence::Film);
     }
 
     #[test]

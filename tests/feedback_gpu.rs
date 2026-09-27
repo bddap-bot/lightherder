@@ -2350,11 +2350,11 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
     // a frame the output is holding through. Monitor 1 lights on exactly
     // the passes on which the camera, that many frames late, sees it, and
     // every lit frame is byte for byte the full-rate undelayed one: a hold
-    // moves when a frame changes, never what it is. Flashes on 0, 3 and 4
-    // cross both lengths of the film cadence and one held-through frame.
+    // moves when a frame changes, never what it is.
     let refreshes = |rate: Cadence| -> Vec<u64> {
         match rate {
             Cadence::Full => (0..24).collect(),
+            Cadence::Pal => (0..24).filter(|f| f % 6 != 1).collect(),
             Cadence::Half => (0..24).step_by(2).collect(),
             Cadence::Film => vec![0, 3, 5, 8, 10, 13, 15, 18, 20, 23],
         }
@@ -2385,7 +2385,7 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
                 .collect(),
         )
     };
-    for flash in [0u64, 3, 4] {
+    for flash in [0u64, 3, 4, 7] {
         let Some(reference) = run(flash, 0, Cadence::Full) else {
             return;
         };

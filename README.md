@@ -51,7 +51,7 @@ monitor or switcher; Cycle shows their values on screen.
 | Faders 1–6 | Monitor hue, saturation, brightness, contrast, temperature, sharpness. |
 | Faders 7–8 | Switcher reversal period (0–60 passes; 0 disables it), crossfade. |
 | Rotaries 1–3 | Camera zoom, rotation, delay (0–2 extra frames). A and 3 share zoom and rotation. |
-| Rotary 4 | Monitor frame rate: 60, 30 or 24. |
+| Rotary 4 | Monitor frame rate: 60, 50, 30 or 24. |
 | Rotary 5 | Precision: a full movement spans 1/64 to all of a continuous control's range. |
 | R5 / Marker ◀ | Reverse the switcher crossfade / reverse while held. |
 | S5 | Tap in: lighting S5 empties the switcher's one-bar pattern (128 passes, about 2.1 s); while it is lit, each R5 press adds a beat, and the switcher reverses on every beat, every bar. Press S5 again, or select another switcher, to keep the pattern; press S5 twice to clear it. |

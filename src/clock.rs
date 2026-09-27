@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use web_time::Instant;
 
-pub const RATE: f32 = 60.0;
+pub const RATE: f32 = crate::params::Cadence::SECOND as f32;
 
 const BACKLOG: Duration = Duration::from_millis(100);
 

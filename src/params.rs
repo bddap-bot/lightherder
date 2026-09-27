@@ -224,6 +224,7 @@ impl Params {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cadence {
     Full,
+    Pal,
     Half,
     Film,
 }
@@ -234,11 +235,12 @@ impl Cadence {
     pub const SECOND: u32 = 60;
 
     /// Fastest to slowest: the order the knob turns through them.
-    pub const ALL: [Cadence; 3] = [Cadence::Full, Cadence::Half, Cadence::Film];
+    pub const ALL: [Cadence; 4] = [Cadence::Full, Cadence::Pal, Cadence::Half, Cadence::Film];
 
     pub const fn fps(self) -> u32 {
         match self {
             Cadence::Full => Cadence::SECOND,
+            Cadence::Pal => 50,
             Cadence::Half => 30,
             Cadence::Film => 24,
         }
@@ -788,7 +790,7 @@ mod tests {
 
     #[test]
     fn a_rate_refreshes_its_fps_times_a_second_in_the_film_cadence() {
-        assert_eq!(Cadence::ALL.map(Cadence::fps), [60, 30, 24]);
+        assert_eq!(Cadence::ALL.map(Cadence::fps), [60, 50, 30, 24]);
         let refreshes = |rate: Cadence, second: u64| {
             (0..Cadence::SECOND as u64)
                 .map(|f| rate.refreshes(second * Cadence::SECOND as u64 + f))
@@ -800,6 +802,13 @@ mod tests {
             [
                 true, false, false, true, false, true, false, false, true, false, true, false,
                 false, true
+            ]
+        );
+        assert_eq!(
+            refreshes(Cadence::Pal, 0)[..14],
+            [
+                true, false, true, true, true, true, true, false, true, true, true, true, true,
+                false
             ]
         );
         assert_eq!(refreshes(Cadence::Half, 0)[..4], [true, false, true, false]);
@@ -817,17 +826,15 @@ mod tests {
         let mut params = p();
         let focus = Focus::default();
         assert_eq!(params.monitors[0].cadence, Cadence::Full);
-        nudge(&mut params, Knob::FrameRate, 1.0);
-        assert_eq!(params.monitors[0].cadence, Cadence::Half);
-        nudge(&mut params, Knob::FrameRate, 1.0);
-        assert_eq!(params.monitors[0].cadence, Cadence::Film);
-        nudge(&mut params, Knob::FrameRate, 1.0);
-        assert_eq!(params.monitors[0].cadence, Cadence::Film);
-        assert_eq!(params.knob(Knob::FrameRate, focus), 2.0);
+        for want in [Cadence::Pal, Cadence::Half, Cadence::Film, Cadence::Film] {
+            nudge(&mut params, Knob::FrameRate, 1.0);
+            assert_eq!(params.monitors[0].cadence, want);
+        }
+        assert_eq!(params.knob(Knob::FrameRate, focus), 3.0);
         assert!(params.monitors[1..]
             .iter()
             .all(|m| m.cadence == Cadence::Full));
-        nudge(&mut params, Knob::FrameRate, -3.0);
+        nudge(&mut params, Knob::FrameRate, -4.0);
         assert_eq!(params.monitors[0].cadence, Cadence::Full);
     }
 
