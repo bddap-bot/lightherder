@@ -50,11 +50,11 @@ monitor or switcher; Cycle shows their values on screen.
 | M1–M5 | Select upper A, lower A, upper B, lower B or the rotating monitor. |
 | R1–R4 | Select switcher A, B, C or D. |
 | Faders 1–6 | Monitor hue, saturation, brightness, contrast, temperature, sharpness. |
-| Faders 7–8 | Switcher period (0–60 passes from one beat to the next; 0 disables it), crossfade. |
+| Faders 7–8 | Switcher reversal period (0–60 passes; 0 disables it and undoes a reversal it still holds), crossfade. |
 | Rotaries 1–3 | Camera zoom, rotation, delay (0–30 frames). A and 3 share zoom and rotation; 3 has no delay unit. |
 | Rotary 4 | Monitor frame rate: 60, 50, 30 or 24. |
 | Rotary 5 | Precision: a full movement spans 1/64 to all of a continuous control's range. |
-| Rotary 7 | Switcher cut length: how many passes the reversal on each beat of the period lasts before the switcher cuts back (0–60; 0, or as long as the period, lasts until the next beat). |
+| Rotary 7 | Switcher cut length: the switcher reverses back this many passes after each reversal of its period (0–60; at 0, or at least the period, it waits for the next reversal). |
 | R5 / Marker ◀ | Reverse the switcher crossfade / reverse while held. |
 | S5 | Tap in: lighting S5 empties the switcher's one-bar pattern (128 passes, about 2.1 s); while it is lit, each R5 press adds a beat, and the switcher reverses on every beat, every bar. Press S5 again, or select another switcher, to keep the pattern; press S5 twice to clear it. |
 | S6 | While lit, each beat R5 adds lands on the nearest sixteenth of the bar. |
@@ -67,8 +67,9 @@ monitor or switcher; Cycle shows their values on screen.
 | Play | While Play is lit, record how faders 1–6 move on every monitor, keeping the last ten minutes; press again to loop those moves, and again to stop the loop and record anew. Moving or resetting a looping fader takes it out of the loop. |
 
 Faders and rotaries 1–4 and 7 change values by movement. A switcher reverses on
-each beat of its period and of its pattern, and keeps both while R1–R4 select
-another. To start feedback, select switcher B with R2 and lower fader 8, then
+each beat of its period and of its pattern, and keeps its period, cut length
+and pattern while R1–R4 select another. To start feedback, select switcher B
+with R2 and lower fader 8, then
 select camera B with S2 and turn its zoom and rotation slightly.
 
 ## Topology

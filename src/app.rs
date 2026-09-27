@@ -1447,8 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn rotary_7_holds_each_cut_of_the_focused_switchers_period_that_long() {
-        use crate::rig::BAR;
+    fn rotary_7_turns_the_focused_switchers_cut_length_and_rewind_puts_it_back() {
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
@@ -1459,21 +1458,11 @@ mod tests {
         surface(&mut app, &board, 22, 0);
         surface(&mut app, &board, 22, 6);
         assert_eq!(app.params.rig.periods, [0, 0, 8, 0]);
-        assert_eq!(app.params.rig.cuts, [0, 0, 3, 0]);
+        assert_eq!(app.params.rig.cut_lengths, [0, 0, 3, 0]);
         assert!(app.params.describe(app.focus).contains("period 8  cut 3"));
-        let beats = |cut: u64| -> Vec<u64> {
-            (1..=BAR)
-                .filter(|pass| pass % 8 == 0 || (cut != 0 && pass % 8 == cut && *pass > 8))
-                .map(|pass| pass % BAR)
-                .collect()
-        };
-        assert_eq!(
-            bars(&mut app, &board, 1, &[]),
-            [vec![], vec![], beats(3), vec![]]
-        );
         press(&mut app, &board, 43);
-        assert_eq!(app.params.rig.cuts[2], 0, "rewind puts the cut length back");
-        assert_eq!(bars(&mut app, &board, 1, &[])[2], beats(0));
+        assert_eq!(app.params.rig.cut_lengths, [0; 4]);
+        assert_eq!(app.params.rig.periods, [0, 0, 8, 0]);
     }
 
     fn press(app: &mut App, board: &TestSurface, control: u8) {

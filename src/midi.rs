@@ -91,10 +91,10 @@ const fn button(cc: u8, action: Action) -> Button {
 /// select rows. The rotaries above them are the right hand's: the focused
 /// camera — where it stands on its shaft and how late its cable is — and
 /// then the focused monitor's frame rate, the one router-output setting a
-/// knob turns. The period's cut length is on the rotary over the period's
-/// fader, the strip the original's two period knobs make. Thirteen handles
-/// on sixteen controls, so there is no second page and the precision is
-/// absolute on the fifth rotary. Rotaries 6 and 8 are dead.
+/// knob turns. The period's cut length sits over the period's fader, since
+/// the original's period mode is one pair of knobs. Every handle has a
+/// control of its own, so there is no second page and the precision is
+/// absolute on the fifth rotary.
 pub(crate) const FADERS: [Fader; 13] = [
     fader(0, Knob::Hue),
     fader(1, Knob::Saturation),
@@ -108,7 +108,7 @@ pub(crate) const FADERS: [Fader; 13] = [
     fader(17, Knob::Rotation),
     fader(18, Knob::Delay),
     fader(19, Knob::FrameRate),
-    fader(22, Knob::Cut),
+    fader(22, Knob::CutLength),
 ];
 
 /// Where a control number sits on the panel: the one copy of the device's
@@ -1214,7 +1214,7 @@ mod tests {
                 fader(17, Knob::Rotation),
                 fader(18, Knob::Delay),
                 fader(19, Knob::FrameRate),
-                fader(22, Knob::Cut),
+                fader(22, Knob::CutLength),
             ]
         );
         assert_eq!(PRECISION, 20);
