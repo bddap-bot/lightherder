@@ -21,7 +21,7 @@ use crate::midi::{Midi, Shown};
 use crate::overlay::{Overlay, Readout};
 use crate::params::{Focus, Knob, Node, Params};
 use crate::present::{Present, View};
-use crate::rig::{Keying, Pattern};
+use crate::rig::{Measure, Pattern};
 
 /// Close a capture and say where it went, which is the only report a
 /// performer on a fullscreen display gets of one.
@@ -415,7 +415,7 @@ impl App {
             armed: self.automation.armed(),
             tapping: self.tapping,
             quantize: self.quantize,
-            chroma: self.params.rig.keys[self.focus.switcher].keying == Keying::Chroma,
+            chroma: self.params.rig.keys[self.focus.switcher].measure == Measure::Chroma,
         }
     }
 
@@ -483,7 +483,8 @@ impl App {
         self.metered = Instant::now();
     }
 
-    /// Put the last knob that moved back to its identity, and nothing else.
+    /// Put the last knob that moved back where the instrument starts it, and
+    /// nothing else.
     fn reset_knob(&mut self) {
         let Some(knob) = self.last_knob else {
             // Not silent: the button did nothing, and the one place a
@@ -623,7 +624,8 @@ impl App {
                 log::info!("quantize {}", if self.quantize { "on" } else { "off" });
             }
             Action::Chroma => {
-                self.params.rig.rekey(self.focus.switcher);
+                let key = &mut self.params.rig.keys[self.focus.switcher];
+                key.measure = key.measure.other();
                 log::info!("{}", self.params.describe(self.focus));
             }
         }
@@ -1480,7 +1482,7 @@ mod tests {
     fn rotaries_8_and_6_key_the_focused_switcher_and_s7_keys_it_by_chroma() {
         use crate::lamps::lamp;
         use crate::midi::{CHROMA, PRECISION};
-        use crate::rig::{Key, Keying};
+        use crate::rig::{Key, Measure};
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
@@ -1497,10 +1499,10 @@ mod tests {
         assert!((b.clip - 64.0 / 127.0).abs() < 1e-6, "{b:?}");
         let factor = 1000f32.powf(32.0 / 127.0);
         assert!((b.gain - Key::OFF.gain * factor).abs() < 1e-3, "{b:?}");
-        assert_eq!(b.keying, Keying::Luma);
+        assert_eq!(b.measure, Measure::Luma);
         assert!(!lit(&app));
         press(&mut app, &board, CHROMA);
-        assert_eq!(app.params.rig.keys[1].keying, Keying::Chroma);
+        assert_eq!(app.params.rig.keys[1].measure, Measure::Chroma);
         assert!(lit(&app));
         assert!(app
             .params
@@ -1513,7 +1515,7 @@ mod tests {
         assert_eq!(
             app.params.rig.keys[1],
             Key {
-                keying: Keying::Chroma,
+                measure: Measure::Chroma,
                 clip: b.clip,
                 gain: Key::OFF.gain,
             }
@@ -1527,6 +1529,12 @@ mod tests {
         press(&mut app, &board, 42);
         assert_eq!(app.params.rig.keys, started);
         assert!(!lit(&app));
+        // Rewind puts D's clip back on the seed key it starts with.
+        app.act(Action::Focus(Node::Switcher, 3));
+        surface(&mut app, &board, 23, 127);
+        assert!(app.params.rig.keys[3].clip > 0.8);
+        press(&mut app, &board, 43);
+        assert_eq!(app.params.rig.keys, started);
     }
 
     fn brightness(app: &App) -> f32 {

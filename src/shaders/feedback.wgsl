@@ -17,11 +17,8 @@ struct Tap {
 
 // One switcher on the monitor's chain. See feedback::Stage.
 struct Stage {
-    // x: one past the last tap of its In1. yzw: padding.
-    in1: vec4<f32>,
-    // x: the crossfade. y: the clip, 0 for the key off. z: the edge's width.
-    // w: 1 on a chroma key, 0 on a luma key.
-    key: vec4<f32>,
+    mix: vec4<f32>,
+    measure: vec4<f32>,
 };
 
 struct Uniforms {
@@ -37,11 +34,6 @@ struct Uniforms {
     info: vec4<f32>,
     // x: the unsharp mask, the front panel's sharpness knob. yzw: padding.
     analog: vec4<f32>,
-    // xyz: the keys' measures, FCC NTSC luma and a blue screen's share,
-    // handed over rather than written here so the crate has one copy of
-    // each.
-    luma: vec4<f32>,
-    blue: vec4<f32>,
     // x: how many of `stages` run. yzw: padding.
     chain: vec4<f32>,
     // As long as feedback::STAGES, and `taps` as feedback::MAX_TAPS, which is
@@ -138,34 +130,23 @@ fn arm(uv: vec2<f32>, layer: i32, centre: vec3<f32>) -> vec3<f32> {
 }
 
 // How much of In2 a switcher's key passes at this texel, judged on the
-// picture In2 is handed: its luma, or one less its share of a blue screen.
-// It passes everything at or above the clip and finishes cutting one edge
-// below, and a clip of zero is the key off, skipped outright so that it is
-// exactly inert — inside a loop, "almost passes" is a ratchet.
+// picture In2 is handed: all of it at or above the clip, none one edge below.
 fn passed(stage: Stage, two: vec3<f32>) -> f32 {
-    let clip = stage.key.y;
-    if clip <= 0.0 {
-        return 1.0;
-    }
-    var measured = dot(u.luma.xyz, two);
-    if stage.key.w > 0.5 {
-        measured = 1.0 - dot(u.blue.xyz, two);
-    }
-    return smoothstep(clip - stage.key.z, clip, measured);
+    let clip = stage.mix.z;
+    return smoothstep(clip - stage.mix.w, clip, dot(stage.measure.xyz, two) + stage.measure.w);
 }
 
-// What a run of taps lands on one switcher input: the picture that arrives,
-// which is what a key judges; what the monitor shows of it, the sharpness
-// mask included, since that is the monitor's front panel and not the
-// switcher's; and whether any of the taps saw a monitor.
-struct Landed {
-    arrived: vec3<f32>,
-    shown: vec3<f32>,
+// What a run of taps hands one switcher input: the picture as it arrives,
+// which is what a key judges; the same through the monitor's sharpness
+// mask, which is what the monitor shows; and whether any tap saw a monitor.
+struct Picture {
+    raw: vec3<f32>,
+    signal: vec3<f32>,
     covered: bool,
 };
 
-fn landed(first: u32, end: u32, p: vec3<f32>) -> Landed {
-    var landed = Landed(vec3<f32>(0.0), vec3<f32>(0.0), false);
+fn summed(first: u32, end: u32, p: vec3<f32>) -> Picture {
+    var picture = Picture(vec3<f32>(0.0), vec3<f32>(0.0), false);
     for (var t = first; t < end; t++) {
         let tap = u.taps[t];
         let src_uv = vec2<f32>(dot(tap.row0.xyz, p), dot(tap.row1.xyz, p));
@@ -194,32 +175,32 @@ fn landed(first: u32, end: u32, p: vec3<f32>) -> Landed {
             signal += sharpness * (raw - blurred);
         }
 
-        landed.arrived += raw * tap.weight.rgb;
-        landed.shown += signal * tap.weight.rgb;
-        landed.covered = landed.covered || seen.a > 0.5;
+        picture.raw += raw * tap.weight.rgb;
+        picture.signal += signal * tap.weight.rgb;
+        picture.covered = picture.covered || seen.a > 0.5;
     }
-    return landed;
+    return picture;
 }
 
-// Every tap sampled for the texel at `p`, run through the monitor's chain of
-// switchers from the deepest out, each keying the program so far — its In2
-// — over its In1; and in alpha whether any tap saw a monitor there.
+// Every tap sampled for the texel at `p` and run through the monitor's chain
+// of switchers from the deepest out, each keying the program so far — its
+// In2 — over its In1; and in alpha whether any tap saw a monitor there.
 fn gathered(p: vec3<f32>) -> vec4<f32> {
     var t = u32(u.info.x);
-    var program = landed(0u, t, p);
+    var program = summed(0u, t, p);
     for (var s = 0u; s < u32(u.chain.x); s++) {
         let stage = u.stages[s];
-        let end = u32(stage.in1.x);
-        let in1 = landed(t, end, p);
+        let end = u32(stage.mix.x);
+        let in1 = summed(t, end, p);
         t = end;
-        let level = stage.key.x * passed(stage, program.arrived);
-        program = Landed(
-            mix(in1.arrived, program.arrived, level),
-            mix(in1.shown, program.shown, level),
+        let level = stage.mix.y * passed(stage, program.raw);
+        program = Picture(
+            mix(in1.raw, program.raw, level),
+            mix(in1.signal, program.signal, level),
             in1.covered || program.covered,
         );
     }
-    return vec4<f32>(program.shown, select(0.0, 1.0, program.covered));
+    return vec4<f32>(program.signal, select(0.0, 1.0, program.covered));
 }
 
 @fragment

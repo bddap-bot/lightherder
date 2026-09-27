@@ -25,7 +25,7 @@ use bytemuck::Zeroable;
 
 use crate::affine::{flip_uv, sample_transform, Affine2, Framing};
 use crate::params::Params;
-use crate::rig::{Keying, Rig, Source, Step, Switcher, UNITS};
+use crate::rig::{Measure, Origin, Rig, Step, Switcher, UNITS};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
@@ -53,7 +53,6 @@ const _: () = assert!(
      taps past the array's end read whatever the implementation clamps to"
 );
 
-/// Most switchers one monitor's wiring passes: each once at most.
 const STAGES: usize = crate::rig::SWITCHERS;
 
 const _: () = assert!(STAGES == 4, "shaders/feedback.wgsl spells this number too");
@@ -213,20 +212,20 @@ struct Edge {
     share: f32,
 }
 
-/// The edges one source lands on its switcher input by, on pass `pass`.
+/// The edges one origin's light arrives by on pass `pass`.
 ///
 /// A camera on time fans out over its beam splitter, since a camera
 /// watching two monitors is two taps; a late one is one tap on the picture
 /// its unit recorded, the glass already in it. The seed is exactly one tap
 /// and carries no camera; it reads the layer [`Feedback::write_seed`] wrote
 /// its frame to.
-fn edges(params: &Params, source: Source, pass: u64) -> impl Iterator<Item = Edge> + '_ {
+fn edges(params: &Params, origin: Origin, pass: u64) -> impl Iterator<Item = Edge> + '_ {
     let shape = Shape::of(params);
-    let (recorded, live) = match source {
-        Source::Camera { camera, late: 0 } => {
+    let (recorded, live) = match origin {
+        Origin::Camera { camera, late: 0 } => {
             (None, Some(looks(params, camera, shape.newest(pass))))
         }
-        Source::Camera { camera, late } => (
+        Origin::Camera { camera, late } => (
             Some(Edge {
                 through: Through::Line(camera),
                 layer: shape.late(camera, pass, late),
@@ -234,7 +233,7 @@ fn edges(params: &Params, source: Source, pass: u64) -> impl Iterator<Item = Edg
             }),
             None,
         ),
-        Source::Seed => (
+        Origin::Seed => (
             Some(Edge {
                 through: Through::Seed,
                 layer: shape.seed(),
@@ -298,24 +297,27 @@ impl Tap {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Stage {
     /// x: one past the last tap of its In1, whose taps follow the stage
-    /// before's. yzw: padding.
-    in1: [f32; 4],
-    /// x: the crossfade. y: the clip, where 0 is the key off. z: the edge's
-    /// width. w: 1 on a chroma key, 0 on a luma key.
-    key: [f32; 4],
+    /// before's. y: the crossfade. z: the key's clip. w: its edge's width.
+    mix: [f32; 4],
+    /// What the key measures In2 by: rgb weighs its channels and a is added.
+    /// Chroma measures one less a blue screen's share, so the screen reads 0
+    /// and grey 1; a key that is off reads 1 everywhere, which passes at any
+    /// clip exactly — inside a loop, "almost passes" is a ratchet.
+    measure: [f32; 4],
 }
 
 impl Stage {
     fn new(rig: &Rig, switcher: Switcher, end: usize) -> Stage {
         let s = switcher as usize;
         let key = rig.keys[s];
-        let chroma = match key.keying {
-            Keying::Luma => 0.0,
-            Keying::Chroma => 1.0,
+        let ([r, g, b], offset) = match (key.on(), key.measure) {
+            (false, _) => ([0.0; 3], 1.0),
+            (true, Measure::Luma) => (crate::params::luma_row(), 0.0),
+            (true, Measure::Chroma) => (crate::params::blue_row().map(|w| -w), 1.0),
         };
         Stage {
-            in1: [end as f32, 0.0, 0.0, 0.0],
-            key: [rig.switchers[s], key.clip, 1.0 / key.gain, chroma],
+            mix: [end as f32, rig.switchers[s], key.clip, 1.0 / key.gain],
+            measure: [r, g, b, offset],
         }
     }
 }
@@ -339,19 +341,10 @@ struct Uniforms {
     /// x: the unsharp mask, [`crate::params::Monitor::sharpness`]. yzw:
     /// padding.
     analog: [f32; 4],
-    /// The keys' two measures, [`crate::params::luma_row`] and
-    /// [`crate::params::blue_row`], in xyz. Passed rather than written into
-    /// the shader so there is one copy of each in the crate.
-    luma: [f32; 4],
-    blue: [f32; 4],
     /// x: how many of `stages` run. yzw: padding.
     chain: [f32; 4],
     stages: [Stage; STAGES],
     taps: [Tap; MAX_TAPS],
-}
-
-fn measure(row: [f32; 3]) -> [f32; 4] {
-    [row[0], row[1], row[2], 0.0]
 }
 
 /// Uniform slots sit this far apart: WebGPU's guaranteed dynamic-offset
@@ -764,9 +757,13 @@ impl Feedback {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut stages = [Stage::zeroed(); STAGES];
             let (mut count, mut program, mut staged) = (0usize, 0usize, 0usize);
-            params.rig.wiring(m, |step| match step {
-                Step::Program(source) | Step::In1(source) => {
-                    for edge in edges(params, source, self.frame) {
+            params.rig.wiring(m, |step| {
+                let (origin, stage) = match step {
+                    Step::Start(origin) => (Some(origin), None),
+                    Step::Stage { switcher, in1 } => (in1, Some(switcher)),
+                };
+                if let Some(origin) = origin {
+                    for edge in edges(params, origin, self.frame) {
                         let (sampled, gain) = match edge.through {
                             Through::Camera(c) => (
                                 mirror.then(&framings[crate::rig::SHAFT_OF[c]]),
@@ -783,13 +780,13 @@ impl Feedback {
                         taps[count] = Tap::new(sampled, gain.map(|g| edge.share * g), edge.layer);
                         count += 1;
                     }
-                    if let Step::Program(_) = step {
-                        program = count;
-                    }
                 }
-                Step::Mix(switcher) => {
-                    stages[staged] = Stage::new(&params.rig, switcher, count);
-                    staged += 1;
+                match stage {
+                    None => program = count,
+                    Some(switcher) => {
+                        stages[staged] = Stage::new(&params.rig, switcher, count);
+                        staged += 1;
+                    }
                 }
             });
 
@@ -811,8 +808,6 @@ impl Feedback {
                     above as f32,
                 ],
                 analog: [monitor.sharpness, 0.0, 0.0, 0.0],
-                luma: measure(crate::params::luma_row()),
-                blue: measure(crate::params::blue_row()),
                 chain: [staged as f32, 0.0, 0.0, 0.0],
                 stages,
                 taps,

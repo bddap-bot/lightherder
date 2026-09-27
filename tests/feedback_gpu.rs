@@ -16,7 +16,7 @@ use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Cadence, Camera, Colour, Monitor, Params};
 use lightherder::present::{Present, View};
 use lightherder::rig::{
-    Key, Keying, Point, Rig, Select, Switcher, MONITORS, SELECTS, SHAFTS, SWITCHERS,
+    Key, Measure, Point, Rig, Select, Switcher, MONITORS, SELECTS, SHAFTS, SWITCHERS,
 };
 
 /// Where the spot this suite lights sits, in screen units — off-centre on
@@ -1808,8 +1808,12 @@ fn the_seed_arrives_whole_however_the_cameras_are_set() {
 
 // ---- The keys: what each switcher refuses of its In2 ----------------------
 
-fn key(keying: Keying, clip: f32, gain: f32) -> Key {
-    Key { keying, clip, gain }
+fn key(measure: Measure, clip: f32, gain: f32) -> Key {
+    Key {
+        measure,
+        clip,
+        gain,
+    }
 }
 
 /// The seed on its monitor through D's key. The picture is a still upload
@@ -1828,7 +1832,7 @@ fn the_luma_key_cuts_the_dark_passes_the_bright_and_blends_the_edge() {
     // — the soft edge asserted as an effect on the light, not as a shader
     // detail. The key passes at 0.5 and has finished cutting one edge down
     // at 0.3; the quarters' lumas are 0.16, 0.39 and 0.86.
-    let p = keyed_seed(key(Keying::Luma, 0.5, 5.0));
+    let p = keyed_seed(key(Measure::Luma, 0.5, 5.0));
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1871,7 +1875,7 @@ fn where_the_key_cuts_the_switcher_leaves_the_loop_whole() {
     let lit = h.read().at(0.25, 0.25);
     assert!((lit - 200.0).abs() < 4.0, "the loop should hold 200: {lit}");
 
-    p.rig.keys[Switcher::D as usize] = key(Keying::Luma, 0.5, 5.0);
+    p.rig.keys[Switcher::D as usize] = key(Measure::Luma, 0.5, 5.0);
     p.rig.switchers[Switcher::D as usize] = 0.5;
     h.feedback.write_seed(
         h.queue,
@@ -1896,10 +1900,10 @@ fn the_chroma_key_cuts_a_blue_screen_where_the_luma_key_cuts_the_dark() {
     // A blue screen, the same blue at two fifths, grey and red, keyed hard
     // at half. On chroma only the screen is cut: the dim blue carries two
     // fifths of the screen's colour, and grey and red none. Turned over to
-    // luma at the same clip, everything darker than half is cut instead,
-    // which leaves the grey alone.
+    // luma with the clip at a fifth, both blues are cut and the red, at
+    // three tenths, passes.
     let quarters = [[0, 0, 255], [0, 0, 100], [200; 3], [255, 0, 0]];
-    let mut p = keyed_seed(key(Keying::Chroma, 0.5, 1000.0));
+    let mut p = keyed_seed(key(Measure::Chroma, 0.5, 1000.0));
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1926,9 +1930,9 @@ fn the_chroma_key_cuts_a_blue_screen_where_the_luma_key_cuts_the_dark() {
             "chroma, quarter {quarter}: {seen:?}"
         );
     }
-    p.rig.rekey(Switcher::D as usize);
+    p.rig.keys[Switcher::D as usize] = key(Measure::Luma, 0.2, 1000.0);
     let seen = shown(&mut h, &p);
-    for (quarter, want) in [[0; 3], [0; 3], quarters[2], [0; 3]]
+    for (quarter, want) in [[0; 3], [0; 3], quarters[2], quarters[3]]
         .into_iter()
         .enumerate()
     {
@@ -1961,7 +1965,7 @@ fn switcher_a_keys_one_loop_over_the_other() {
     // Where the key passes the crossfade still runs; where it cuts, A stands
     // whole whatever the crossfade says.
     let mut p = loops_over_the_seed();
-    p.rig.keys[Switcher::A as usize] = key(Keying::Luma, 0.3, 1000.0);
+    p.rig.keys[Switcher::A as usize] = key(Measure::Luma, 0.3, 1000.0);
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -1997,9 +2001,11 @@ fn a_key_judges_the_picture_its_in2_is_handed_another_switchers_program_included
     // B's In2 is C's program: half the seed, with C halfway toward D and
     // camera A blind. B keys on that half, so a quarter bright enough to
     // pass as the seed is cut once C has halved it, and B's In1 — camera B,
-    // blind — stands there instead.
+    // blind — stands there instead. D, off, is set to the other measure, so
+    // B has to key by its own.
     let mut p = seed_on_a_monitor();
     p.rig.switchers[Switcher::C as usize] = 0.5;
+    p.rig.keys[Switcher::D as usize].measure = Measure::Chroma;
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -2017,13 +2023,62 @@ fn a_key_judges_the_picture_its_in2_is_handed_another_switchers_program_included
         (halved - 100.0).abs() < 3.0 && (whole - 127.5).abs() < 3.0,
         "{halved} {whole}"
     );
-    p.rig.keys[Switcher::B as usize] = key(Keying::Luma, 0.45, 1000.0);
+    p.rig.keys[Switcher::B as usize] = key(Measure::Luma, 0.45, 1000.0);
     let [halved, whole] = quarters(&mut h, &p);
     assert!(
         halved < 3.0,
         "a luma of 0.39 on In2 passed a clip of 0.45: {halved}"
     );
     assert!((whole - 127.5).abs() < 3.0, "{whole}");
+}
+
+#[test]
+fn a_key_judges_the_picture_before_the_monitor_sharpens_it() {
+    // A hard key at half over a step from grey at 0.55 to white, and the
+    // monitor sharpening: the mask digs the grey beside the step down to
+    // about 0.44, which a key judging the monitor's picture would cut. The
+    // key judges what the switcher is handed, so that texel passes.
+    let mut p = keyed_seed(key(Measure::Luma, 0.5, 1000.0));
+    p.monitors[SEEDED].sharpness = 1.0;
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    let (grey, white) = ([140; 3], [255; 3]);
+    h.feedback.write_seed(
+        h.queue,
+        &quartered_frame((SIZE, SIZE), [grey, white, white, grey]),
+    );
+    h.step_solo(&p, SEEDED);
+    let rim = h.read().at((SIZE as f32 / 2.0 - 0.5) / SIZE as f32, 0.25);
+    assert!((rim - 111.0).abs() < 6.0, "the grey beside the step: {rim}");
+}
+
+#[test]
+fn each_stage_takes_its_own_in1_and_no_other() {
+    // Lower B on B's program, B at In2, C a quarter of the way to D and D
+    // at In1: three quarters of camera A on C's In1, in red, and a quarter
+    // of camera 3 on D's, in blue. Camera 3 counted into C's In1 as well
+    // would be blue at full, and camera A into D's a quarter of each.
+    let mut p = seed_on_a_monitor();
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    h.feedback
+        .write_seed(h.queue, &flat_frame((SIZE, SIZE), [255; 3]));
+    h.step_solo(&p, SEEDED);
+    p.rig.selects[SEEDED] = Select::Direct;
+    p.rig.selects[3] = Select::Program;
+    p.rig.switchers = [0.0, 1.0, 0.25, 0.0];
+    for (camera, gain) in [(0, [1.0, 0.0, 0.0]), (2, [0.0, 0.0, 1.0])] {
+        p.cameras[camera].look = one_hot(SEEDED);
+        p.cameras[camera].gain = gain;
+    }
+    h.step_solo(&p, 3);
+    let seen = h.read().rgb_at(0.5, 0.5);
+    assert!(
+        (seen[0] - 191.25).abs() < 3.0 && seen[1] < 3.0 && (seen[2] - 63.75).abs() < 3.0,
+        "{seen:?}"
+    );
 }
 
 #[test]
@@ -2042,7 +2097,7 @@ fn a_key_at_clip_zero_is_off_however_far_past_the_screen_its_in2_runs() {
     h.step_solo(&p, SEEDED);
     let blue = |h: &mut Harness, clip: f32| {
         let mut p = p.clone();
-        p.rig.keys[Switcher::A as usize] = key(Keying::Chroma, clip, 1000.0);
+        p.rig.keys[Switcher::A as usize] = key(Measure::Chroma, clip, 1000.0);
         h.step_solo(&p, 0);
         h.read().rgb_at(0.5, 0.5)[2]
     };

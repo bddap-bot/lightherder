@@ -50,16 +50,17 @@ monitor or switcher; Cycle shows their values on screen.
 | M1–M5 | Select upper A, lower A, upper B, lower B or the rotating monitor. |
 | R1–R4 | Select switcher A, B, C or D. |
 | Faders 1–6 | Monitor hue, saturation, brightness, contrast, temperature, sharpness. |
-| Faders 7–8 | Switcher reversal period (0–60 passes; 0 disables it and undoes a reversal it still holds), crossfade. |
+| Faders 7–8 | Switcher reversal period (0–60 passes; 0 disables it and undoes a reversal it still holds), crossfade from In1 (down) to In2 (up). |
 | Rotaries 1–3 | Camera zoom, rotation, delay (0–30 frames). A and 3 share zoom and rotation; 3 has no delay unit. |
 | Rotary 4 | Monitor frame rate: 60, 50, 30 or 24. |
 | Rotary 5 | Precision: a full movement spans 1/64 to all of a continuous control's range. |
+| Rotary 6 | Switcher key gain, 1–1000: raise to harden the key's edge. |
 | Rotary 7 | Switcher cut length: the switcher reverses back this many passes after each reversal of its period (0–60; at 0, or at least the period, it waits for the next reversal). |
-| Rotaries 8 / 6 | Switcher key clip / key gain: the key cuts In2 away, leaving In1 whole, where In2 measures below the clip (0 cuts nothing), across an edge 1/gain wide. |
+| Rotary 8 | Switcher key clip, 0–1 (0 is off): In1 shows through wherever In2's luma is under the clip or, on chroma, wherever In2 carries more than 1 − clip of a blue screen's colour. |
 | R5 / Marker ◀ | Reverse the switcher crossfade / reverse while held. |
 | S5 | Tap in: lighting S5 empties the switcher's one-bar pattern (128 passes, about 2.1 s); while it is lit, each R5 press adds a beat, and the switcher reverses on every beat, every bar. Press S5 again, or select another switcher, to keep the pattern; press S5 twice to clear it. |
 | S6 | While lit, each beat R5 adds lands on the nearest sixteenth of the bar. |
-| S7 | Key the switcher by chroma, measuring how far In2 is from a blue screen, or by luma; lit on chroma. |
+| S7 | Toggle the switcher's key between luma and chroma; lit on chroma. |
 | R6 / R7 | Flip the monitor horizontally / vertically. |
 | R8 | Select direct camera feed or switcher output on a structure monitor. |
 | Rewind / Stop | Reset the last knob moved / reset all knobs and patterns. |
@@ -68,7 +69,7 @@ monitor or switcher; Cycle shows their values on screen.
 | Marker Set / Record | Save a still / record while held, in `~/lightherder`. |
 | Play | While Play is lit, record how faders 1–6 move on every monitor, keeping the last ten minutes; press again to loop those moves, and again to stop the loop and record anew. Moving or resetting a looping fader takes it out of the loop. |
 
-Faders and rotaries 1–4 and 6–8 change values by movement. A switcher reverses on
+All faders, and every rotary but 5, change values by movement. A switcher reverses on
 each beat of its period and of its pattern, and keeps its period, cut length
 and pattern while R1–R4 select another. To start feedback, select switcher B
 with R2 and lower fader 8, then
@@ -80,9 +81,10 @@ Three virtual cameras only ever watch monitors: A and B each see a pair through
 50/50 glass, and camera 3 watches the fifth, rotating monitor.
 Four switchers route camera feeds back to the monitors, with the fifth monitor
 always showing camera B.
-Each switcher keys its In2 over its In1 and crossfades between them; external
-inputs enter on the mix side as switcher D's In2, keyed over camera 3 by luma as the
-instrument starts.
+Each switcher crossfades between In1, a camera, and In2: camera B on A, the next
+switcher's output on B and C, and the external input on D, the one way outside light
+enters. Each can key In2 over In1; only D's key starts on, keying the input over
+camera 3 by luma.
 Cameras A and B each feed a frame delay unit, and at each place their feeds
 reach — three for A, four for B — the router takes the unit's delayed output
 or its live one. All seven start on delayed, so a delay dialled in reaches

@@ -3,7 +3,7 @@
 
 use crate::affine::{Axis, Framing};
 use crate::input::Input;
-use crate::rig::{Keying, Rig};
+use crate::rig::{Measure, Rig};
 
 /// The colour controls on one monitor's front panel, in the order an analog
 /// signal meets them: chroma decode, video amplifier, phosphor.
@@ -119,8 +119,6 @@ pub fn luma_row() -> [f32; 3] {
     std::array::from_fn(|i| DECODE[0][i] as f32)
 }
 
-/// The colour the chroma key cuts: a blue screen, which is what the
-/// original keyed.
 const BLUE_SCREEN: [f64; 3] = [0.0, 0.0, 1.0];
 
 /// How much of a blue screen's chroma a texel carries, as the row the shader
@@ -566,8 +564,6 @@ impl Knob {
             Knob::Period | Knob::CutLength => Limit::Whole(crate::rig::MAX_PERIOD),
             // A crossfade stands between its two inputs and nowhere else.
             Knob::Switcher => Limit::Clamp(0.0, 1.0),
-            // From cutting nothing to cutting all but white, or all but what
-            // carries none of a blue screen's colour.
             Knob::KeyClip => Limit::Clamp(0.0, 1.0),
             // An edge the whole of the measure wide, down to one finer than a
             // step of an 8-bit picture, a factor a step.
@@ -612,10 +608,12 @@ impl Params {
         looks.chain(feeds).filter(|f| f.share > 0.0)
     }
 
-    /// Put `knob` back where its stage does nothing to the light. Through
-    /// [`Params::set`], so the rails and the wrap are unchanged.
+    /// Put `knob` back where the instrument starts it at this focus: where
+    /// its stage does nothing to the light, but for the clip of a key the
+    /// rig starts with on. Through [`Params::set`], so the rails and the
+    /// wrap are unchanged.
     pub fn reset(&mut self, knob: Knob, focus: Focus) {
-        self.set(knob, knob.identity(), focus);
+        self.set(knob, crate::config::instrument().knob(knob, focus), focus);
     }
 
     /// Where `knob` is standing. Every index is one the caller has already
@@ -728,9 +726,9 @@ impl Params {
             },
             None => String::new(),
         };
-        let keying = match self.rig.keys[focus.switcher].keying {
-            Keying::Luma => "luma",
-            Keying::Chroma => "chroma",
+        let measure = match self.rig.keys[focus.switcher].measure {
+            Measure::Luma => "luma",
+            Measure::Chroma => "chroma",
         };
         format!(
             "cam {}/{}: zoom {}  rot {}  {}\n\
@@ -766,7 +764,7 @@ impl Params {
             reads(Knob::Period),
             reads(Knob::CutLength),
             self.rig.patterns[focus.switcher],
-            keying,
+            measure,
             reads(Knob::KeyClip),
             reads(Knob::KeyGain),
         )
@@ -1202,7 +1200,7 @@ mod tests {
         assert!(params
             .describe(d)
             .ends_with("  luma key clip 0.350  gain 12.5"));
-        params.rig.rekey(3);
+        params.rig.keys[3].measure = Measure::Chroma;
         params.set(Knob::KeyGain, 40.0, d);
         assert!(
             params
@@ -1211,6 +1209,19 @@ mod tests {
             "{}",
             params.describe(d)
         );
+    }
+
+    #[test]
+    fn a_reset_puts_a_key_clip_back_where_the_rig_starts_it() {
+        let mut params = crate::config::instrument();
+        for s in [0, 3] {
+            let focus = Focus::default().with(Node::Switcher, s);
+            let started = params.knob(Knob::KeyClip, focus);
+            params.set(Knob::KeyClip, 0.8, focus);
+            params.reset(Knob::KeyClip, focus);
+            assert_eq!(params.knob(Knob::KeyClip, focus), started, "switcher {s}");
+        }
+        assert_eq!(params.rig.keys.map(|key| key.clip), [0.0, 0.0, 0.0, 0.35]);
     }
 
     #[test]

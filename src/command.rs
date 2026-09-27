@@ -17,7 +17,8 @@ pub enum Action {
     /// as it, so nothing downstream checks it a second time.
     Focus(Node, usize),
     Reset,
-    /// Put the last knob that moved back to its identity, and nothing else.
+    /// Put the last knob that moved back where the instrument starts it, and
+    /// nothing else.
     /// Named by having been turned rather than by a control of its own: the
     /// instrument has a panel of them and no display to point at one with,
     /// and the knob a hand wants back is the knob that hand was just on.
@@ -51,8 +52,6 @@ pub enum Action {
     Automate,
     TapIn,
     Quantize,
-    /// A latch with a lamp: the focused switcher's key measures a blue
-    /// screen's colour rather than luma, lit on chroma.
     Chroma,
 }
 

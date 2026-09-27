@@ -72,8 +72,6 @@ impl Point {
     }
 }
 
-/// A camera's cable into the router: through its unit's insertion point, or
-/// camera 3's, which passes none.
 #[derive(Clone, Copy, Debug)]
 enum Cable {
     Point(Point),
@@ -126,38 +124,40 @@ impl Screen {
     }
 }
 
-/// What a switcher's key measures on its In2: how bright it is, or how close
-/// it stands to a blue screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Keying {
+pub enum Measure {
     Luma,
     Chroma,
 }
 
-/// A switcher's keyer, the original's clip and gain: where it cuts, In2 goes
-/// to nothing and In1 stands whole; where it passes, the crossfade runs.
+impl Measure {
+    pub fn other(self) -> Measure {
+        match self {
+            Measure::Luma => Measure::Chroma,
+            Measure::Chroma => Measure::Luma,
+        }
+    }
+}
+
+/// A switcher's keyer, the original's clip and gain: where In2 measures
+/// below the clip, In2 is cut away and In1 stands whole, across an edge
+/// `1 / gain` of the measure wide; where it passes, the crossfade runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Key {
-    pub keying: Keying,
-    /// The measure the key passes in full: a luma, or on a chroma key one
-    /// less the share of a blue screen's chroma a texel carries. It has
-    /// finished cutting one edge below, so at 0 it passes everything exactly
-    /// — which is what lets 0 be the key off without a switch beside the
-    /// knob.
+    pub measure: Measure,
     pub clip: f32,
-    /// How steep the edge is: the key cuts across `1 / gain` of its measure.
     pub gain: f32,
 }
 
 impl Key {
-    /// A key that cuts nothing, at the edge D's key has, so a clip turned up
-    /// keys with the same softness.
     pub const OFF: Key = Key {
+        measure: Measure::Luma,
         clip: 0.0,
-        ..SEED_KEY
+        gain: 12.5,
     };
 
-    pub fn cuts(self) -> bool {
+    /// Zero is the key off, so the knob needs no switch beside it.
+    pub fn on(self) -> bool {
         self.clip > 0.0
     }
 }
@@ -167,9 +167,8 @@ impl Key {
 /// it, which is a lit subject against an unlit room — what a camera pointed
 /// at a couch faces.
 const SEED_KEY: Key = Key {
-    keying: Keying::Luma,
     clip: 0.35,
-    gain: 12.5,
+    ..Key::OFF
 };
 
 /// The four M/Es, each keying its In2 over its In1 and crossfading between
@@ -308,25 +307,23 @@ impl fmt::Display for Pattern {
     }
 }
 
-/// Where a monitor's light comes from: a camera, as many frames late as its
-/// unit holds it at the point its feed passes, or the seed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Source {
+pub(crate) enum Origin {
     Camera { camera: usize, late: u32 },
     Seed,
 }
 
-/// One step of a monitor's wiring, in the order it runs: the switchers from
-/// the deepest out, each keying the program so far — its In2 — over the
-/// camera on its In1.
+/// A monitor's wiring as it runs: the chain starts from the deepest
+/// switcher's In2 — dark, where that switcher stands at In1 — or from the
+/// whole feed of a monitor no switcher feeds, and each stage keys the chain
+/// so far over the camera on its In1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Step {
-    /// A source landing on the program: the deepest switcher's In2, or the
-    /// whole of a monitor no switcher feeds.
-    Program(Source),
-    /// A camera landing on the In1 of the switcher that follows.
-    In1(Source),
-    Mix(Switcher),
+    Start(Origin),
+    Stage {
+        switcher: Switcher,
+        in1: Option<Origin>,
+    },
 }
 
 /// One feed on the rig's cabling, as the share of each camera and of the
@@ -343,14 +340,14 @@ impl Feed {
         seed: 0.0,
     };
 
-    fn of(source: Source) -> Feed {
-        match source {
-            Source::Camera { camera, .. } => {
+    fn of(origin: Origin) -> Feed {
+        match origin {
+            Origin::Camera { camera, .. } => {
                 let mut cameras = [0.0; CAMERAS];
                 cameras[camera] = 1.0;
                 Feed { cameras, seed: 0.0 }
             }
-            Source::Seed => Feed {
+            Origin::Seed => Feed {
                 seed: 1.0,
                 ..Feed::DARK
             },
@@ -398,41 +395,31 @@ impl Rig {
         inserted: [true; POINTS],
     };
 
-    /// Monitor `m`'s wiring. A source no key verdict lets reach the monitor
-    /// is left dark and not visited — behind a crossfade at the far end of
-    /// its travel, with no key to cut back to it — and so is every step
-    /// behind a switcher none of whose sources reach it.
+    /// Monitor `m`'s wiring. What no key verdict lets reach the monitor is
+    /// never visited: an In2 behind a crossfade at In1, or an In1 behind one
+    /// at In2 whose key is off.
     pub(crate) fn wiring(&self, m: usize, mut visit: impl FnMut(Step)) {
-        self.walk(self.on(Screen::ALL[m]), 1.0, &mut visit);
+        self.walk(self.on(Screen::ALL[m]), &mut visit);
     }
 
-    fn walk(&self, wire: Wire, reach: f32, visit: &mut impl FnMut(Step)) {
-        if reach <= 0.0 {
-            return;
-        }
+    fn walk(&self, wire: Wire, visit: &mut impl FnMut(Step)) {
         match wire {
             Wire::Program(switcher) => {
                 let s = switcher as usize;
-                let toward_two = self.switchers[s];
-                let kept = if self.keys[s].cuts() {
-                    1.0
-                } else {
-                    1.0 - toward_two
-                };
-                let (one, two) = switcher.inputs();
-                self.walk(two, reach * toward_two, visit);
-                if kept > 0.0 {
-                    visit(Step::In1(self.carried(one)));
+                let (in1, in2) = switcher.inputs();
+                if self.switchers[s] > 0.0 {
+                    self.walk(in2, visit);
                 }
-                visit(Step::Mix(switcher));
+                let in1 = (self.keys[s].on() || self.switchers[s] < 1.0).then(|| self.origin(in1));
+                visit(Step::Stage { switcher, in1 });
             }
-            Wire::Cable(cable) => visit(Step::Program(self.carried(cable))),
-            Wire::Seed => visit(Step::Program(Source::Seed)),
+            Wire::Cable(cable) => visit(Step::Start(self.origin(cable))),
+            Wire::Seed => visit(Step::Start(Origin::Seed)),
         }
     }
 
-    fn carried(&self, cable: Cable) -> Source {
-        Source::Camera {
+    fn origin(&self, cable: Cable) -> Origin {
+        Origin::Camera {
             camera: cable.camera() as usize,
             late: match cable {
                 Cable::Point(point) => self.lateness(point),
@@ -441,26 +428,11 @@ impl Rig {
         }
     }
 
-    /// How much of In2 switcher `s` hands on where its key passes `passed`
-    /// of it: a key that cuts nothing passes it all, whatever it was told.
-    fn level(&self, s: usize, passed: f32) -> f32 {
-        self.switchers[s] * if self.keys[s].cuts() { passed } else { 1.0 }
-    }
-
     fn lateness(&self, point: Point) -> u32 {
         match self.inserted[point as usize] {
             true => self.delays[point.camera() as usize],
             false => 0,
         }
-    }
-
-    /// Key switcher `s` by the other measure, clip and gain as they stand.
-    pub fn rekey(&mut self, s: usize) {
-        let keying = &mut self.keys[s].keying;
-        *keying = match keying {
-            Keying::Luma => Keying::Chroma,
-            Keying::Chroma => Keying::Luma,
-        };
     }
 
     fn on(&self, screen: Screen) -> Wire {
@@ -492,7 +464,8 @@ impl Rig {
             .filter(|point| self.inserted[*point as usize])
     }
 
-    pub fn late(&self, c: usize, m: usize) -> u32 {
+    #[cfg(test)]
+    pub(crate) fn late(&self, c: usize, m: usize) -> u32 {
         self.point(c, m).map_or(0, |point| self.lateness(point))
     }
 
@@ -513,17 +486,17 @@ impl Rig {
         self.keyed(m, [1.0; SWITCHERS])
     }
 
-    /// The same where each switcher's key passes `passed` of its In2, which
-    /// is the verdict the shader reaches texel by texel.
+    /// The same where each switcher's key passes `passed` of its In2; a key
+    /// that is off passes it all.
     pub(crate) fn keyed(&self, m: usize, passed: [f32; SWITCHERS]) -> Feed {
-        let (mut program, mut in1) = (Feed::DARK, Feed::DARK);
+        let mut program = Feed::DARK;
         self.wiring(m, |step| match step {
-            Step::Program(source) => program = Feed::of(source),
-            Step::In1(source) => in1 = Feed::of(source),
-            Step::Mix(switcher) => {
+            Step::Start(origin) => program = Feed::of(origin),
+            Step::Stage { switcher, in1 } => {
                 let s = switcher as usize;
-                let in1 = std::mem::replace(&mut in1, Feed::DARK);
-                program = Feed::mix(in1, program, self.level(s, passed[s]));
+                let passed = if self.keys[s].on() { passed[s] } else { 1.0 };
+                let in1 = in1.map_or(Feed::DARK, Feed::of);
+                program = Feed::mix(in1, program, self.switchers[s] * passed);
             }
         });
         program
@@ -766,71 +739,77 @@ mod tests {
         steps
     }
 
+    fn camera(camera: usize) -> Origin {
+        Origin::Camera { camera, late: 0 }
+    }
+
+    fn stage(switcher: Switcher, in1: Option<Origin>) -> Step {
+        Step::Stage { switcher, in1 }
+    }
+
     #[test]
     fn the_wiring_runs_the_chain_from_the_deepest_switcher_out() {
-        use Step::{In1, Mix, Program};
-        let camera = |camera| Source::Camera { camera, late: 0 };
         let rig = all(Select::Program, [0.3, 0.4, 0.6, 0.2]);
         assert_eq!(
             steps(&rig, Screen::UpperB),
             [
-                Program(Source::Seed),
-                In1(camera(2)),
-                Mix(Switcher::D),
-                In1(camera(0)),
-                Mix(Switcher::C),
-                In1(camera(1)),
-                Mix(Switcher::B),
+                Step::Start(Origin::Seed),
+                stage(Switcher::D, Some(camera(2))),
+                stage(Switcher::C, Some(camera(0))),
+                stage(Switcher::B, Some(camera(1))),
             ]
         );
         assert_eq!(
             steps(&rig, Screen::LowerA),
-            [Program(camera(1)), In1(camera(0)), Mix(Switcher::A)]
+            [Step::Start(camera(1)), stage(Switcher::A, Some(camera(0)))]
         );
-        assert_eq!(steps(&rig, Screen::Rotating), [Program(camera(1))]);
+        assert_eq!(steps(&rig, Screen::Rotating), [Step::Start(camera(1))]);
         let direct = Rig {
             selects: [Select::Direct; SELECTS],
             ..rig
         };
-        assert_eq!(steps(&direct, Screen::UpperA), [Program(camera(0))]);
+        assert_eq!(steps(&direct, Screen::UpperA), [Step::Start(camera(0))]);
         // A unit's delay rides on its camera's arrival at a point that takes
         // it, and camera 3 has none.
         let mut late = rig;
         late.delays = [4, 7];
         late.inserted[Point::InC1 as usize] = false;
         assert_eq!(
-            steps(&late, Screen::UpperB)[1..6],
+            steps(&late, Screen::UpperB)[1..],
             [
-                In1(camera(2)),
-                Mix(Switcher::D),
-                In1(camera(0)),
-                Mix(Switcher::C),
-                In1(Source::Camera { camera: 1, late: 7 }),
+                stage(Switcher::D, Some(camera(2))),
+                stage(Switcher::C, Some(camera(0))),
+                stage(Switcher::B, Some(Origin::Camera { camera: 1, late: 7 })),
             ]
         );
     }
 
     #[test]
     fn a_source_no_verdict_lets_through_is_never_visited() {
-        use Step::{In1, Mix, Program};
-        let camera = |camera| Source::Camera { camera, late: 0 };
-        // A at In2 with no key: camera A's In1 is left dark. Keyed, the key
-        // can cut back to it, so it arrives.
+        // A at In2 with its key off: camera A's In1 is never visited. A key
+        // on at any clip can cut back to it, so it is.
         let at_in2 = all(Select::Program, [1.0; SWITCHERS]);
         assert_eq!(
             steps(&at_in2, Screen::UpperA),
-            [Program(camera(1)), Mix(Switcher::A)]
+            [Step::Start(camera(1)), stage(Switcher::A, None)]
         );
+        let hair = Rig {
+            keys: [Key {
+                clip: f32::MIN_POSITIVE,
+                ..Key::OFF
+            }; SWITCHERS],
+            ..at_in2
+        };
         assert_eq!(
-            steps(&keyed_everywhere(at_in2), Screen::UpperA),
-            [Program(camera(1)), In1(camera(0)), Mix(Switcher::A)]
+            steps(&hair, Screen::UpperA),
+            [Step::Start(camera(1)), stage(Switcher::A, Some(camera(0)))]
         );
         // B at In1: nothing behind its In2 is walked, key or no key.
         let at_in1 = all(Select::Program, [1.0, 0.0, 1.0, 1.0]);
         for rig in [at_in1, keyed_everywhere(at_in1)] {
             assert_eq!(
                 steps(&rig, Screen::LowerB),
-                [In1(camera(1)), Mix(Switcher::B)]
+                [stage(Switcher::B, Some(camera(1)))]
             );
         }
     }
@@ -895,26 +874,10 @@ mod tests {
             }
         );
         let keys = params.rig.keys;
-        assert_eq!(keys.map(Key::cuts), [false, false, false, true]);
-        assert_eq!(keys.map(|key| key.keying), [Keying::Luma; SWITCHERS]);
+        assert_eq!(keys.map(Key::on), [false, false, false, true]);
+        assert_eq!(keys.map(|key| key.measure), [Measure::Luma; SWITCHERS]);
         assert_eq!(keys[Switcher::D as usize], SEED_KEY);
         assert!(keys.iter().all(|key| key.gain == SEED_KEY.gain));
-    }
-
-    #[test]
-    fn a_rekey_turns_the_measure_over_and_keeps_the_clip_and_gain() {
-        let mut rig = Rig::IDENTITY;
-        rig.rekey(3);
-        assert_eq!(
-            rig.keys[3],
-            Key {
-                keying: Keying::Chroma,
-                ..SEED_KEY
-            }
-        );
-        assert_eq!(rig.keys[..3], [Key::OFF; 3]);
-        rig.rekey(3);
-        assert_eq!(rig, Rig::IDENTITY);
     }
 
     #[test]

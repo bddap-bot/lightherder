@@ -173,6 +173,7 @@ mod tests {
             |p| p.shafts[0].rotation = f32::INFINITY,
             |p| p.monitors[0].colour.saturation = f32::NAN,
             |p| p.rig.switchers[2] = f32::INFINITY,
+            |p| p.rig.keys[3].gain = 0.0,
             |p| p.cameras[0].look[0] = f32::NAN,
         ];
         for (i, poison) in poison.iter().enumerate() {
