@@ -1041,6 +1041,7 @@ fn plain_camera(look: [f32; MONITORS]) -> Camera {
     Camera {
         gain: [1.0; 3],
         look,
+        shutter: Cadence::Full,
     }
 }
 
@@ -2845,6 +2846,115 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn a_slow_shutter_gathers_every_pass_it_spans_each_at_its_share() {
+    // A one-pass flash on monitor 3, and camera A on it drawing to monitor 1
+    // `delay` frames late, its shutter open a frame of `shutter`. Monitor 1
+    // shows the flash on every pass the exposure spans, from pass delay + 1
+    // on, and on no other, each at that pass's share of the exposure: every
+    // texel is the full-shutter frame's times the share, to within a level.
+    let run = |shutter: Cadence, delay: u32| -> Option<Vec<Vec<u8>>> {
+        let mut p = blank();
+        p.rig.delays[0] = delay;
+        p.reach = 2;
+        p.cameras[0].look = one_hot(SEEDED);
+        p.cameras[0].shutter = shutter;
+        let mut h = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p)?;
+        Some(
+            (0..7)
+                .map(|pass| {
+                    if pass == 0 {
+                        seeding(&mut p);
+                    } else {
+                        seeded_no_more(&mut p);
+                    }
+                    h.feedback.step(h.device, h.queue, &p);
+                    h.present(Some(0));
+                    h.read().pixels
+                })
+                .collect(),
+        )
+    };
+    let Some(reference) = run(Cadence::Full, 0) else {
+        return;
+    };
+    let flash = &reference[1];
+    assert!(peak(flash) > 200, "the flash never reached monitor 1");
+    for delay in [0u32, 2] {
+        for shutter in Cadence::ALL {
+            let shares: Vec<f32> = shutter.exposure().collect();
+            let frames = run(shutter, delay).expect("the adapter that ran the reference");
+            for (pass, pixels) in frames.iter().enumerate() {
+                let share = (pass as u32)
+                    .checked_sub(delay + 1)
+                    .and_then(|earlier| shares.get(earlier as usize).copied())
+                    .unwrap_or(0.0);
+                let off = pixels
+                    .chunks_exact(4)
+                    .zip(flash.chunks_exact(4))
+                    .flat_map(|(have, lit)| {
+                        (0..3).map(move |c| (have[c] as f32 - lit[c] as f32 * share).abs())
+                    })
+                    .fold(0.0, f32::max);
+                assert!(
+                    off <= 1.0,
+                    "{shutter:?} delay {delay}: pass {pass} is {off} levels off {share} of the flash"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_slow_shutter_smears_the_turn_of_the_shaft_within_its_frame() {
+    // A still spot on monitor 3, and camera A on it drawing to monitor 1
+    // with its shutter open a frame of 30, two passes. The shaft turns a
+    // quarter on pass 6: on that pass monitor 1 shows the spot square on and
+    // turned at half its brightness each, since half the exposure was taken
+    // before the turn; before it the square-on spot alone, after it the
+    // turned one. A shutter that framed its earlier passes as the camera
+    // stands now would show the turned spot whole on pass 6.
+    let mut p = blank();
+    p.cameras[0].look = one_hot(SEEDED);
+    p.cameras[0].shutter = Cadence::Half;
+    seeding(&mut p);
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    let square = lightherder::affine::screen_to_uv(1.0).apply(SPOT);
+    let turned = lightherder::affine::screen_to_uv(1.0).apply([-SPOT[1], SPOT[0]]);
+    let near = |img: &Image, at: [f32; 2]| {
+        img.brightest_in(at[0] - 0.08, at[1] - 0.08, at[0] + 0.08, at[1] + 0.08)
+    };
+    let mut seen = Vec::new();
+    for pass in 0..9 {
+        if pass == 6 {
+            p.shafts[0].rotation = std::f32::consts::FRAC_PI_2;
+        }
+        h.feedback.step(h.device, h.queue, &p);
+        h.present(Some(0));
+        let img = h.read();
+        seen.push([near(&img, square), near(&img, turned)]);
+    }
+    let whole = seen[5][0];
+    assert!(whole > 200.0, "{seen:?}");
+    let close = |have: f32, want: f32| (have - want).abs() <= 1.5;
+    for (pass, [square, turned]) in seen.iter().copied().enumerate() {
+        let want = match pass {
+            0 => [0.0, 0.0],
+            1 => [whole / 2.0, 0.0],
+            2..=5 => [whole, 0.0],
+            6 => [whole / 2.0, whole / 2.0],
+            _ => [0.0, whole],
+        };
+        assert!(
+            close(square, want[0]) && close(turned, want[1]),
+            "pass {pass}: [square on, turned] is {:?}, not {want:?}: {seen:?}",
+            [square, turned]
+        );
     }
 }
 

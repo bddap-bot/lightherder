@@ -19,7 +19,7 @@ use std::fmt::{self, Write};
 
 use crate::affine::Framing;
 use crate::input::Input;
-use crate::params::{Camera, Monitor, Node, Params};
+use crate::params::{Cadence, Camera, Monitor, Node, Params};
 
 /// In [`Params::cameras`] order. A and B are on the rotating, sliding shafts,
 /// one per structure; the third watches the rotating monitor alone.
@@ -568,6 +568,7 @@ impl Rig {
         let camera = |cam: Cam, gain: [f32; 3]| Camera {
             gain,
             look: Screen::ALL.map(|screen| glass(cam, screen)),
+            shutter: Cadence::Full,
         };
         Params {
             rig: *self,
@@ -583,6 +584,7 @@ impl Rig {
                 device: "/dev/video0".into(),
             },
             reach: Params::MAX_DELAY,
+            slowest_shutter: Cadence::SLOWEST,
         }
     }
 }

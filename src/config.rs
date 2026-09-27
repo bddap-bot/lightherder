@@ -63,6 +63,13 @@ pub fn validate(params: &Params) -> Result<(), String> {
                 "camera {i}'s look contains {w}; weights are finite and >= 0"
             ));
         }
+        if camera.shutter.place() > params.slowest_shutter.place() {
+            return Err(format!(
+                "camera {i}'s shutter is 1/{}; it opens 1/{} at the longest",
+                camera.shutter.fps(),
+                params.slowest_shutter.fps()
+            ));
+        }
     }
     // Every knob, at every focus that names a value of its own, against the
     // one definition of its travel. This is the whole of the per-value
@@ -197,6 +204,29 @@ mod tests {
         assert_eq!(
             validate(&with(3, 4)).unwrap_err(),
             "camera 0's delay is 4; it runs 0 to 3"
+        );
+    }
+
+    #[test]
+    fn a_shutter_slower_than_the_graph_bought_is_refused() {
+        use crate::params::Cadence;
+        let with = |slowest: Cadence, shutter: Cadence| {
+            let mut p = instrument();
+            p.slowest_shutter = slowest;
+            p.cameras[2].shutter = shutter;
+            validate(&p)
+        };
+        for shutter in Cadence::ALL {
+            assert!(with(Cadence::SLOWEST, shutter).is_ok(), "{shutter:?}");
+        }
+        assert!(with(Cadence::Half, Cadence::Half).is_ok());
+        assert_eq!(
+            with(Cadence::Half, Cadence::Film).unwrap_err(),
+            "camera 2's shutter is 1/24; it opens 1/30 at the longest"
+        );
+        assert_eq!(
+            with(Cadence::Full, Cadence::Pal).unwrap_err(),
+            "camera 2's shutter is 1/50; it opens 1/60 at the longest"
         );
     }
 }

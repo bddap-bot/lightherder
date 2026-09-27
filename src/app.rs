@@ -19,7 +19,7 @@ use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::midi::{Midi, Shown};
 use crate::overlay::{Overlay, Readout};
-use crate::params::{Focus, Knob, Node, Params};
+use crate::params::{Cadence, Focus, Knob, Node, Params};
 use crate::present::{Present, View};
 use crate::rig::{Measure, Pattern};
 
@@ -416,6 +416,7 @@ impl App {
             tapping: self.tapping,
             quantize: self.quantize,
             chroma: self.params.rig.keys[self.focus.switcher].measure == Measure::Chroma,
+            shutter: self.params.cameras[self.focus.camera].shutter != Cadence::Full,
         }
     }
 
@@ -626,6 +627,12 @@ impl App {
             Action::Chroma => {
                 let key = &mut self.params.rig.keys[self.focus.switcher];
                 key.measure = key.measure.other();
+                log::info!("{}", self.params.describe(self.focus));
+            }
+            Action::Shutter => {
+                let slowest = self.params.slowest_shutter;
+                let camera = &mut self.params.cameras[self.focus.camera];
+                camera.shutter = camera.shutter.slower(slowest);
                 log::info!("{}", self.params.describe(self.focus));
             }
         }
@@ -1535,6 +1542,40 @@ mod tests {
         assert!(app.params.rig.keys[3].clip > 0.8);
         press(&mut app, &board, 43);
         assert_eq!(app.params.rig.keys, started);
+    }
+
+    #[test]
+    fn s8_steps_the_focused_cameras_shutter_and_is_lit_while_it_is_open_past_a_pass() {
+        use crate::lamps::lamp;
+        use crate::midi::SHUTTER;
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        let lit = |app: &App| app.midi.wanted(app.focus, app.shown()) & lamp(SHUTTER) != 0;
+        let shutters = |app: &App| app.params.cameras.map(|c| c.shutter);
+        app.act(Action::Focus(Node::Camera, 1));
+        assert!(!lit(&app));
+        for want in [Cadence::Pal, Cadence::Half, Cadence::Film, Cadence::Full] {
+            press(&mut app, &board, SHUTTER);
+            assert_eq!(shutters(&app), [Cadence::Full, want, Cadence::Full]);
+            assert_eq!(lit(&app), want != Cadence::Full, "{want:?}");
+        }
+        press(&mut app, &board, SHUTTER);
+        press(&mut app, &board, SHUTTER);
+        assert!(app.params.describe(app.focus).contains("shutter 1/30"));
+        app.act(Action::Focus(Node::Camera, 2));
+        assert!(!lit(&app));
+        app.act(Action::Focus(Node::Camera, 1));
+        assert!(lit(&app));
+        // Rewind puts back the knob last turned, never the shutter; Stop does.
+        surface(&mut app, &board, 16, 0);
+        surface(&mut app, &board, 16, 40);
+        press(&mut app, &board, 43);
+        assert_eq!(shutters(&app)[1], Cadence::Half);
+        press(&mut app, &board, 42);
+        assert_eq!(shutters(&app), [Cadence::Full; 3]);
+        assert!(!lit(&app));
     }
 
     fn brightness(app: &App) -> f32 {

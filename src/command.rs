@@ -53,6 +53,10 @@ pub enum Action {
     TapIn,
     Quantize,
     Chroma,
+    /// The focused camera's shutter a step slower, and from the slowest back
+    /// round to a pass: the original sets its cameras by a switch, so it is
+    /// a button, lit while the shutter is open longer than a pass.
+    Shutter,
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -96,6 +100,7 @@ impl Action {
             Action::TapIn => "tap in".into(),
             Action::Quantize => "16ths".into(),
             Action::Chroma => "chroma".into(),
+            Action::Shutter => "shutter".into(),
         }
     }
 }
@@ -136,6 +141,7 @@ mod tests {
             Action::TapIn,
             Action::Quantize,
             Action::Chroma,
+            Action::Shutter,
             Action::Focus(Node::Camera, 0),
             Action::Record(Edge::Up),
             Action::Cut(Edge::Up),

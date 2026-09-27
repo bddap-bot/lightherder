@@ -1,7 +1,7 @@
 // The feedback graph's passes. `fs_camera` writes one monitor's next frame
-// from its taps into the bank of previous frames; `fs_record` puts a delay
-// unit's picture on its line; `fs_present` copies one monitor to a viewport
-// of the window.
+// from its taps into the bank of previous frames; `fs_record` puts a
+// camera's picture on its line; `fs_present` copies one monitor to a
+// viewport of the window.
 
 // One flattened edge of the graph: a camera's view of one source monitor,
 // scaled by everything between them. See feedback::Tap.
@@ -37,11 +37,12 @@ struct Uniforms {
     // x: how many of `stages` run. yzw: padding.
     chain: vec4<f32>,
     // As long as feedback::STAGES, and `taps` as feedback::MAX_TAPS, which is
-    // every camera through every monitor plus the seed. Second spellings of
+    // every camera through every monitor and at every earlier pass its
+    // slowest shutter spans, plus the seed. Second spellings of
     // those numbers: a static assertion beside each fails the build if the
     // Rust side grows, since wgpu catches only the other direction.
     stages: array<Stage, 4>,
-    taps: array<Tap, 16>,
+    taps: array<Tap, 22>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -101,7 +102,7 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
 // tap's weight — and in alpha whether it is a monitor it sees there. Past a
 // layer's edge the camera sees an unlit room, but a clamped sampler returns
 // the border texel there, which would smear across the frame. A monitor is
-// opaque across its face; a delay unit's picture keeps where its camera saw
+// opaque across its face; a picture on a line keeps where its camera saw
 // one.
 //
 // textureSampleLevel, not textureSample, throughout this shader: the monitor
@@ -208,8 +209,8 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(front_panel(gathered(vec3<f32>(in.uv, 1.0)).rgb), 1.0);
 }
 
-// One picture onto a delay unit's line: its camera's view through the glass
-// and the framing, before the cable, the key or any front panel.
+// One picture onto a camera's line: its view through the glass and the
+// framing, before the cable, the key or any front panel.
 @fragment
 fn fs_record(in: VsOut) -> @location(0) vec4<f32> {
     return gathered(vec3<f32>(in.uv, 1.0));

@@ -196,6 +196,8 @@ pub(crate) const INSERT: u8 = S_ROW + 3;
 pub(crate) const TAP_IN: u8 = INSERT + 1;
 pub(crate) const QUANTIZE: u8 = TAP_IN + 1;
 pub(crate) const CHROMA: u8 = QUANTIZE + 1;
+pub(crate) const SHUTTER: u8 = CHROMA + 1;
+const _: () = assert!(SHUTTER < S_ROW + STRIPS as u8);
 const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= INSERT);
 pub(crate) const PRECISION: u8 = ROTARY_ROW + 4;
 
@@ -240,7 +242,7 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 /// explains all of the above — the one button whose job survives not
 /// knowing what any button does. Marker set takes a still of the display,
 /// and record records it for as long as a hand stays on it.
-pub(crate) const BUTTONS: [Button; 29] = [
+pub(crate) const BUTTONS: [Button; 30] = [
     button(S_ROW, Action::Focus(Node::Camera, 0)),
     button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
     button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
@@ -270,6 +272,7 @@ pub(crate) const BUTTONS: [Button; 29] = [
     button(TAP_IN, Action::TapIn),
     button(QUANTIZE, Action::Quantize),
     button(CHROMA, Action::Chroma),
+    button(SHUTTER, Action::Shutter),
 ];
 
 /// Every control number a button answers to, which is the whole of what the
@@ -294,6 +297,7 @@ pub struct Shown {
     pub tapping: bool,
     pub quantize: bool,
     pub chroma: bool,
+    pub shutter: bool,
 }
 
 /// One thing off the wire. A knob or a button is a control change; a system
@@ -635,7 +639,8 @@ impl Midi {
             | when(shown.armed, Action::Automate)
             | when(shown.tapping, Action::TapIn)
             | when(shown.quantize, Action::Quantize)
-            | when(shown.chroma, Action::Chroma);
+            | when(shown.chroma, Action::Chroma)
+            | when(shown.shutter, Action::Shutter);
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
@@ -1128,6 +1133,14 @@ mod tests {
             lamp(CHROMA),
             "the key's measure is S7, beside the switcher's rhythm"
         );
+        assert_eq!(
+            lit(Shown {
+                shutter: true,
+                ..Shown::default()
+            }),
+            lamp(SHUTTER),
+            "the shutter is S8, at the end of the cameras' row"
+        );
     }
 
     #[test]
@@ -1267,9 +1280,10 @@ mod tests {
                 button(36, Action::TapIn),
                 button(37, Action::Quantize),
                 button(38, Action::Chroma),
+                button(39, Action::Shutter),
             ]
         );
-        for cc in [39, 53, 54, 55, 58, 59] {
+        for cc in [53, 54, 55, 58, 59] {
             assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
             assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
         }
@@ -1310,6 +1324,7 @@ mod tests {
             Action::TapIn,
             Action::Quantize,
             Action::Chroma,
+            Action::Shutter,
         ] {
             let on = BUTTONS.iter().filter(|b| b.action == action).count();
             assert_eq!(on, 1, "{action:?} is on {on} buttons");
@@ -1561,6 +1576,10 @@ mod tests {
         assert_eq!(feed(&mut midi, &params, &cc(INSERT, 127)), [Action::Insert]);
         assert_eq!(feed(&mut midi, &params, &cc(CHROMA, 127)), [Action::Chroma]);
         assert_eq!(
+            feed(&mut midi, &params, &cc(SHUTTER, 127)),
+            [Action::Shutter]
+        );
+        assert_eq!(
             feed(&mut midi, &params, &cc(43, 127)),
             [Action::ResetLastKnob]
         );
@@ -1571,7 +1590,7 @@ mod tests {
     #[test]
     fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        for dead in [39, 53, 54, 55, 58, 59, 100] {
+        for dead in [53, 54, 55, 58, 59, 100] {
             assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
             assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
         }

@@ -5,7 +5,8 @@
 //! only the three things a page supplies that a terminal does not: an entry
 //! point, somewhere for the log to go, and the canvas winit draws on — and
 //! the one thing it lacks, a control surface, so its delay units reach
-//! nothing. Nothing arrives in the query string: there is one instrument.
+//! nothing and its shutters open a pass at most. Nothing arrives in the
+//! query string: there is one instrument.
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -65,10 +66,11 @@ pub fn start() {
             fullscreen: false,
             ..crate::cli::Cli::default()
         };
-        // No hand dials a delay here, and thirty frames of lines are more
-        // bank than some browsers allocate in one texture.
+        // No hand dials a delay or a shutter here, and thirty frames of lines
+        // are more bank than some browsers allocate in one texture.
         let params = crate::params::Params {
             reach: 0,
+            slowest_shutter: crate::params::Cadence::Full,
             ..cli.instrument()
         };
         if let Err(why) = crate::app::run(params, &cli).await {

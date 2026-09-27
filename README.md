@@ -30,7 +30,7 @@ to quit. Plug in a Korg nanoKONTROL2 to play the instrument on Linux.
 | Option | Effect |
 | --- | --- |
 | `--windowed` | Open a window; fullscreen is the default. |
-| `--resolution WIDTHxHEIGHT` | Set each virtual monitor's size; default `1920x1080`. The delay units reach 30 frames, or as many as the 2 GiB bank holds: 10 at `3840x2160`. |
+| `--resolution WIDTHxHEIGHT` | Set each virtual monitor's size; default `1920x1080`. The delay units reach 30 frames, or as many as the 2 GiB bank holds: 7 at `3840x2160`. |
 | `--seed bars` | Use the built-in test pattern. |
 | `--seed FORMAT:NAME` | Read an ffmpeg input, e.g. `lavfi:testsrc2`; default `v4l2:/dev/video0`. |
 | `--bench` | Time 600 frames off screen and exit. |
@@ -61,6 +61,7 @@ monitor or switcher; Cycle shows their values on screen.
 | S5 | Tap in: lighting S5 empties the switcher's one-bar pattern (128 passes, about 2.1 s); while it is lit, each R5 press adds a beat, and the switcher reverses on every beat, every bar. Press S5 again, or select another switcher, to keep the pattern; press S5 twice to clear it. |
 | S6 | While lit, each beat R5 adds lands on the nearest sixteenth of the bar. |
 | S7 | Toggle the switcher's key between luma and chroma; lit on chroma. |
+| S8 | Step the camera's shutter through 1/60, 1/50, 1/30 and 1/24 of a second, then back to 1/60; lit when slower than 1/60. Each frame the camera hands on gathers the monitors' light for that long, so what moves on them, or the camera itself, smears within the frame. |
 | R6 / R7 | Flip the monitor horizontally / vertically. |
 | R8 | Select direct camera feed or switcher output on a structure monitor. |
 | Rewind / Stop | Reset the last knob moved / reset all knobs and patterns. |
