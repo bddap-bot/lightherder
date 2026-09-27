@@ -1978,15 +1978,14 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
         "red and blue changed places"
     );
 
-    // And the recording: frames fall due on the wall clock rather than on
-    // calls, so it is as long as the hand was on the button however often
-    // the display asked for one. Slower than the capture's own rate on
-    // purpose — a display handing out fewer frames than that must duplicate
-    // rather than write a shorter file.
-    let mut video = Capture::video(h.device, &dir, size, TARGET_FORMAT).expect("ffmpeg");
-    let started = std::time::Instant::now();
-    let mut last = started;
-    while started.elapsed() < std::time::Duration::from_millis(400) {
+    // An hour ahead of the machine's clock, so nothing but the moments handed
+    // in can time the recording, and slower than the capture's rate, so the
+    // file keeps time by writing some frames twice.
+    let pressed = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+    let slot = std::time::Duration::from_millis(41);
+    let presents = 11;
+    let mut video = Capture::video(h.device, &dir, size, TARGET_FORMAT, pressed).expect("ffmpeg");
+    for k in 0..presents {
         video
             .frame(
                 h.device,
@@ -1995,37 +1994,43 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
                 &h.feedback,
                 View::Bank { focus: None },
                 None,
+                pressed + slot * k,
             )
             .expect("a frame down the pipe");
-        last = std::time::Instant::now();
-        std::thread::sleep(std::time::Duration::from_millis(40));
     }
-    let held = last.duration_since(started).as_secs_f64();
+    let held = (slot * (presents - 1)).as_secs_f64();
     let recording = video.finish().expect("a recording");
     let pixels = decoded(&recording, size);
-    let frames = pixels.len() as f64 / f64::from(size.0 * size.1 * 4);
-    assert!(
-        (frames - held * 30.0).abs() <= 2.0,
-        "{frames} frames for {held:.3}s held"
-    );
-    assert!(peak(&pixels) > 32, "the recording is black");
+    let frames: Vec<&[u8]> = pixels
+        .chunks_exact((size.0 * size.1 * 4) as usize)
+        .collect();
     // What the file says it is, which is a different fact from what it
     // holds: a file written at the wrong declared rate plays back at the
     // wrong speed with every frame present and correct.
-    let played: f64 = probed(&recording, "format=duration")
-        .parse()
-        .expect("a duration");
-    assert!(
-        (played - held).abs() <= 0.2,
-        "{played}s of video for {held:.3}s held"
-    );
+    let stamps: Vec<f64> = probed(&recording, "frame=best_effort_timestamp_time")
+        .lines()
+        .map(|stamp| stamp.parse().expect("a timestamp"))
+        .collect();
+    let beats: Vec<f64> = (0..)
+        .map(|k| f64::from(k) / 30.0)
+        .take_while(|&beat| beat <= held)
+        .collect();
+    assert_eq!(frames.len(), beats.len(), "frames for {held}s held");
+    assert_eq!(stamps.len(), beats.len(), "timestamps for {held}s held");
+    for (k, ((frame, stamp), beat)) in frames.iter().zip(&stamps).zip(&beats).enumerate() {
+        assert!(peak(frame) > 32, "frame {k} of the recording is black");
+        assert!(
+            (stamp - beat).abs() < 1e-3,
+            "frame {k} at {stamp}s, its beat at {beat}s"
+        );
+    }
 
     // A capture nothing was written to is not a capture, and leaves nothing
     // behind — the file ffmpeg opened for it included.
     let left = std::fs::read_dir(&dir)
         .expect("the capture directory")
         .count();
-    let empty = Capture::video(h.device, &dir, size, TARGET_FORMAT).expect("ffmpeg");
+    let empty = Capture::video(h.device, &dir, size, TARGET_FORMAT, pressed).expect("ffmpeg");
     assert!(empty.finish().is_err(), "an empty capture passed for one");
     assert_eq!(
         std::fs::read_dir(&dir)
@@ -2058,6 +2063,7 @@ fn still_at(
             &h.feedback,
             View::Bank { focus: None },
             None,
+            std::time::Instant::now(),
         )
         .expect("a frame down the pipe");
     capture.finish().expect("a still")
@@ -2644,7 +2650,15 @@ fn proof(h: &Harness, name: &str, view: View) {
     let mut capture =
         Capture::still(h.device, &dir, h.target_size, TARGET_FORMAT).expect("a capture");
     capture
-        .frame(h.device, h.queue, &h.present, &h.feedback, view, None)
+        .frame(
+            h.device,
+            h.queue,
+            &h.present,
+            &h.feedback,
+            view,
+            None,
+            std::time::Instant::now(),
+        )
         .expect("a frame");
     let path = capture.finish().expect("a png");
     std::fs::rename(&path, dir.join(format!("{name}.png"))).expect("the proof's name");

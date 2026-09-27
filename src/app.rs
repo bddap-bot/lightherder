@@ -202,7 +202,7 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
             passes: 0,
             presents: 0,
             metered: Instant::now(),
-            clock: Clock::new(crate::clock::RATE),
+            clock: Clock::new(crate::clock::RATE, Instant::now()),
             paced: false,
             covered: false,
             capture: None,
@@ -654,6 +654,7 @@ impl App {
             &live.feedback,
             view,
             self.overlay_shown.then_some((&live.overlay, &self.params)),
+            Instant::now(),
         )
     }
 
@@ -688,7 +689,13 @@ impl App {
         let Some((size, format)) = self.glass() else {
             return log::info!("nothing on the glass to record yet");
         };
-        match Capture::video(&self.gpu.device, &crate::capture::dir(), size, format) {
+        match Capture::video(
+            &self.gpu.device,
+            &crate::capture::dir(),
+            size,
+            format,
+            Instant::now(),
+        ) {
             Ok(capture) => {
                 log::info!("recording");
                 self.capture = Some(capture);
@@ -798,7 +805,7 @@ impl ApplicationHandler for App {
         // a second of startup inside the first window would owe the piece
         // passes it never missed, and would report a rate the instrument never
         // ran at. That first line is what a deploy is read off.
-        self.clock = Clock::new(crate::clock::RATE);
+        self.clock = Clock::new(crate::clock::RATE, Instant::now());
         self.metered = Instant::now();
         self.passes = 0;
         self.presents = 0;
@@ -930,7 +937,7 @@ mod tests {
             passes: 0,
             presents: 0,
             metered: Instant::now(),
-            clock: Clock::new(crate::clock::RATE),
+            clock: Clock::new(crate::clock::RATE, Instant::now()),
             paced: false,
             covered: false,
             capture: None,
@@ -1630,6 +1637,7 @@ mod tests {
                 &feedback,
                 view,
                 Some((&overlay, &app.params)),
+                Instant::now(),
             )
             .unwrap();
         let path = capture.finish().unwrap();

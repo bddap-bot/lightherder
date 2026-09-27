@@ -251,6 +251,7 @@ fn main() -> Result<(), String> {
         &rig.feedback,
         view,
         None,
+        std::time::Instant::now(),
     )?;
     let written = capture.finish()?;
     std::fs::rename(&written, &out).map_err(|e| format!("{}: {e}", out.display()))?;

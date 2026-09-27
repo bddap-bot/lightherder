@@ -80,6 +80,7 @@ impl Capture {
         dir: &Path,
         size: (u32, u32),
         format: wgpu::TextureFormat,
+        now: Instant,
     ) -> Result<Capture, String> {
         Capture::new(
             device,
@@ -98,7 +99,7 @@ impl Capture {
                 "-pix_fmt",
                 "yuv420p",
             ],
-            Some(Clock::new(RATE)),
+            Some(Clock::new(RATE, now)),
         )
     }
 
@@ -178,6 +179,7 @@ impl Capture {
     /// backlog is dropped rather than owed, exactly as the piece's own
     /// passes are, which leaves a recording made through one shorter than
     /// the hand was on the button.
+    #[expect(clippy::too_many_arguments)]
     pub fn frame(
         &mut self,
         device: &wgpu::Device,
@@ -186,9 +188,10 @@ impl Capture {
         monitors: &Feedback,
         view: View,
         overlay: Option<(&Overlay, &crate::params::Params)>,
+        now: Instant,
     ) -> Result<(), String> {
         let due = match self.clock.as_mut() {
-            Some(clock) => clock.take_due(Instant::now()),
+            Some(clock) => clock.take_due(now),
             None => 1,
         };
         if due == 0 {

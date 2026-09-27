@@ -12,10 +12,10 @@ pub struct Clock {
 }
 
 impl Clock {
-    pub fn new(rate: f32) -> Clock {
+    pub fn new(rate: f32, now: Instant) -> Clock {
         Clock {
             beat: Duration::from_secs_f32(1.0 / rate),
-            due: Instant::now(),
+            due: now,
         }
     }
 
@@ -46,8 +46,9 @@ mod tests {
         biggest: u32,
     }
 
-    fn a_second_on(clock: &mut Clock, grid: f32) -> Ran {
-        let start = clock.due();
+    fn a_second_on(rate: f32, grid: f32) -> Ran {
+        let start = Instant::now();
+        let mut clock = Clock::new(rate, start);
         let slot = Duration::from_secs_f32(1.0 / grid);
         let mut ran = Ran {
             passes: 0,
@@ -68,8 +69,8 @@ mod tests {
 
     #[test]
     fn an_on_time_pass_owes_one_beat() {
-        let mut clock = Clock::new(RATE);
-        let start = clock.due();
+        let start = Instant::now();
+        let mut clock = Clock::new(RATE, start);
         let beat = clock.beat;
         assert_eq!(clock.take_due(start), 1);
         assert_eq!(clock.take_due(start + beat / 2), 0);
@@ -79,13 +80,12 @@ mod tests {
 
     #[test]
     fn a_stall_runs_what_it_missed_and_drops_what_is_past_the_backlog() {
-        let mut clock = Clock::new(RATE);
-        let start = clock.due();
+        let start = Instant::now();
+        let mut clock = Clock::new(RATE, start);
         let beat = clock.beat;
         assert_eq!(clock.take_due(start + beat * 3 + beat / 2), 4);
 
-        let mut clock = Clock::new(RATE);
-        let start = clock.due();
+        let mut clock = Clock::new(RATE, start);
         let stalled = start + Duration::from_secs(1);
         let owed = clock.take_due(stalled);
         let bound = (BACKLOG.as_secs_f32() * RATE).ceil() as u32 + 1;
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn a_slower_grid_still_gets_sixty_passes_a_second() {
-        let ran = a_second_on(&mut Clock::new(RATE), 41.0);
+        let ran = a_second_on(RATE, 41.0);
         assert_eq!(ran.passes, 60);
         assert!(ran.presents.abs_diff(41) <= 1, "{} presents", ran.presents);
         assert!(ran.biggest <= 2, "{} passes to one present", ran.biggest);
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn a_faster_grid_still_gets_sixty_passes_a_second() {
-        let ran = a_second_on(&mut Clock::new(RATE), 72.0);
+        let ran = a_second_on(RATE, 72.0);
         assert_eq!(ran.passes, 60);
         assert!(ran.presents.abs_diff(72) <= 1, "{} presents", ran.presents);
         assert_eq!(ran.biggest, 1, "a pass ran twice inside one frame");
@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn a_grid_far_under_sixty_keeps_sixty_anyway() {
-        let ran = a_second_on(&mut Clock::new(RATE), 15.0);
+        let ran = a_second_on(RATE, 15.0);
         assert!(ran.presents.abs_diff(15) <= 1, "{} presents", ran.presents);
         assert_eq!(ran.biggest, 4);
         assert!(
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn a_recording_clock_runs_at_its_own_rate() {
-        let ran = a_second_on(&mut Clock::new(30.0), 60.0);
+        let ran = a_second_on(30.0, 60.0);
         assert!(ran.passes.abs_diff(30) <= 1, "{} frames", ran.passes);
         assert_eq!(ran.biggest, 1);
     }
