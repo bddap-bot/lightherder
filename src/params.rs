@@ -203,18 +203,12 @@ pub struct Camera {
     /// switcher takes it, on [`Params::send`]. That is what makes every
     /// camera recursive by construction rather than by convention.
     pub look: [f32; crate::rig::MONITORS],
-    /// The frame delay unit on this camera's cable: how many passes old the
-    /// frames it hands on are, past the one pass every camera is behind by,
-    /// at most the graph's reach. Zero is the cable alone. What it does to the picture is the
-    /// original's: a sudden movement comes back as an echoing pulse, a
-    /// smooth one as a frozen smear.
-    pub delay: u32,
 }
 
 impl Params {
     /// The most reach a graph's delay units may have: the thirty frames the
     /// original's dial up to. A bound because the reach is bought in bank:
-    /// every frame of it is another copy of every monitor.
+    /// every frame of it is another picture per unit.
     pub const MAX_DELAY: u32 = 30;
 }
 
@@ -311,12 +305,12 @@ pub struct Params {
     /// light going round it. How much of it each monitor shows is the
     /// switchers' business, [`Params::send`].
     pub input: Plug,
-    /// The frame delay units' reach: how many frames a camera's `delay` may
-    /// be dialled up to, and so how deep a ring of the monitors the bank
-    /// keeps. Bought at load, since a frame of it is another copy of every
-    /// monitor, so the knob runs to here and no further. Zero is a rig with
-    /// no delay unit, and no delay knob.
-    pub delay: u32,
+    /// The frame delay units' reach: how many frames a unit's delay may be
+    /// dialled up to, and so how many pictures each unit's line in the bank
+    /// keeps. Bought at load, since a frame of it is another picture per
+    /// unit, so the knob runs to here and no further. Zero is a rig whose
+    /// units hold nothing back.
+    pub reach: u32,
 }
 
 /// The light plugged into the switcher: what it is, and what the switcher
@@ -407,7 +401,8 @@ pub enum Knob {
     Zoom,
     /// The camera's turn about its shaft.
     Rotation,
-    /// The frame delay unit on the camera's cable, in whole frames.
+    /// The frame delay unit on the camera's cable, in whole frames. Camera
+    /// 3 has none, and reads zero.
     Delay,
     Hue,
     Saturation,
@@ -553,8 +548,8 @@ impl Knob {
 
     pub fn limit(self, params: &Params) -> Limit {
         match self {
-            // Whole frames, as far as the ring the graph bought goes.
-            Knob::Delay => Limit::Whole(params.delay),
+            // Whole frames, as far as the lines the graph bought go.
+            Knob::Delay => Limit::Whole(params.reach),
             // Zero would divide by zero in the sampling transform.
             Knob::Zoom => Limit::Ratio(0.25, 4.0),
             // Spinning one way for long enough must not run the number away.
@@ -581,13 +576,6 @@ impl Knob {
 }
 
 impl Params {
-    /// How many frames of every monitor the bank keeps as a ring: the one a
-    /// pass is drawing, the one every camera reads, and one more per frame
-    /// of the graph's reach.
-    pub fn history(&self) -> usize {
-        2 + self.delay as usize
-    }
-
     /// How camera `c`'s view is magnified and turned, which is where the
     /// shaft it stands on stands.
     pub fn framing(&self, c: usize) -> Framing {
@@ -632,12 +620,15 @@ impl Params {
     /// Where `knob` is standing. Every index is one the caller has already
     /// landed inside this graph.
     pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
-        let cam = &self.cameras[focus.camera];
         let mon = &self.monitors[focus.monitor];
         match knob {
             Knob::Zoom => self.framing(focus.camera).zoom,
             Knob::Rotation => self.framing(focus.camera).rotation,
-            Knob::Delay => cam.delay as f32,
+            Knob::Delay => self
+                .rig
+                .delays
+                .get(focus.camera)
+                .map_or(0.0, |delay| *delay as f32),
             Knob::Hue => mon.colour.hue,
             Knob::Saturation => mon.colour.saturation,
             Knob::Brightness => mon.colour.brightness,
@@ -666,7 +657,11 @@ impl Params {
             Limit::Whole(most) => {
                 let count = value.round().clamp(0.0, most as f32) as u32;
                 match knob {
-                    Knob::Delay => self.cameras[focus.camera].delay = count,
+                    Knob::Delay => {
+                        if let Some(delay) = self.rig.delays.get_mut(focus.camera) {
+                            *delay = count;
+                        }
+                    }
                     Knob::Period => self.rig.periods[focus.switcher] = count,
                     Knob::FrameRate => {
                         self.monitors[focus.monitor].cadence = Cadence::ALL[count as usize]
@@ -713,17 +708,27 @@ impl Params {
     /// instrument has.
     pub fn describe(&self, focus: Focus) -> String {
         let reads = |knob: Knob| knob.reads(self.knob(knob, focus));
+        let unit = match focus.camera < crate::rig::UNITS {
+            true => format!("delay {}/{}", reads(Knob::Delay), self.reach),
+            false => "no delay unit".into(),
+        };
+        let way = match self.rig.point(focus.camera, focus.monitor) {
+            Some(point) => match self.rig.inserted[point as usize] {
+                true => format!(" via {}, delay in", point.name()),
+                false => format!(" via {}, delay out", point.name()),
+            },
+            None => String::new(),
+        };
         format!(
-            "cam {}/{}: zoom {}  rot {}  delay {}/{}\n\
+            "cam {}/{}: zoom {}  rot {}  {}\n\
              mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \
-             temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}\n\
+             temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}{}\n\
              sw {}/{}: switcher {}  period {}  pattern {}",
             focus.camera + 1,
             self.cameras.len(),
             reads(Knob::Zoom),
             reads(Knob::Rotation),
-            reads(Knob::Delay),
-            self.delay,
+            unit,
             focus.monitor + 1,
             self.monitors.len(),
             reads(Knob::Hue),
@@ -741,6 +746,7 @@ impl Params {
             },
             self.route(focus.monitor, focus.camera),
             focus.camera + 1,
+            way,
             focus.switcher + 1,
             self.rig.switchers.len(),
             reads(Knob::Switcher),
@@ -768,7 +774,7 @@ mod tests {
     /// with holes in it.
     fn p() -> Params {
         let params = Params {
-            delay: 4,
+            reach: 4,
             ..Params::default()
         };
         crate::config::validate(&params).unwrap();
@@ -892,7 +898,7 @@ mod tests {
     fn a_knob_reads_exactly_the_index_it_is_stored_under() {
         for knob in Knob::ALL {
             let mut params = crate::config::instrument();
-            params.delay = 1;
+            params.reach = 1;
             let at = Focus::default();
             // Every neighbouring focus as it stood, since the rig's nodes
             // are not alike: what a side does not read must be exactly what
@@ -941,9 +947,9 @@ mod tests {
                 nudge(&mut params, knob, 1.0);
             }
         }
-        let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
+        let mon = &params.monitors[0];
         assert_eq!(params.shafts[0].zoom, 4.0);
-        assert_eq!(cam.delay, params.delay);
+        assert_eq!(params.rig.delays, [params.reach, 0]);
         assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.switchers[0], 1.0);
         assert_eq!(mon.colour.saturation, 4.0);
@@ -957,9 +963,9 @@ mod tests {
                 nudge(&mut params, knob, -1.0);
             }
         }
-        let (cam, mon) = (&params.cameras[0], &params.monitors[0]);
+        let mon = &params.monitors[0];
         assert_eq!(params.shafts[0].zoom, 0.25);
-        assert_eq!(cam.delay, 0);
+        assert_eq!(params.rig.delays, [0, 0]);
         assert_eq!(params.rig.periods[0], 0);
         assert_eq!(params.rig.switchers[0], 0.0);
         assert_eq!(mon.colour.saturation, 0.0);
@@ -1161,30 +1167,61 @@ mod tests {
     #[test]
     fn the_delay_knob_lands_on_whole_frames_inside_the_reach() {
         let mut params = crate::config::instrument();
-        params.delay = 4;
+        params.reach = 4;
         let focus = Focus::default();
         assert_eq!(Knob::Delay.limit(&params), Limit::Whole(4));
         params.set(Knob::Delay, 2.4, focus);
-        assert_eq!(params.cameras[0].delay, 2);
+        assert_eq!(params.rig.delays[0], 2);
         assert_eq!(params.knob(Knob::Delay, focus), 2.0);
         params.set(Knob::Delay, 2.6, focus);
-        assert_eq!(params.cameras[0].delay, 3);
+        assert_eq!(params.rig.delays[0], 3);
         params.set(Knob::Delay, 9.0, focus);
-        assert_eq!(params.cameras[0].delay, 4, "the reach is the rail");
-        assert_eq!(params.cameras[1].delay, 0, "the other cable is its own");
+        assert_eq!(
+            params.rig.delays,
+            [4, 0],
+            "the reach is the rail, and the other unit is its own"
+        );
         assert!(params.describe(focus).contains("delay 4/4"));
         params.set(Knob::Delay, 3.0, focus);
         assert!(
             params.describe(focus).contains("delay 3/4"),
-            "cable, then reach"
+            "unit, then reach"
         );
         params.reset(Knob::Delay, focus);
-        assert_eq!(params.cameras[0].delay, 0);
+        assert_eq!(params.rig.delays[0], 0);
+        // Camera 3 has no unit: the knob reads zero there and turns nothing.
+        let three = focus.with(Node::Camera, 2);
+        params.nudge(Knob::Delay, 2.0, three);
+        assert_eq!(params.rig.delays, [0, 0]);
+        assert_eq!(params.knob(Knob::Delay, three), 0.0);
+        assert!(params.describe(three).contains("no delay unit"));
         // With no reach there is nothing to dial: the knob's rail is the
         // reach, so it holds still at zero.
-        params.delay = 0;
+        params.reach = 0;
         params.nudge(Knob::Delay, 4.0, focus);
-        assert_eq!(params.cameras[0].delay, 0);
+        assert_eq!(params.rig.delays[0], 0);
+    }
+
+    #[test]
+    fn the_log_line_names_the_crosspoint_on_the_focused_way_and_whether_it_is_in() {
+        let mut params = crate::config::instrument();
+        let focus = Focus::default();
+        let line = |params: &Params, focus| params.describe(focus);
+        assert!(
+            line(&params, focus).contains("of cam 1 via switcher A In1, delay in"),
+            "{}",
+            line(&params, focus)
+        );
+        params.rig.insert(0, 0);
+        assert!(line(&params, focus).contains("via switcher A In1, delay out"));
+        params.rig.select(0);
+        assert!(line(&params, focus).contains("via A direct, delay in"));
+        let three = focus.with(Node::Camera, 2);
+        assert!(
+            !line(&params, three).contains("via"),
+            "{}",
+            line(&params, three)
+        );
     }
 
     #[test]
@@ -1394,7 +1431,7 @@ mod tests {
         // on another knob, is the whole failure.
         for knob in Knob::ALL {
             let mut params = crate::config::instrument();
-            params.delay = 4;
+            params.reach = 4;
             let focus = Focus {
                 camera: 1,
                 monitor: 1,
@@ -1521,7 +1558,7 @@ mod tests {
             for past in pasts {
                 let mut params = crate::config::instrument();
                 match knob {
-                    Knob::Delay => params.cameras[focus.camera].delay = past as u32,
+                    Knob::Delay => params.rig.delays[focus.camera] = past as u32,
                     Knob::Period => params.rig.periods[focus.switcher] = past as u32,
                     _ => *params.knob_mut(knob, focus) = past,
                 }

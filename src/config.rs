@@ -97,14 +97,14 @@ pub fn validate(params: &Params) -> Result<(), String> {
             }
         }
     }
-    // Bought in bank rather than in taps: a frame of reach is a copy of
-    // every monitor, and the ring is sized from it at load. A camera past
-    // the reach is caught by the walk over the knobs above, since the reach
-    // is the delay knob's rail.
-    if params.delay > Params::MAX_DELAY {
+    // Bought in bank rather than in taps: a frame of reach is a picture per
+    // unit, and the lines are sized from it at load. A unit past the reach
+    // is caught by the walk over the knobs above, since the reach is the
+    // delay knob's rail.
+    if params.reach > Params::MAX_DELAY {
         return Err(format!(
             "the delay units reach {} frames; at most {}",
-            params.delay,
+            params.reach,
             Params::MAX_DELAY
         ));
     }
@@ -194,8 +194,8 @@ mod tests {
     fn a_delay_past_the_units_reach_is_refused() {
         let with = |reach: u32, delay: u32| {
             let mut p = instrument();
-            p.delay = reach;
-            p.cameras[0].delay = delay;
+            p.reach = reach;
+            p.rig.delays[0] = delay;
             p
         };
         assert!(validate(&with(Params::MAX_DELAY, Params::MAX_DELAY)).is_ok());
@@ -205,8 +205,5 @@ mod tests {
             validate(&with(3, 4)).unwrap_err(),
             "camera 0's delay is 4; it runs 0 to 3"
         );
-        // The ring the reach buys: the frame being drawn, the one every
-        // camera reads, and one more per frame of reach.
-        assert_eq!(with(4, 4).history(), 6);
     }
 }

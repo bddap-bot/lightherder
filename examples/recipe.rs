@@ -16,13 +16,14 @@ use std::path::{Path, PathBuf};
 
 use lightherder::affine::Axis;
 use lightherder::capture::Capture;
+use lightherder::cli::Cli;
 use lightherder::feedback::Feedback;
 use lightherder::gpu::Gpu;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::midi::Precision;
 use lightherder::params::{Focus, Knob, Limit, Node, Params};
 use lightherder::present::{Present, View};
-use lightherder::rig::{self, Rig};
+use lightherder::rig;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
@@ -210,8 +211,12 @@ fn main() -> Result<(), String> {
     let out = PathBuf::from(args.next().ok_or("usage: recipe SCRIPT OUT.png")?);
 
     let script = read(&path)?;
-    let mut params = Rig::IDENTITY.params();
-    params.input.source = script.seed.clone();
+    let params = Cli {
+        resolution: script.resolution,
+        seed: Some(script.seed.clone()),
+        ..Cli::default()
+    }
+    .instrument();
 
     let gpu = pollster::block_on(Gpu::open(None, "lightherder recipe"))?;
     let (width, height) = script.resolution;

@@ -1,6 +1,7 @@
 // The feedback graph's passes. `fs_camera` writes one monitor's next frame
-// from its taps into the bank of previous frames; `fs_present` copies one
-// monitor to a viewport of the window.
+// from its taps into the bank of previous frames; `fs_record` puts a delay
+// unit's picture on its line; `fs_present` copies one monitor to a viewport
+// of the window.
 
 // One flattened edge of the graph: a camera's view of one source monitor,
 // scaled by everything between them. See feedback::Tap.
@@ -125,10 +126,9 @@ fn arm(uv: vec2<f32>, layer: i32, centre: vec3<f32>) -> vec3<f32> {
     return select(centre, seen_at(uv, layer), inside(uv));
 }
 
-@fragment
-fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
-    let p = vec3<f32>(in.uv, 1.0);
-
+// Every tap sampled for the texel at `p`, weighed and summed: what the
+// switcher hands a monitor there, or what a delay unit's camera sees.
+fn gathered(p: vec3<f32>) -> vec3<f32> {
     var fed_back = vec3<f32>(0.0);
     let count = u32(u.info.x);
     // The keyer, judged once per fragment on the seed's own sample: it is
@@ -176,8 +176,19 @@ fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
 
         fed_back += signal * mix(tap.cuts.rgb, tap.passes.rgb, alpha);
     }
+    return fed_back;
+}
 
-    return vec4<f32>(front_panel(fed_back), 1.0);
+@fragment
+fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(front_panel(gathered(vec3<f32>(in.uv, 1.0))), 1.0);
+}
+
+// One picture onto a delay unit's line: its camera's view through the glass
+// and the framing, before the cable, the key or any front panel.
+@fragment
+fn fs_record(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(gathered(vec3<f32>(in.uv, 1.0)), 1.0);
 }
 
 @fragment

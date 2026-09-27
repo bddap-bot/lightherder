@@ -10,6 +10,12 @@
 //! demand, and no copy of the products is kept — a stored matrix would be a
 //! second state standing beside the levers that set it, free to drift from
 //! them.
+//!
+//! Cameras A and B each hand their picture to a frame delay unit, which has
+//! two outputs, Delay and No Delay, and the router picks one of the two for
+//! every place on the loop the camera goes: the seven [`Point`]s. Each
+//! camera enters each monitor's wiring at one place at most, so a camera's
+//! share of a monitor arrives either late or on time, never split.
 
 use std::fmt::{self, Write};
 
@@ -32,6 +38,71 @@ impl Cam {
     const KEYED_OVER: Cam = Cam::Three;
 }
 
+/// The frame delay units, one on each rotating camera's cable and indexed
+/// as the camera is. Camera 3 has none.
+pub const UNITS: usize = 2;
+
+const _: () = assert!(Cam::A as usize == 0 && Cam::B as usize == 1 && UNITS == 2);
+
+/// The router crosspoints behind the delay units, each handing one place
+/// on a loop the unit's Delay output or its No Delay one: Loop A's three,
+/// then Loop B's four, as the schematic's router blocks have them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Point {
+    DirectA,
+    InA1,
+    InC1,
+    InA2,
+    InB1,
+    Rotating,
+    DirectB,
+}
+
+pub const POINTS: usize = 7;
+
+impl Point {
+    pub const ALL: [Point; POINTS] = [
+        Point::DirectA,
+        Point::InA1,
+        Point::InC1,
+        Point::InA2,
+        Point::InB1,
+        Point::Rotating,
+        Point::DirectB,
+    ];
+
+    fn camera(self) -> Cam {
+        match self {
+            Point::DirectA | Point::InA1 | Point::InC1 => Cam::A,
+            Point::InA2 | Point::InB1 | Point::Rotating | Point::DirectB => Cam::B,
+        }
+    }
+
+    pub fn unit(self) -> usize {
+        self.camera() as usize
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Point::DirectA => "A direct",
+            Point::InA1 => "switcher A In1",
+            Point::InC1 => "switcher C In1",
+            Point::InA2 => "switcher A In2",
+            Point::InB1 => "switcher B In1",
+            Point::Rotating => "the rotating monitor",
+            Point::DirectB => "B direct",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Wire {
+    Cable(Point),
+    Three,
+    Seed,
+    Program(Switcher),
+}
+
 /// In [`Params::monitors`] order. A structure is an upper and a lower monitor
 /// at a right angle with 50/50 glass at 45° between them; the fifth turns on
 /// camera A's shaft.
@@ -52,6 +123,16 @@ impl Screen {
         Screen::LowerB,
         Screen::Rotating,
     ];
+
+    /// What the monitor's select picks between: its own camera direct, and a
+    /// switcher's program. The rotating monitor has no select.
+    const fn wiring(self) -> (Point, Option<Switcher>) {
+        match self {
+            Screen::UpperA | Screen::LowerA => (Point::DirectA, Some(Switcher::A)),
+            Screen::UpperB | Screen::LowerB => (Point::DirectB, Some(Switcher::B)),
+            Screen::Rotating => (Point::Rotating, None),
+        }
+    }
 }
 
 /// The luma key switcher D keys the seed over its In1 with: passing from
@@ -73,6 +154,17 @@ pub enum Switcher {
     B,
     C,
     D,
+}
+
+impl Switcher {
+    const fn inputs(self) -> [Wire; 2] {
+        match self {
+            Switcher::A => [Wire::Cable(Point::InA1), Wire::Cable(Point::InA2)],
+            Switcher::B => [Wire::Cable(Point::InB1), Wire::Program(Switcher::C)],
+            Switcher::C => [Wire::Cable(Point::InC1), Wire::Program(Switcher::D)],
+            Switcher::D => [Wire::Three, Wire::Seed],
+        }
+    }
 }
 
 /// A structure monitor's router crosspoint: its own camera direct, or its
@@ -99,6 +191,12 @@ pub struct Rig {
     pub periods: [u32; SWITCHERS],
     pub patterns: [Pattern; SWITCHERS],
     owed: [bool; SWITCHERS],
+    /// How many frames each delay unit holds its camera's picture back, up
+    /// to the graph's reach.
+    pub delays: [u32; UNITS],
+    /// Which crosspoints take their unit's Delay output, in [`Point::ALL`]
+    /// order.
+    pub inserted: [bool; POINTS],
 }
 
 /// The rig's counts, which are the instrument's: nothing chooses them.
@@ -226,23 +324,71 @@ fn glass(cam: Cam, screen: Screen) -> f32 {
 
 impl Rig {
     /// Every switcher at In2 and every monitor on its program: the routing
-    /// that hands the seed the length of the chain with no loop closed.
+    /// that hands the seed the length of the chain with no loop closed. The
+    /// units hold nothing back and every crosspoint takes their Delay
+    /// output, so a delay dialled in reaches everywhere its camera goes
+    /// until a crosspoint is taken out.
     pub const IDENTITY: Rig = Rig {
         switchers: [1.0; SWITCHERS],
         selects: [Select::Program; SELECTS],
         periods: [0; SWITCHERS],
         patterns: [Pattern(0); SWITCHERS],
         owed: [false; SWITCHERS],
+        delays: [0; UNITS],
+        inserted: [true; POINTS],
     };
 
-    fn program(&self, switcher: Switcher) -> Feed {
-        let (one, two) = match switcher {
-            Switcher::A => (Feed::camera(Cam::A), Feed::camera(Cam::B)),
-            Switcher::B => (Feed::camera(Cam::B), self.program(Switcher::C)),
-            Switcher::C => (Feed::camera(Cam::A), self.program(Switcher::D)),
-            Switcher::D => (Feed::camera(Cam::KEYED_OVER), Feed::SEED),
-        };
-        Feed::mix(one, two, self.switchers[switcher as usize])
+    fn carries(&self, wire: Wire) -> Feed {
+        match wire {
+            Wire::Cable(point) => Feed::camera(point.camera()),
+            Wire::Three => Feed::camera(Cam::KEYED_OVER),
+            Wire::Seed => Feed::SEED,
+            Wire::Program(switcher) => {
+                let [one, two] = switcher.inputs().map(|wire| self.carries(wire));
+                Feed::mix(one, two, self.switchers[switcher as usize])
+            }
+        }
+    }
+
+    fn on(&self, screen: Screen) -> Wire {
+        let (direct, switcher) = screen.wiring();
+        match (self.selects.get(screen as usize), switcher) {
+            (Some(Select::Program), Some(switcher)) => Wire::Program(switcher),
+            _ => Wire::Cable(direct),
+        }
+    }
+
+    /// The crosspoint camera `c`'s light passes on its way into monitor `m`,
+    /// where its way has one: camera 3 has no unit, and a camera the
+    /// monitor's select does not reach has no way in.
+    pub fn point(&self, c: usize, m: usize) -> Option<Point> {
+        fn find(wire: Wire, c: usize) -> Option<Point> {
+            match wire {
+                Wire::Cable(point) => (point.camera() as usize == c).then_some(point),
+                Wire::Program(switcher) => switcher.inputs().into_iter().find_map(|w| find(w, c)),
+                Wire::Three | Wire::Seed => None,
+            }
+        }
+        find(self.on(Screen::ALL[m]), c)
+    }
+
+    pub fn delayed(&self, c: usize, m: usize) -> Option<Point> {
+        self.point(c, m)
+            .filter(|point| self.inserted[*point as usize])
+    }
+
+    pub fn late(&self, c: usize, m: usize) -> u32 {
+        self.delayed(c, m)
+            .map_or(0, |point| self.delays[point.unit()])
+    }
+
+    /// Put camera `c`'s delay unit in or out of its way into monitor `m`,
+    /// and say which crosspoint that was: none, where the way has none.
+    pub fn insert(&mut self, c: usize, m: usize) -> Option<Point> {
+        let point = self.point(c, m)?;
+        let inserted = &mut self.inserted[point as usize];
+        *inserted = !*inserted;
+        Some(point)
     }
 
     /// What monitor `m` shows, as the share of each camera and of the seed:
@@ -304,17 +450,7 @@ impl Rig {
     }
 
     fn shows(&self, screen: Screen) -> Feed {
-        let (select, camera, switcher) = match screen {
-            Screen::UpperA => (self.selects[0], Cam::A, Switcher::A),
-            Screen::LowerA => (self.selects[1], Cam::A, Switcher::A),
-            Screen::UpperB => (self.selects[2], Cam::B, Switcher::B),
-            Screen::LowerB => (self.selects[3], Cam::B, Switcher::B),
-            Screen::Rotating => return Feed::camera(Cam::B),
-        };
-        match select {
-            Select::Direct => Feed::camera(camera),
-            Select::Program => self.program(switcher),
-        }
+        self.carries(self.on(screen))
     }
 
     /// The rig at this setting, as the graph the instrument runs: both shafts
@@ -324,7 +460,6 @@ impl Rig {
         let camera = |cam: Cam, gain: [f32; 3]| Camera {
             gain,
             look: Screen::ALL.map(|screen| glass(cam, screen)),
-            delay: 0,
         };
         Params {
             rig: *self,
@@ -342,9 +477,7 @@ impl Rig {
                 },
                 key: SEED_KEY,
             },
-            // Two frames, not the original's thirty: a frame of reach is a copy
-            // of all five monitors, and the bank cap at 4K holds about four.
-            delay: 2,
+            reach: Params::MAX_DELAY,
         }
     }
 }
@@ -653,5 +786,136 @@ mod tests {
             let mut rig = Rig::IDENTITY;
             assert_eq!(heard(&mut rig, 1..=20, &taps)[1], [17], "{taps:?}");
         }
+    }
+
+    #[test]
+    fn loop_a_has_three_crosspoints_and_loop_b_four() {
+        let on = |unit: usize| -> Vec<Point> {
+            Point::ALL
+                .into_iter()
+                .filter(|point| point.unit() == unit)
+                .collect()
+        };
+        assert_eq!(on(0), [Point::DirectA, Point::InA1, Point::InC1]);
+        assert_eq!(
+            on(1),
+            [Point::InA2, Point::InB1, Point::Rotating, Point::DirectB]
+        );
+        for (i, point) in Point::ALL.into_iter().enumerate() {
+            assert_eq!(
+                point as usize, i,
+                "{point:?} indexes another crosspoint's switch"
+            );
+        }
+    }
+
+    #[test]
+    fn a_camera_reaches_a_monitor_through_the_crosspoint_its_wiring_passes() {
+        use Point::*;
+        let way = |rig: &Rig, m: usize| -> [Option<Point>; CAMERAS] {
+            std::array::from_fn(|c| rig.point(c, m))
+        };
+        for switchers in SETTINGS {
+            let direct = all(Select::Direct, switchers);
+            let program = all(Select::Program, switchers);
+            for m in [0, 1] {
+                assert_eq!(way(&direct, m), [Some(DirectA), None, None]);
+                assert_eq!(way(&program, m), [Some(InA1), Some(InA2), None]);
+            }
+            for m in [2, 3] {
+                assert_eq!(way(&direct, m), [None, Some(DirectB), None]);
+                assert_eq!(way(&program, m), [Some(InC1), Some(InB1), None]);
+            }
+            for rig in [&direct, &program] {
+                assert_eq!(way(rig, 4), [None, Some(Rotating), None]);
+            }
+        }
+    }
+
+    #[test]
+    fn each_camera_enters_each_monitor_once_at_most() {
+        // What lets a camera's share of a monitor arrive late or on time and
+        // never split: a camera wired in twice would have two crosspoints and
+        // one share to divide between them.
+        fn cameras(wire: Wire, into: &mut Vec<Cam>) {
+            match wire {
+                Wire::Cable(point) => into.push(point.camera()),
+                Wire::Three => into.push(Cam::Three),
+                Wire::Program(switcher) => {
+                    for wire in switcher.inputs() {
+                        cameras(wire, into);
+                    }
+                }
+                Wire::Seed => {}
+            }
+        }
+        let select = |bit: bool| if bit { Select::Program } else { Select::Direct };
+        for bits in 0..16u8 {
+            let rig = Rig {
+                selects: std::array::from_fn(|i| select(bits >> i & 1 != 0)),
+                ..Rig::IDENTITY
+            };
+            for screen in Screen::ALL {
+                let mut seen = Vec::new();
+                cameras(rig.on(screen), &mut seen);
+                for (i, cam) in seen.iter().enumerate() {
+                    assert!(
+                        !seen[i + 1..].contains(cam),
+                        "{screen:?} {bits:04b}: {seen:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_delay_reaches_a_monitor_only_through_a_crosspoint_that_takes_it() {
+        let late = |rig: &Rig| -> Vec<[u32; CAMERAS]> {
+            (0..MONITORS)
+                .map(|m| std::array::from_fn(|c| rig.late(c, m)))
+                .collect()
+        };
+        let mut rig = all(Select::Program, [0.5; SWITCHERS]);
+        rig.delays = [3, 5];
+        // Every crosspoint in, as the rig starts: each rotating camera is
+        // late by its own unit wherever it goes, and camera 3 never is.
+        assert_eq!(
+            late(&rig),
+            [[3, 5, 0], [3, 5, 0], [3, 5, 0], [3, 5, 0], [0, 5, 0]]
+        );
+        // Switcher A's In1 out: camera A is on time on both of structure A's
+        // monitors, which that one input feeds, and still late into
+        // structure B through switcher C.
+        assert_eq!(rig.insert(0, 1), Some(Point::InA1));
+        assert_eq!(
+            late(&rig),
+            [[0, 5, 0], [0, 5, 0], [3, 5, 0], [3, 5, 0], [0, 5, 0]]
+        );
+        assert_eq!(rig.delayed(0, 0), None);
+        assert_eq!(rig.delayed(0, 2), Some(Point::InC1));
+        // The select decides which crosspoint the way passes: on direct,
+        // upper A takes camera A through A direct, which is still in.
+        rig.selects[0] = Select::Direct;
+        assert_eq!(late(&rig)[0], [3, 0, 0]);
+        assert_eq!(late(&rig)[1], [0, 5, 0]);
+        // No way in, nothing to put in or take out.
+        let before = rig;
+        assert_eq!(rig.insert(2, 4), None, "camera 3 has no unit");
+        assert_eq!(
+            rig.insert(1, 0),
+            None,
+            "camera B does not reach upper A on direct"
+        );
+        assert_eq!(
+            rig.insert(0, 4),
+            None,
+            "camera A does not reach the rotating monitor"
+        );
+        assert_eq!(rig, before);
+        // Back in, and a unit at zero is on time wherever it is in.
+        assert_eq!(rig.insert(0, 1), Some(Point::InA1));
+        assert_eq!(late(&rig)[1], [3, 5, 0]);
+        rig.delays = [0; UNITS];
+        assert!(late(&rig).iter().flatten().all(|late| *late == 0));
     }
 }

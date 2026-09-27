@@ -187,9 +187,10 @@ pub(crate) const FLIP_X: u8 = SELECT - 2;
 pub(crate) const FLIP_Y: u8 = SELECT - 1;
 pub(crate) const REVERSE: u8 = FLIP_X - 1;
 const _: () = assert!(crate::rig::count(Node::Switcher) as u8 + R_ROW <= REVERSE);
-pub(crate) const TAP_IN: u8 = S_ROW + 4;
+pub(crate) const INSERT: u8 = S_ROW + 3;
+pub(crate) const TAP_IN: u8 = INSERT + 1;
 pub(crate) const QUANTIZE: u8 = TAP_IN + 1;
-const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= TAP_IN);
+const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= INSERT);
 pub(crate) const PRECISION: u8 = ROTARY_ROW + 4;
 
 pub(crate) fn spot(cc: u8) -> Option<Spot> {
@@ -233,7 +234,7 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 /// explains all of the above — the one button whose job survives not
 /// knowing what any button does. Marker set takes a still of the display,
 /// and record records it for as long as a hand stays on it.
-pub(crate) const BUTTONS: [Button; 27] = [
+pub(crate) const BUTTONS: [Button; 28] = [
     button(S_ROW, Action::Focus(Node::Camera, 0)),
     button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
     button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
@@ -259,6 +260,7 @@ pub(crate) const BUTTONS: [Button; 27] = [
     button(FLIP_X, Action::Flip(Axis::X)),
     button(FLIP_Y, Action::Flip(Axis::Y)),
     button(SELECT, Action::Select),
+    button(INSERT, Action::Insert),
     button(TAP_IN, Action::TapIn),
     button(QUANTIZE, Action::Quantize),
 ];
@@ -278,6 +280,9 @@ pub struct Shown {
     /// on its own camera direct — the one bit the select button turns, and a
     /// latch with no lamp on a fullscreen display is a footgun.
     pub program: bool,
+    /// Whether the focused camera reaches the focused monitor through its
+    /// delay unit's Delay output.
+    pub inserted: bool,
     pub overlay: bool,
     pub solo: bool,
     pub armed: bool,
@@ -620,6 +625,7 @@ impl Midi {
         }) | when(shown.overlay, Action::Overlay)
             | when(shown.solo, Action::Solo)
             | when(shown.program, Action::Select)
+            | when(shown.inserted, Action::Insert)
             | when(shown.armed, Action::Automate)
             | when(shown.tapping, Action::TapIn)
             | when(shown.quantize, Action::Quantize);
@@ -1079,6 +1085,14 @@ mod tests {
         );
         assert_eq!(
             lit(Shown {
+                inserted: true,
+                ..Shown::default()
+            }),
+            lamp(INSERT),
+            "the delay's crosspoint is S4, beside the cameras"
+        );
+        assert_eq!(
+            lit(Shown {
                 armed: true,
                 ..Shown::default()
             }),
@@ -1231,11 +1245,12 @@ mod tests {
                 button(69, Action::Flip(Axis::X)),
                 button(70, Action::Flip(Axis::Y)),
                 button(71, Action::Select),
+                button(35, Action::Insert),
                 button(36, Action::TapIn),
                 button(37, Action::Quantize),
             ]
         );
-        for cc in [21, 22, 23, 35, 38, 39, 53, 54, 55, 58, 59] {
+        for cc in [21, 22, 23, 38, 39, 53, 54, 55, 58, 59] {
             assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
             assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
         }
@@ -1271,6 +1286,7 @@ mod tests {
             Action::Flip(Axis::X),
             Action::Flip(Axis::Y),
             Action::Select,
+            Action::Insert,
             Action::Automate,
             Action::TapIn,
             Action::Quantize,
@@ -1384,7 +1400,7 @@ mod tests {
     #[test]
     fn a_count_knob_runs_its_whole_count_over_the_throw_a_step_at_a_time_deaf_to_the_precision() {
         let mut params = crate::config::instrument();
-        params.delay = 4;
+        params.reach = 4;
         let mut midi = Midi::default();
         let delay = |midi: &mut Midi, value: u8| match feed(midi, &params, &cc(18, value))[..] {
             [] => None,
@@ -1424,7 +1440,7 @@ mod tests {
             assert!(after > before, "{knob:?}: {before} -> {after}");
             assert_ne!(knob.reads(after), knob.reads(before));
         }
-        assert_eq!(params.cameras[0].delay, 2);
+        assert_eq!(params.rig.delays[0], 25);
         assert_eq!(params.monitors[0].cadence, crate::params::Cadence::Film);
     }
 
@@ -1522,6 +1538,7 @@ mod tests {
             [Action::Flip(Axis::Y)]
         );
         assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), [Action::Select]);
+        assert_eq!(feed(&mut midi, &params, &cc(INSERT, 127)), [Action::Insert]);
         assert_eq!(
             feed(&mut midi, &params, &cc(43, 127)),
             [Action::ResetLastKnob]
@@ -1533,7 +1550,7 @@ mod tests {
     #[test]
     fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        for dead in [35, 38, 39, 53, 54, 55, 58, 59, 100] {
+        for dead in [38, 39, 53, 54, 55, 58, 59, 100] {
             assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
             assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
         }

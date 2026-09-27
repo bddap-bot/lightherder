@@ -405,6 +405,11 @@ impl App {
         Shown {
             flipped: self.params.monitors[self.focus.monitor].flip,
             program: self.params.rig.on_program(self.focus.monitor),
+            inserted: self
+                .params
+                .rig
+                .delayed(self.focus.camera, self.focus.monitor)
+                .is_some(),
             overlay: self.overlay_shown,
             solo: self.solo,
             armed: self.automation.armed(),
@@ -585,6 +590,17 @@ impl App {
                     self.focus.monitor + 1,
                     monitor.flip
                 );
+            }
+            Action::Insert => {
+                let (camera, monitor) = (self.focus.camera, self.focus.monitor);
+                match self.params.rig.insert(camera, monitor) {
+                    Some(_) => log::info!("{}", self.params.describe(self.focus)),
+                    None => log::info!(
+                        "no delay unit stands between camera {} and monitor {}",
+                        camera + 1,
+                        monitor + 1
+                    ),
+                }
             }
             Action::Automate => {
                 self.automation.press();
@@ -1031,12 +1047,13 @@ mod tests {
         let mut surface = plugged(&mut app);
 
         // One row per kind: camera 1 is S1, monitor 1 is M1 and switcher 1 is
-        // R1, which are controls 32, 48 and 64.
+        // R1, which are controls 32, 48 and 64. R8 and S4 are the latches on
+        // that way in: monitor 1 on its program, through camera 1's delay.
         app.surface_frame();
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(32) | lamp(48) | lamp(64) | lamp(71)),
+                .panel_becomes(lamp(32) | lamp(48) | lamp(64) | lamp(71) | lamp(35)),
             "the focus the instrument started on never reached the surface"
         );
         // Solo 2 selects camera 2 — pressed on the surface rather than acted
@@ -1047,7 +1064,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(35)),
             "the lamp did not follow the focus its own frame moved"
         );
         // Record is held rather than pressed, and its lamp is lit for as
@@ -1057,7 +1074,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(45)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(35) | lamp(45)),
             "the record button never lit under the finger"
         );
         surface.release(45);
@@ -1065,7 +1082,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(35)),
             "the record button stayed lit after the finger left"
         );
         // The cut is the other held button, on marker prev.
@@ -1075,7 +1092,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(61)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(35) | lamp(61)),
             "the cut button never lit under the finger"
         );
         surface.release(61);
@@ -1084,7 +1101,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(35)),
             "the cut button stayed lit after the finger left"
         );
         // Help and solo are the two lamps whose state lives in the instrument
@@ -1096,7 +1113,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(46)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(35) | lamp(46)),
             "the help lamp never lit for the overlay"
         );
         surface.press(44);
@@ -1104,9 +1121,9 @@ mod tests {
         app.surface_frame();
         assert!(app.solo, "the press was never played");
         assert!(
-            surface
-                .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(46) | lamp(44)),
+            surface.wire.panel_becomes(
+                lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(35) | lamp(46) | lamp(44)
+            ),
             "the solo lamp never lit"
         );
         surface.press(46);
@@ -1117,7 +1134,7 @@ mod tests {
         assert!(
             surface
                 .wire
-                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71)),
+                .panel_becomes(lamp(33) | lamp(48) | lamp(64) | lamp(71) | lamp(35)),
             "a latch let go kept its lamp"
         );
     }
@@ -1440,7 +1457,7 @@ mod tests {
         };
         let mut board = plugged(&mut app);
         app.act(Action::Focus(Node::Monitor, 1));
-        let panel = lamp(32) | lamp(49) | lamp(64) | lamp(71);
+        let panel = lamp(32) | lamp(49) | lamp(64) | lamp(71) | lamp(35);
         press(&mut app, &board, 41);
         assert!(app.shown().armed);
         assert!(
@@ -1695,40 +1712,85 @@ mod tests {
             assert_ne!(after, before, "{knob:?}");
             proof(&app, &format!("{name}-after"), View::Solo(0));
         }
-        assert_eq!(app.readout().reads(Knob::Delay), "2");
+        assert_eq!(app.readout().reads(Knob::Delay), "25");
         assert_eq!(app.readout().reads(Knob::FrameRate), "24");
     }
 
     #[test]
     fn a_select_and_a_reset_forgive_the_half_step_a_count_knob_was_owed() {
+        let Some(mut app) = playing(Params {
+            reach: 2,
+            ..config::instrument()
+        }) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        let delays = |app: &App| app.params.rig.delays;
+        surface(&mut app, &board, 18, 20);
+        surface(&mut app, &board, 18, 50);
+        assert_eq!(delays(&app), [0, 0]);
+        app.act(Action::Focus(Node::Camera, 1));
+        surface(&mut app, &board, 18, 60);
+        assert_eq!(delays(&app), [0, 0], "camera 2 is not paid camera 1's debt");
+        surface(&mut app, &board, 18, 80);
+        assert_eq!(delays(&app), [0, 0]);
+        app.act(Action::Reset);
+        surface(&mut app, &board, 18, 90);
+        assert_eq!(delays(&app), [0, 0], "a reset owes nothing");
+        surface(&mut app, &board, 18, 127);
+        assert_eq!(delays(&app), [0, 1]);
+        surface(&mut app, &board, 18, 100);
+        surface(&mut app, &board, 18, 110);
+        assert_eq!(delays(&app), [0, 0]);
+        app.act(Action::ResetLastKnob);
+        surface(&mut app, &board, 18, 113);
+        assert_eq!(delays(&app), [0, 0], "a rewind owes nothing");
+    }
+
+    #[test]
+    fn s4_takes_the_focused_cameras_delay_out_of_its_way_into_the_focused_monitor() {
+        use crate::lamps::lamp;
+        use crate::midi::INSERT;
         let Some(mut app) = playing(config::instrument()) else {
             return;
         };
         let board = plugged(&mut app);
-        let delays = |app: &App| app.params.cameras.map(|cam| cam.delay);
-        surface(&mut app, &board, 18, 20);
-        surface(&mut app, &board, 18, 50);
-        assert_eq!(delays(&app), [0, 0, 0]);
-        app.act(Action::Focus(Node::Camera, 1));
-        surface(&mut app, &board, 18, 60);
-        assert_eq!(
-            delays(&app),
-            [0, 0, 0],
-            "camera 2 is not paid camera 1's debt"
-        );
-        surface(&mut app, &board, 18, 80);
-        assert_eq!(delays(&app), [0, 0, 0]);
+        let lit = |app: &App| app.midi.wanted(app.focus, app.shown()) & lamp(INSERT) != 0;
+        let late = |app: &App| [0, 1, 2].map(|m| app.params.rig.late(0, m));
+        // Camera A's unit four frames deep, and upper A on its program: the
+        // way in is switcher A's In1, in as the rig starts.
+        app.params.rig.delays = [4, 0];
+        assert!(lit(&app));
+        assert_eq!(late(&app), [4, 4, 4]);
+        press(&mut app, &board, INSERT);
+        assert!(!lit(&app));
+        // That one input feeds both of structure A's monitors, and
+        // structure B still takes camera A late, through switcher C.
+        assert_eq!(late(&app), [0, 0, 4]);
+        press(&mut app, &board, INSERT);
+        assert!(lit(&app));
+        assert_eq!(late(&app), [4, 4, 4]);
+        // Camera 3 has no unit, and camera B no way into upper A on direct:
+        // the press moves nothing and nothing lights.
+        for (camera, direct) in [(2, false), (1, true)] {
+            app.act(Action::Focus(Node::Camera, camera));
+            if direct {
+                app.act(Action::Select);
+            }
+            let before = app.params.clone();
+            press(&mut app, &board, INSERT);
+            assert_eq!(app.params, before, "camera {}", camera + 1);
+            assert!(!lit(&app), "camera {}", camera + 1);
+        }
+        // On direct, camera A's way in is A direct; stop puts every
+        // crosspoint back in.
+        app.act(Action::Focus(Node::Camera, 0));
+        press(&mut app, &board, INSERT);
+        assert_eq!(app.params.rig.delayed(0, 0), None);
+        assert_eq!(app.params.rig.point(0, 0), Some(crate::rig::Point::DirectA));
         app.act(Action::Reset);
-        surface(&mut app, &board, 18, 90);
-        assert_eq!(delays(&app), [0, 0, 0], "a reset owes nothing");
-        surface(&mut app, &board, 18, 127);
-        assert_eq!(delays(&app), [0, 1, 0]);
-        surface(&mut app, &board, 18, 100);
-        surface(&mut app, &board, 18, 110);
-        assert_eq!(delays(&app), [0, 0, 0]);
-        app.act(Action::ResetLastKnob);
-        surface(&mut app, &board, 18, 113);
-        assert_eq!(delays(&app), [0, 0, 0], "a rewind owes nothing");
+        assert!(app.params.rig.inserted.iter().all(|inserted| *inserted));
+        assert!(lit(&app));
     }
 
     fn bars(
@@ -1762,7 +1824,7 @@ mod tests {
         };
         let mut board = plugged(&mut app);
         app.act(Action::Focus(Node::Switcher, 1));
-        let panel = lamp(32) | lamp(48) | lamp(65) | lamp(71);
+        let panel = lamp(32) | lamp(48) | lamp(65) | lamp(71) | lamp(35);
         press(&mut app, &board, TAP_IN);
         assert!(
             board.wire.panel_becomes(panel | lamp(TAP_IN)),
@@ -1799,7 +1861,7 @@ mod tests {
             return;
         };
         let mut board = plugged(&mut app);
-        let panel = lamp(32) | lamp(48) | lamp(64) | lamp(71);
+        let panel = lamp(32) | lamp(48) | lamp(64) | lamp(71) | lamp(35);
         press(&mut app, &board, QUANTIZE);
         assert!(board.wire.panel_becomes(panel | lamp(QUANTIZE)));
         press(&mut app, &board, TAP_IN);

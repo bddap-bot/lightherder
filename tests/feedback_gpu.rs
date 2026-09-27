@@ -15,7 +15,7 @@ use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
 use lightherder::params::{Cadence, Camera, Colour, Key, Monitor, Params, Plug};
 use lightherder::present::{Present, View};
-use lightherder::rig::{Rig, Select, MONITORS, SELECTS, SHAFTS, SWITCHERS};
+use lightherder::rig::{Point, Rig, Select, MONITORS, SELECTS, SHAFTS, SWITCHERS};
 
 /// Where the spot this suite lights sits, in screen units — off-centre on
 /// purpose: a radially symmetric spot at the centre is a fixed point of
@@ -1039,7 +1039,6 @@ fn plain_camera(look: [f32; MONITORS]) -> Camera {
     Camera {
         gain: [1.0; 3],
         look,
-        delay: 0,
     }
 }
 
@@ -1061,7 +1060,7 @@ fn blank() -> Params {
     p.rig = Rig::IDENTITY;
     p.rig.switchers = [0.0; SWITCHERS];
     p.rig.selects = [Select::Direct; SELECTS];
-    p.delay = 0;
+    p.reach = 0;
     p.shafts = [Framing::identity(); SHAFTS];
     for camera in &mut p.cameras {
         *camera = plain_camera([0.0; MONITORS]);
@@ -1702,12 +1701,13 @@ fn the_seed_layer_is_current_however_the_ring_turns() {
 }
 
 #[test]
-fn the_seed_layer_sits_past_the_whole_ring() {
-    // The arithmetic that puts the seed past every slab of every monitor: a
-    // layer index short by one lands it on a monitor of the newest slab, and
-    // a deep ring is where that shows.
+fn the_seed_layer_sits_between_the_ring_and_the_lines() {
+    // The arithmetic that puts the seed past both slabs of every monitor and
+    // before the delay lines: a layer index short by one lands it on a
+    // monitor of a slab, and one long on a line, which only a graph with
+    // reach has. Eight steps turn the ring and every line.
     let mut p = seed_on_a_monitor();
-    p.delay = 3;
+    p.reach = 3;
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;
     };
@@ -2081,25 +2081,24 @@ fn probed(path: &std::path::Path, entry: &str) -> String {
 }
 
 #[test]
-fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
-    // A one-pass flash on monitor 3, and a camera on it drawing to monitor 1
-    // with `delay` frames on its cable: monitor 1 lights on pass delay + 1
-    // and on no other, and the frame it shows then is byte for byte the one
-    // an undelayed camera shows on pass 1 — a delay moves when a frame
-    // arrives, never what arrives. The camera zooms and dims so that a frame
-    // held for the delay and a frame sent round the camera that many more
-    // times come out different. The reach is the full thirty frames so that
-    // every ring is the deepest one: the short delays then read from its
-    // middle, and the longest from the slab just after the one being
-    // written.
-    // Camera A carries the flash from structure B's monitor to its own.
+fn a_delay_unit_hands_on_the_picture_its_camera_took_that_many_passes_ago() {
+    // A one-pass flash on monitor 3, and camera A on it drawing to monitor 1
+    // through its unit, `delay` frames deep: monitor 1 lights on pass
+    // delay + 1 and on no other, and the frame it shows then is the one an
+    // undelayed camera shows on pass 1, to within the one rounding of the
+    // picture the unit keeps — a delay moves when a frame arrives, never
+    // what arrives. The camera zooms and dims so that a frame held for the
+    // delay and a frame sent round the camera that many more times come out
+    // far apart. The reach is the full thirty frames so that every line is
+    // the longest one: the short delays then read from its middle, and the
+    // longest the picture this pass records over.
     let flash = |delay: u32| {
         let mut p = blank();
-        p.cameras[0].delay = delay;
+        p.rig.delays[0] = delay;
         p.cameras[0].gain = [0.9; 3];
         p.shafts[0].zoom = 0.9;
         p.cameras[0].look = one_hot(SEEDED);
-        p.delay = Params::MAX_DELAY;
+        p.reach = Params::MAX_DELAY;
         seeding(&mut p);
         p
     };
@@ -2123,10 +2122,18 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
                 );
                 match &undelayed {
                     None => undelayed = Some(img.pixels),
-                    Some(reference) => assert!(
-                        &img.pixels == reference,
-                        "delay {delay}: the delayed frame is not the undelayed one"
-                    ),
+                    Some(reference) => {
+                        let off = img
+                            .pixels
+                            .iter()
+                            .zip(reference)
+                            .map(|(a, b)| a.abs_diff(*b))
+                            .max();
+                        assert!(
+                            off <= Some(1),
+                            "delay {delay}: the delayed frame is {off:?} levels off the undelayed one"
+                        );
+                    }
                 }
             } else {
                 assert!(
@@ -2139,42 +2146,105 @@ fn a_delayed_camera_hands_on_the_frame_it_saw_that_many_passes_ago() {
 }
 
 #[test]
-fn the_seed_lands_past_the_whole_ring() {
-    // On an undelayed graph the ring is one slab and the seed's layer is
-    // where it always was, so only a delayed graph can tell the layer the
-    // seed is written to from the one its tap reads. The cameras are blind
-    // and the reach is there only to deepen the ring.
-    let mut p = seed_on_a_monitor();
-    p.cameras[0].delay = 5;
-    p.delay = 5;
-    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+fn one_camera_arrives_late_through_one_crosspoint_and_on_time_through_another() {
+    // A delay "used on one of the monitors and not the other for the same
+    // camera output", as the original was built to: a one-pass flash on
+    // monitor 3, and camera A on it drawing to monitor 1 direct and to
+    // monitor 2 through switcher A, its unit two frames deep and in on
+    // switcher A's In1 alone. Monitor 1 lights on pass 1 and monitor 2 on
+    // pass 3, and neither on any other.
+    let delay = 2;
+    let mut p = blank();
+    p.rig.delays[0] = delay;
+    p.reach = delay;
+    p.cameras[0].look = one_hot(SEEDED);
+    p.rig.selects[1] = Select::Program;
+    assert_eq!(p.rig.insert(0, 0), Some(Point::DirectA));
+    seeding(&mut p);
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
     };
-    h.feedback
-        .write_seed(h.queue, &flat_frame((SIZE, SIZE), [200; 3]));
-    // A whole turn of the ring, so the pass that draws the last slab — the
-    // one whose upper view is the seed layer alone — is among them.
-    for pass in 0..p.history() {
-        h.step_solo(&p, SEEDED);
-        let shown = h.read().rgb_at(0.5, 0.5);
-        assert!(
-            shown.iter().all(|c| (c - 200.0).abs() <= 1.0),
-            "pass {pass}: the monitor shows {shown:?}, not the seed's flat 200"
+    let lit = |img: &Image, m: usize| {
+        let (u0, v0) = tile(MONITORS, m, 0.0, 0.0);
+        let (u1, v1) = tile(MONITORS, m, 1.0, 1.0);
+        img.brightest_in(u0, v0, u1, v1) > 200.0
+    };
+    for pass in 0..=delay + 2 {
+        h.step_graph(&p);
+        seeded_no_more(&mut p);
+        let img = h.read();
+        assert_eq!(
+            [lit(&img, 0), lit(&img, 1)],
+            [pass == 1, pass == delay + 1],
+            "pass {pass}"
         );
     }
 }
 
 #[test]
-fn blanking_the_monitors_empties_the_whole_ring() {
-    // A flash in flight down a delayed cable is in the ring and nowhere
-    // else, so a blank that left any slab alone would deliver it late: after
-    // the blank, monitor 1 stays dark for longer than the delay.
+fn a_delay_unit_keeps_the_framing_its_picture_was_taken_with() {
+    // What a unit holds back is its camera's picture as the shaft framed it
+    // then, not the monitors it was taken of. A still spot on monitor 3, and
+    // camera A on it drawing to monitor 1 on time and to monitor 2 three
+    // frames late; the shaft turns a quarter on pass 6. Monitor 1 shows the
+    // turned spot from pass 6 on, and monitor 2 the square-on spot until
+    // pass 9.
+    let delay = 3;
+    let mut p = blank();
+    p.rig.delays[0] = delay;
+    p.reach = delay;
+    p.cameras[0].look = one_hot(SEEDED);
+    p.rig.selects[1] = Select::Program;
+    assert_eq!(p.rig.insert(0, 0), Some(Point::DirectA));
+    seeding(&mut p);
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
+        return;
+    };
+    h.feedback.write_seed(h.queue, &spot_frame((SIZE, SIZE)));
+    // The spot's centre square on, and a quarter turn counter-clockwise.
+    let aspect = 1.0;
+    let square = lightherder::affine::screen_to_uv(aspect).apply(SPOT);
+    let turned = lightherder::affine::screen_to_uv(aspect).apply([-SPOT[1], SPOT[0]]);
+    let near = |img: &Image, m: usize, at: [f32; 2]| {
+        let (u0, v0) = tile(MONITORS, m, at[0] - 0.08, at[1] - 0.08);
+        let (u1, v1) = tile(MONITORS, m, at[0] + 0.08, at[1] + 0.08);
+        img.brightest_in(u0, v0, u1, v1) > 150.0
+    };
+    for pass in 0..12u32 {
+        if pass == 6 {
+            p.shafts[0].rotation = std::f32::consts::FRAC_PI_2;
+        }
+        h.step_graph(&p);
+        let img = h.read();
+        if pass <= delay {
+            continue;
+        }
+        for (m, turns_on) in [(0, 6), (1, 6 + delay)] {
+            let want = match pass >= turns_on {
+                true => [false, true],
+                false => [true, false],
+            };
+            assert_eq!(
+                [near(&img, m, square), near(&img, m, turned)],
+                want,
+                "monitor {} on pass {pass}: [square on, turned]",
+                m + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn blanking_the_monitors_empties_the_delay_lines() {
+    // A flash in flight through a delay unit is on its line and nowhere
+    // else, so a blank that left any of a line alone would deliver it late:
+    // after the blank, monitor 1 stays dark for longer than the delay.
     // The flash is the seed on monitor 3; camera A carries it across.
     let delay = 4;
     let mut p = blank();
-    p.cameras[0].delay = delay;
+    p.rig.delays[0] = delay;
     p.cameras[0].look = one_hot(SEEDED);
-    p.delay = delay;
+    p.reach = delay;
     seeding(&mut p);
     let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
@@ -2190,8 +2260,8 @@ fn blanking_the_monitors_empties_the_whole_ring() {
     h.step_graph(&p);
     let lit = h.read().brightest_in(u0, v0, u1, v1);
     assert!(lit > 200.0, "the flash never arrived: {lit}");
-    // Two flashes, two passes apart, so that both the slab the blank sees as
-    // newest and one further back hold light.
+    // Two flashes, two passes apart, so that the blank finds one on the
+    // line and the other still on the monitor it lit.
     seeding(&mut p);
     h.step_graph(&p);
     seeded_no_more(&mut p);
@@ -2362,10 +2432,10 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
     let passes = 14u64;
     let run = |flash: u64, delay: u32, rate: Cadence| -> Option<Vec<(bool, f32, Vec<u8>)>> {
         let mut p = blank();
-        p.cameras[0].delay = delay;
+        p.rig.delays[0] = delay;
         p.cameras[0].look = one_hot(SEEDED);
         p.monitors[SEEDED].cadence = rate;
-        p.delay = 3;
+        p.reach = 3;
         let mut h = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p)?;
         Some(
             (0..passes)

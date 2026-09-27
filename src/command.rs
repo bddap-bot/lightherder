@@ -45,6 +45,11 @@ pub enum Action {
     /// the focused monitor, because the rig mirrors a router output and not
     /// a camera.
     Flip(Axis),
+    /// The focused camera's delay unit put in or taken out of its way into
+    /// the focused monitor: the router crosspoint that hands that way the
+    /// unit's Delay output or its No Delay one. A latch with a lamp, dead
+    /// where the way has no crosspoint.
+    Insert,
     Automate,
     TapIn,
     Quantize,
@@ -86,6 +91,7 @@ impl Action {
             Action::Select => "select".into(),
             Action::Flip(Axis::X) => "flip x".into(),
             Action::Flip(Axis::Y) => "flip y".into(),
+            Action::Insert => "insert".into(),
             Action::Automate => "loop".into(),
             Action::TapIn => "tap in".into(),
             Action::Quantize => "16ths".into(),
@@ -124,6 +130,7 @@ mod tests {
             Action::Reverse,
             Action::Select,
             Action::Flip(Axis::X),
+            Action::Insert,
             Action::Automate,
             Action::TapIn,
             Action::Quantize,
