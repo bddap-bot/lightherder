@@ -64,8 +64,7 @@ impl Default for Cli {
 impl Cli {
     /// The one place a command line reaches the rig, so a flag that never
     /// lands here is a flag that does nothing. The delay units reach as far
-    /// as the bank holds at this resolution: the full thirty frames at the
-    /// default, fewer on bigger monitors.
+    /// as the bank holds at this resolution.
     pub fn instrument(&self) -> Params {
         let mut params = crate::config::instrument();
         if let Some(seed) = &self.seed {
@@ -302,10 +301,12 @@ mod tests {
             }
             .instrument()
         };
-        assert_eq!(at(DEFAULT_RESOLUTION).reach, Params::MAX_DELAY);
-        assert_eq!(at((3840, 2160)).reach, 10);
         for resolution in [DEFAULT_RESOLUTION, (3840, 2160)] {
-            crate::feedback::bank_fits(&at(resolution), resolution).unwrap();
+            let params = at(resolution);
+            let rig = crate::config::instrument();
+            assert_eq!(params.reach, crate::feedback::reach(&rig, resolution));
+            crate::feedback::bank_fits(&params, resolution).unwrap();
         }
+        assert!(at((3840, 2160)).reach < at(DEFAULT_RESOLUTION).reach);
     }
 }

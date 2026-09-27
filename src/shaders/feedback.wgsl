@@ -96,23 +96,25 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
     return max(limited, vec3<f32>(0.0));
 }
 
-// What one camera sees of one source monitor at one point — the sampling,
+// What one camera sees of one source layer at one point — the sampling,
 // not `Camera::look`, whose splitter weights are already folded into the
-// tap's shares. Past a monitor's edge the camera sees an unlit room, but a
-// clamped sampler returns the border texel there, which would smear across
-// the frame.
+// tap's shares — and in alpha whether it is a monitor it sees there. Past a
+// layer's edge the camera sees an unlit room, but a clamped sampler returns
+// the border texel there, which would smear across the frame. A monitor is
+// opaque across its face; a delay unit's picture keeps where its camera saw
+// one.
 //
 // textureSampleLevel, not textureSample, throughout this shader: the monitor
 // textures have a single mip level, so the derivatives textureSample computes
 // go nowhere.
-fn seen_at(uv: vec2<f32>, layer: i32) -> vec3<f32> {
-    var rgb: vec3<f32>;
+fn seen_at(uv: vec2<f32>, layer: i32) -> vec4<f32> {
+    var texel: vec4<f32>;
     if layer < i32(u.info.z) {
-        rgb = textureSampleLevel(lower, src_samp, uv, layer, 0.0).rgb;
+        texel = textureSampleLevel(lower, src_samp, uv, layer, 0.0);
     } else {
-        rgb = textureSampleLevel(upper, src_samp, uv, layer - i32(u.info.w), 0.0).rgb;
+        texel = textureSampleLevel(upper, src_samp, uv, layer - i32(u.info.w), 0.0);
     }
-    return select(vec3<f32>(0.0), rgb, inside(uv));
+    return select(vec4<f32>(0.0), texel, inside(uv));
 }
 
 fn inside(uv: vec2<f32>) -> bool {
@@ -120,16 +122,18 @@ fn inside(uv: vec2<f32>) -> bool {
 }
 
 // One arm of the sharpness mask: the source at uv, or the centre again
-// past the source's edge. The room beyond is dark, and a mask that saw it
-// would add light along the border — which the loop multiplies.
+// where no monitor was seen. The room beyond is dark, and a mask that saw
+// it would add light along the border — which the loop multiplies.
 fn arm(uv: vec2<f32>, layer: i32, centre: vec3<f32>) -> vec3<f32> {
-    return select(centre, seen_at(uv, layer), inside(uv));
+    let seen = seen_at(uv, layer);
+    return select(centre, seen.rgb, seen.a > 0.5);
 }
 
-// Every tap sampled for the texel at `p`, weighed and summed: what the
-// switcher hands a monitor there, or what a delay unit's camera sees.
-fn gathered(p: vec3<f32>) -> vec3<f32> {
+// Every tap sampled for the texel at `p`, weighed and summed, and in alpha
+// whether any of them saw a monitor there.
+fn gathered(p: vec3<f32>) -> vec4<f32> {
     var fed_back = vec3<f32>(0.0);
+    var covered = false;
     let count = u32(u.info.x);
     // The keyer, judged once per fragment on the seed's own sample: it is
     // switcher D's, so what it gates is the whole hand-over — the seed in,
@@ -144,14 +148,15 @@ fn gathered(p: vec3<f32>) -> vec3<f32> {
         let seed = u.taps[keyed];
         let seed_uv = vec2<f32>(dot(seed.row0.xyz, p), dot(seed.row1.xyz, p));
         let soft = max(u.key.y, 1e-4);
-        alpha = smoothstep(u.key.x - soft, u.key.x, dot(u.luma.xyz, seen_at(seed_uv, i32(seed.passes.a))));
+        alpha = smoothstep(u.key.x - soft, u.key.x, dot(u.luma.xyz, seen_at(seed_uv, i32(seed.passes.a)).rgb));
     }
 
     for (var t = 0u; t < count; t++) {
         let tap = u.taps[t];
         let src_uv = vec2<f32>(dot(tap.row0.xyz, p), dot(tap.row1.xyz, p));
         let layer = i32(tap.passes.a);
-        let raw = seen_at(src_uv, layer);
+        let seen = seen_at(src_uv, layer);
+        let raw = seen.rgb;
         var signal = raw;
 
         // The monitor's sharpness, an unsharp mask a texel wide on the signal
@@ -160,11 +165,11 @@ fn gathered(p: vec3<f32>) -> vec3<f32> {
         // arms are summed in pairs so four equal samples come back as
         // exactly the centre.
         // Skipped at rest — four reads a texel on every tap of every monitor,
-        // for nothing — and past the source's edge, where the centre is the
-        // dark room and an arm that lands back inside would cut a dark rim
-        // into whatever else lights the fragment.
+        // for nothing — and where the centre saw no monitor, which is the
+        // dark room, and an arm that lands on one would cut a dark rim into
+        // whatever else lights the fragment.
         let sharpness = u.analog.x;
-        if sharpness > 0.0 && inside(src_uv) {
+        if sharpness > 0.0 && seen.a > 0.5 {
             let texel = 1.0 / vec2<f32>(textureDimensions(lower));
             let across = vec2<f32>(tap.row0.x, tap.row1.x) * texel.x;
             let down = vec2<f32>(tap.row0.y, tap.row1.y) * texel.y;
@@ -175,20 +180,21 @@ fn gathered(p: vec3<f32>) -> vec3<f32> {
         }
 
         fed_back += signal * mix(tap.cuts.rgb, tap.passes.rgb, alpha);
+        covered = covered || seen.a > 0.5;
     }
-    return fed_back;
+    return vec4<f32>(fed_back, select(0.0, 1.0, covered));
 }
 
 @fragment
 fn fs_camera(in: VsOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(front_panel(gathered(vec3<f32>(in.uv, 1.0))), 1.0);
+    return vec4<f32>(front_panel(gathered(vec3<f32>(in.uv, 1.0)).rgb), 1.0);
 }
 
 // One picture onto a delay unit's line: its camera's view through the glass
 // and the framing, before the cable, the key or any front panel.
 @fragment
 fn fs_record(in: VsOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(gathered(vec3<f32>(in.uv, 1.0)), 1.0);
+    return gathered(vec3<f32>(in.uv, 1.0));
 }
 
 @fragment

@@ -2200,7 +2200,6 @@ fn a_delay_unit_keeps_the_framing_its_picture_was_taken_with() {
     let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
         return;
     };
-    h.feedback.write_seed(h.queue, &spot_frame((SIZE, SIZE)));
     // The spot's centre square on, and a quarter turn counter-clockwise.
     let aspect = 1.0;
     let square = lightherder::affine::screen_to_uv(aspect).apply(SPOT);
@@ -2230,6 +2229,147 @@ fn a_delay_unit_keeps_the_framing_its_picture_was_taken_with() {
                 "monitor {} on pass {pass}: [square on, turned]",
                 m + 1
             );
+        }
+    }
+}
+
+#[test]
+fn a_late_camera_is_flipped_by_the_output_it_arrives_on() {
+    for delay in [0u32, 2] {
+        let mut p = blank();
+        p.rig.delays[0] = delay;
+        p.reach = 2;
+        p.cameras[0].look = one_hot(SEEDED);
+        p.monitors[0].flip = [true, false];
+        seeding(&mut p);
+        let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
+            return;
+        };
+        let spot = h.spot_uv();
+        for _ in 0..=delay + 1 {
+            h.step_graph(&p);
+            seeded_no_more(&mut p);
+        }
+        let img = h.read();
+        let at = |u: f32| {
+            let (u, v) = tile(MONITORS, 0, u, spot[1]);
+            img.at(u, v)
+        };
+        let (flipped, straight) = (at(1.0 - spot[0]), at(spot[0]));
+        assert!(
+            flipped > 200.0 && straight < 2.0,
+            "delay {delay}: {flipped} where the flip puts the spot, {straight} where it was"
+        );
+    }
+}
+
+#[test]
+fn a_late_camera_sees_through_the_glass_its_picture_was_taken_through() {
+    // Camera A through 50/50 glass at the flash and at the dark rotating
+    // monitor: late or on time, monitor 1 gets half the flash.
+    let mut on_time: Option<Vec<u8>> = None;
+    for delay in [0u32, 2] {
+        let mut p = blank();
+        p.rig.delays[0] = delay;
+        p.reach = 2;
+        p.cameras[0].look[SEEDED] = 0.5;
+        p.cameras[0].look[4] = 0.5;
+        seeding(&mut p);
+        let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
+            return;
+        };
+        for _ in 0..=delay + 1 {
+            h.step_graph(&p);
+            seeded_no_more(&mut p);
+        }
+        let img = h.read();
+        let (u0, v0) = tile(MONITORS, 0, 0.0, 0.0);
+        let (u1, v1) = tile(MONITORS, 0, 1.0, 1.0);
+        let lit = img.brightest_in(u0, v0, u1, v1);
+        assert!(
+            (100.0..160.0).contains(&lit),
+            "delay {delay}: {lit} is not half the flash"
+        );
+        match &on_time {
+            None => on_time = Some(img.pixels),
+            Some(on_time) => {
+                let off = img
+                    .pixels
+                    .iter()
+                    .zip(on_time)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max();
+                assert!(off <= Some(1), "delay {delay}: {off:?} levels off");
+            }
+        }
+    }
+}
+
+#[test]
+fn camera_b_has_a_unit_of_its_own() {
+    // Camera B on the flash, two frames late into monitor 4 direct.
+    let delay = 2;
+    let mut p = blank();
+    p.rig.delays = [0, delay];
+    p.reach = delay;
+    p.cameras[1].look = one_hot(SEEDED);
+    seeding(&mut p);
+    let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
+        return;
+    };
+    let (u0, v0) = tile(MONITORS, 3, 0.0, 0.0);
+    let (u1, v1) = tile(MONITORS, 3, 1.0, 1.0);
+    for pass in 0..=delay + 1 {
+        h.step_graph(&p);
+        seeded_no_more(&mut p);
+        let lit = h.read().brightest_in(u0, v0, u1, v1) > 200.0;
+        assert_eq!(lit, pass == delay + 1, "monitor 4 on pass {pass}");
+    }
+}
+
+#[test]
+fn a_late_camera_is_sharpened_as_an_on_time_one_is() {
+    // The monitor's mask stops where its camera saw no monitor, on a
+    // recorded picture as on the monitors themselves. Camera A pulls back
+    // from a flat field until the room around it is in the picture, and the
+    // late frame, sharpened, is the on-time one: no rim at the field's edge.
+    let mut on_time: Option<Vec<u8>> = None;
+    for delay in [0u32, 2] {
+        let mut p = blank();
+        p.rig.delays[0] = delay;
+        p.reach = 2;
+        p.cameras[0].look = one_hot(SEEDED);
+        p.shafts[0].zoom = 0.7;
+        p.monitors[0].sharpness = 2.0;
+        seeding(&mut p);
+        let Some(mut h) = graph_harness((SIZE, SIZE), tiled(), &p) else {
+            return;
+        };
+        h.feedback
+            .write_seed(h.queue, &flat_frame((SIZE, SIZE), [160; 3]));
+        for _ in 0..=delay + 1 {
+            h.step_graph(&p);
+            seeded_no_more(&mut p);
+        }
+        let img = h.read();
+        let (u0, v0) = tile(MONITORS, 0, 0.0, 0.0);
+        let (u1, v1) = tile(MONITORS, 0, 1.0, 1.0);
+        let lit = img.brightest_in(u0, v0, u1, v1);
+        assert!(
+            (155.0..165.0).contains(&lit),
+            "delay {delay}: the field peaks at {lit}"
+        );
+        match &on_time {
+            None => on_time = Some(img.pixels),
+            Some(on_time) => {
+                let off = img
+                    .pixels
+                    .iter()
+                    .zip(on_time)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max();
+                assert!(off <= Some(1), "delay {delay}: {off:?} levels off");
+            }
         }
     }
 }

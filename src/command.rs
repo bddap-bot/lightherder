@@ -45,10 +45,8 @@ pub enum Action {
     /// the focused monitor, because the rig mirrors a router output and not
     /// a camera.
     Flip(Axis),
-    /// The focused camera's delay unit put in or taken out of its way into
-    /// the focused monitor: the router crosspoint that hands that way the
-    /// unit's Delay output or its No Delay one. A latch with a lamp, dead
-    /// where the way has no crosspoint.
+    /// A latch with a lamp: the insertion point on the focused camera's feed
+    /// into the focused monitor, dead where that feed has none.
     Insert,
     Automate,
     TapIn,

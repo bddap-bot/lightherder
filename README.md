@@ -30,7 +30,7 @@ to quit. Plug in a Korg nanoKONTROL2 to play the instrument on Linux.
 | Option | Effect |
 | --- | --- |
 | `--windowed` | Open a window; fullscreen is the default. |
-| `--resolution WIDTHxHEIGHT` | Set each virtual monitor's size; default `1920x1080`. Above that the delay units reach fewer than 30 frames: 10 at `3840x2160`. |
+| `--resolution WIDTHxHEIGHT` | Set each virtual monitor's size; default `1920x1080`. The delay units reach 30 frames, or as many as the 2 GiB bank holds: 10 at `3840x2160`. |
 | `--seed bars` | Use the built-in test pattern. |
 | `--seed FORMAT:NAME` | Read an ffmpeg input, e.g. `lavfi:testsrc2`; default `v4l2:/dev/video0`. |
 | `--bench` | Time 600 frames off screen and exit. |
@@ -46,12 +46,12 @@ monitor or switcher; Cycle shows their values on screen.
 | Control | Action |
 | --- | --- |
 | S1–S3 | Select camera A, B or 3. |
+| S4 | Switch the camera's feed into the monitor between its delay unit's delayed and live outputs; lit on delayed. |
 | M1–M5 | Select upper A, lower A, upper B, lower B or the rotating monitor. |
 | R1–R4 | Select switcher A, B, C or D. |
 | Faders 1–6 | Monitor hue, saturation, brightness, contrast, temperature, sharpness. |
 | Faders 7–8 | Switcher reversal period (0–60 passes; 0 disables it), crossfade. |
 | Rotaries 1–3 | Camera zoom, rotation, delay (0–30 frames). A and 3 share zoom and rotation; 3 has no delay unit. |
-| S4 | Put the camera's delay unit in or out of its way into the monitor; lit while that way is delayed. |
 | Rotary 4 | Monitor frame rate: 60, 50, 30 or 24. |
 | Rotary 5 | Precision: a full movement spans 1/64 to all of a continuous control's range. |
 | R5 / Marker ◀ | Reverse the switcher crossfade / reverse while held. |
@@ -77,7 +77,7 @@ Three virtual cameras only ever watch monitors: A and B each see a pair through
 Four switchers route camera feeds back to the monitors, with the fifth monitor
 always showing camera B.
 External inputs enter on the mix side as switcher D's luma-keyed seed over camera 3.
-Cameras A and B each feed a frame delay unit, and a router crosspoint at each
-place their feeds reach — three for A, four for B — takes the delayed picture
-or the live one. All seven start delayed, so a delay dialled in reaches
-everywhere its camera goes until S4 takes a way out.
+Cameras A and B each feed a frame delay unit, and at each place their feeds
+reach — three for A, four for B — the router takes the unit's delayed output
+or its live one. All seven start on delayed, so a delay dialled in reaches
+everywhere its camera goes until S4 switches a feed to live.

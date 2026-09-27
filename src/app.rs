@@ -596,7 +596,7 @@ impl App {
                 match self.params.rig.insert(camera, monitor) {
                     Some(_) => log::info!("{}", self.params.describe(self.focus)),
                     None => log::info!(
-                        "no delay unit stands between camera {} and monitor {}",
+                        "camera {}'s feed into monitor {} passes no delay unit",
                         camera + 1,
                         monitor + 1
                     ),
@@ -1047,8 +1047,8 @@ mod tests {
         let mut surface = plugged(&mut app);
 
         // One row per kind: camera 1 is S1, monitor 1 is M1 and switcher 1 is
-        // R1, which are controls 32, 48 and 64. R8 and S4 are the latches on
-        // that way in: monitor 1 on its program, through camera 1's delay.
+        // R1, which are controls 32, 48 and 64. R8 and S4 are lit: monitor 1
+        // is on its program, and takes camera 1 delayed.
         app.surface_frame();
         assert!(
             surface
@@ -1748,7 +1748,7 @@ mod tests {
     }
 
     #[test]
-    fn s4_takes_the_focused_cameras_delay_out_of_its_way_into_the_focused_monitor() {
+    fn s4_switches_the_focused_cameras_feed_into_the_focused_monitor_between_delayed_and_live() {
         use crate::lamps::lamp;
         use crate::midi::INSERT;
         let Some(mut app) = playing(config::instrument()) else {
@@ -1757,8 +1757,8 @@ mod tests {
         let board = plugged(&mut app);
         let lit = |app: &App| app.midi.wanted(app.focus, app.shown()) & lamp(INSERT) != 0;
         let late = |app: &App| [0, 1, 2].map(|m| app.params.rig.late(0, m));
-        // Camera A's unit four frames deep, and upper A on its program: the
-        // way in is switcher A's In1, in as the rig starts.
+        // Camera A's unit four frames deep, and upper A on its program: its
+        // feed passes switcher A's In1, delayed as the rig starts.
         app.params.rig.delays = [4, 0];
         assert!(lit(&app));
         assert_eq!(late(&app), [4, 4, 4]);
@@ -1770,7 +1770,15 @@ mod tests {
         press(&mut app, &board, INSERT);
         assert!(lit(&app));
         assert_eq!(late(&app), [4, 4, 4]);
-        // Camera 3 has no unit, and camera B no way into upper A on direct:
+        // The press is on the focused monitor's feed: upper B takes camera A
+        // through switcher C, and only that point goes live.
+        app.act(Action::Focus(Node::Monitor, 2));
+        press(&mut app, &board, INSERT);
+        assert!(!lit(&app));
+        assert_eq!(late(&app), [4, 4, 0]);
+        assert_eq!(app.params.rig.delayed(0, 2), None);
+        app.act(Action::Focus(Node::Monitor, 0));
+        // Camera 3 has no unit, and camera B no feed into upper A on direct:
         // the press moves nothing and nothing lights.
         for (camera, direct) in [(2, false), (1, true)] {
             app.act(Action::Focus(Node::Camera, camera));
@@ -1782,8 +1790,8 @@ mod tests {
             assert_eq!(app.params, before, "camera {}", camera + 1);
             assert!(!lit(&app), "camera {}", camera + 1);
         }
-        // On direct, camera A's way in is A direct; stop puts every
-        // crosspoint back in.
+        // On direct, camera A's feed passes A direct; stop puts every point
+        // back on delayed.
         app.act(Action::Focus(Node::Camera, 0));
         press(&mut app, &board, INSERT);
         assert_eq!(app.params.rig.delayed(0, 0), None);

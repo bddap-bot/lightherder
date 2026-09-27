@@ -16,9 +16,7 @@
 //! there being no camera between the two to frame or colour it.
 //!
 //! A delay unit is the one place a camera's picture is kept: it has to
-//! outlast the monitors it was taken of. Each pass records both units'
-//! pictures, and a camera arriving late is one tap on the picture its unit
-//! recorded that many passes before.
+//! outlast the monitors it was taken of.
 
 use bytemuck::Zeroable;
 
@@ -41,10 +39,8 @@ pub const HEADROOM: f32 = 2.0;
 /// Most taps one monitor can be fed by, and so the length of the shader's
 /// uniform array. Every camera through every monitor its glass could see,
 /// plus the seed: the rig cannot reach it — its cameras see two monitors
-/// each and the seed is one tap, so six is what a pass is actually handed,
-/// and a camera arriving late is one tap on its picture instead of one per
-/// monitor — but it is the bound a look matrix cannot cross, so nothing has
-/// to check.
+/// each and the seed is one tap, so six is what a pass is actually handed —
+/// but it is the bound a look matrix cannot cross, so nothing has to check.
 pub const MAX_TAPS: usize = crate::rig::CAMERAS * crate::rig::MONITORS + 1;
 
 const _: () = assert!(
@@ -55,11 +51,10 @@ const _: () = assert!(
 );
 
 /// The most GPU memory a bank may ask for. A cap in bytes rather than in
-/// pixels because it is the layers that do the multiplying: the rig's five
-/// monitors two frames deep, plus the seed, are 0.7 GiB of half-float at
-/// 3840x2160, every frame of reach is another picture per delay unit on
-/// top, and a card asked for more than it has fails inside the driver
-/// rather than at the command line.
+/// pixels because it is the layers that do the multiplying — two frames of
+/// every monitor, the seed, and a picture per delay unit per frame of reach
+/// — and a card asked for more than it has fails inside the driver rather
+/// than at the command line.
 pub const MAX_BANK_BYTES: u64 = 2 << 30;
 
 /// One texel of [`MONITOR_FORMAT`], in bytes. Asked of the format rather than
@@ -166,35 +161,38 @@ impl Shape {
         slab * self.monitors + m
     }
 
-    /// The seed: past the ring, since it is never delayed — nothing stands
-    /// between the switcher and the outside light it was handed.
     fn seed(self) -> usize {
         RING * self.monitors
     }
 
-    /// The first layer of the lines. Every layer below it is one a unit's
-    /// picture may be taken of, and a recording writes none of them.
+    /// The first layer of the lines: a recording binds only the layers below.
     fn lines(self) -> usize {
         self.seed() + 1
     }
 
-    /// The layer unit `unit` records pass `pass`'s picture on: its line is
-    /// a ring of its own, `reach` pictures round.
-    fn line(self, unit: usize, pass: u64) -> usize {
-        debug_assert!(unit < UNITS && self.reach > 0);
-        self.lines() + unit * self.reach + (pass % self.reach as u64) as usize
+    /// The layer camera `camera`'s unit records pass `pass`'s picture on.
+    fn line(self, camera: usize, pass: u64) -> usize {
+        debug_assert!(camera < UNITS && self.reach > 0);
+        self.lines() + camera * self.reach + (pass % self.reach as u64) as usize
     }
 
-    /// The layer holding the picture unit `unit` recorded `late` passes
-    /// before pass `pass`. The one `reach` passes back is the one pass
-    /// `pass` records over, once every monitor has read it.
-    fn late(self, unit: usize, pass: u64, late: u32) -> usize {
+    fn late(self, camera: usize, pass: u64, late: u32) -> usize {
         assert!(
             (1..=self.reach).contains(&(late as usize)),
             "{late} passes late on a line {} long",
             self.reach
         );
-        self.line(unit, pass + (self.reach - late as usize) as u64)
+        self.line(camera, pass + (self.reach - late as usize) as u64)
+    }
+
+    /// The cameras whose units keep a line: none, with no reach.
+    fn recorded(self) -> std::ops::Range<usize> {
+        0..if self.reach > 0 { UNITS } else { 0 }
+    }
+
+    /// The slab holding the newest frame as pass `pass` begins.
+    fn newest(self, pass: u64) -> usize {
+        (pass % RING as u64) as usize
     }
 }
 
@@ -209,21 +207,16 @@ pub(crate) struct Edge {
     pub(crate) cut: f32,
 }
 
-/// The edges of monitor `m`'s pass `pass`, while the newest frame sits in
-/// ring slab `newest`.
+/// The edges of monitor `m`'s pass `pass`.
 ///
 /// A camera on time fans out over its beam splitter, since a camera
-/// watching two monitors is two taps. A camera arriving late is one tap on
-/// the picture its unit recorded, the glass already in it. The seed is
-/// exactly one tap and carries no camera; it reads the layer
-/// [`Feedback::write_seed`] wrote its frame to.
-pub(crate) fn taps_of(
-    params: &Params,
-    m: usize,
-    newest: usize,
-    pass: u64,
-) -> impl Iterator<Item = Edge> + '_ {
+/// watching two monitors is two taps; a late one is one tap on the picture
+/// its unit recorded, the glass already in it. The seed is exactly one tap
+/// and carries no camera; it reads the layer [`Feedback::write_seed`] wrote
+/// its frame to.
+pub(crate) fn taps_of(params: &Params, m: usize, pass: u64) -> impl Iterator<Item = Edge> + '_ {
     let shape = Shape::of(params);
+    let newest = shape.newest(pass);
     let feed = params.rig.feed(m);
     let through_cameras = (0..params.cameras.len())
         .filter(move |c| feed.cut(*c) > 0.0)
@@ -250,8 +243,6 @@ pub(crate) fn taps_of(
     through_cameras.chain(straight_in)
 }
 
-/// Camera `c`'s view of the monitors in ring slab `slab`, `passed` and `cut`
-/// of it: one edge per monitor its glass shows.
 fn looks(
     params: &Params,
     c: usize,
@@ -273,9 +264,9 @@ fn looks(
         })
 }
 
-/// What a tap came through: one of the graph's cameras live, a camera's
-/// picture off its delay unit's line, or the seed on its way in past the
-/// switcher, which is what the key is judged on.
+/// What a tap came through: one of the graph's cameras, live or off its
+/// unit's line, or the seed on its way in past the switcher, which is what
+/// the key is judged on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Through {
     Camera(usize),
@@ -311,9 +302,9 @@ impl Tap {
     }
 }
 
-/// One pass's uniforms — a monitor's, or a delay unit's recording — flipped
-/// by hand in `shaders/feedback.wgsl`, which documents what each lane
-/// carries. The sizes are held together by `min_binding_size` below.
+/// Per-pass uniforms, flipped by hand in `shaders/feedback.wgsl`, which
+/// documents what each lane carries. The sizes are held together by
+/// `min_binding_size` below.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -339,8 +330,8 @@ struct Uniforms {
     taps: [Tap; MAX_TAPS],
 }
 
-/// Uniform slots sit this far apart, a monitor's each and then a unit's
-/// each: WebGPU's guaranteed dynamic-offset alignment.
+/// Uniform slots sit this far apart: WebGPU's guaranteed dynamic-offset
+/// alignment.
 const UNIFORM_STRIDE: u64 = (std::mem::size_of::<Uniforms>() as u64).next_multiple_of(256);
 
 pub struct Feedback {
@@ -353,8 +344,6 @@ pub struct Feedback {
     /// Render targets, `layer_views[slab][monitor]`. Monitors only: an input
     /// layer is never drawn to, and never blanked.
     layer_views: Vec<Vec<wgpu::TextureView>>,
-    /// Each line's layers in turn, which the recordings draw to and a blank
-    /// empties.
     line_views: Vec<wgpu::TextureView>,
     /// One per slab, for the passes that write that slab: the bank bound as
     /// the layers below it and the layers above it, since a pass may not
@@ -364,12 +353,8 @@ pub struct Feedback {
     writing: Vec<wgpu::BindGroup>,
     /// The whole bank, for the passes that write none of it.
     whole: wgpu::BindGroup,
-    /// The ring and the seed, for the recordings: every layer below the
-    /// lines, so none of the layers a recording draws to.
+    /// Every layer below the lines, for the recordings.
     recording: wgpu::BindGroup,
-    /// The ring slab holding the newest frame — the one the present pass
-    /// shows and a camera on time reads.
-    newest: usize,
     /// Passes stepped so far: the clock a router output's
     /// [`crate::params::Cadence`] runs on.
     frame: u64,
@@ -606,9 +591,6 @@ impl Feedback {
             writing,
             whole,
             recording,
-            // The ring is zero-initialised, so every slab is a black frame
-            // and which one is newest does not matter yet.
-            newest: 0,
             frame: 0,
             uniforms,
             scratch: Vec::new(),
@@ -667,8 +649,6 @@ impl Feedback {
         );
     }
 
-    /// The dynamic offset that binds uniform slot `slot`: monitor `m`'s is
-    /// slot `m`.
     pub(crate) fn uniform_offset(&self, slot: usize) -> u32 {
         (UNIFORM_STRIDE * slot as u64) as u32
     }
@@ -742,9 +722,10 @@ impl Feedback {
         // monitor, which is the identity framing carried through the same
         // transform every camera's is.
         let square_on = sample_transform(&Framing::identity(), aspect);
-        // The other slab holds the frame before the newest, which no camera
-        // reads any more, so it is the one a pass draws on.
-        let next = (self.newest + 1) % RING;
+        let (newest, next) = (
+            self.shape.newest(self.frame),
+            self.shape.newest(self.frame + 1),
+        );
         let (split, above) = (
             self.shape.monitor(next, 0),
             self.shape.monitor(next, 0) + self.shape.monitors,
@@ -759,7 +740,7 @@ impl Feedback {
             let mut taps = [Tap::zeroed(); MAX_TAPS];
             let mut count = 0usize;
             let mut seed = -1.0;
-            for edge in taps_of(params, m, self.newest, self.frame) {
+            for edge in taps_of(params, m, self.frame) {
                 let (sampled, gain) = match edge.through {
                     Through::Camera(c) => (
                         mirror.then(&framings[crate::rig::SHAFT_OF[c]]),
@@ -812,13 +793,11 @@ impl Feedback {
                 bytemuck::bytes_of(&uniforms),
             );
         }
-        // A unit's picture is what its camera's lens sees: the glass and the
-        // shaft's framing, and no cable, no key and no front panel.
-        for unit in (0..UNITS).filter(|_| self.shape.reach > 0) {
-            let framing = framings[crate::rig::SHAFT_OF[unit]];
+        for camera in self.shape.recorded() {
+            let framing = framings[crate::rig::SHAFT_OF[camera]];
             let mut uniforms = Uniforms::zeroed();
             let mut count = 0usize;
-            for edge in looks(params, unit, self.newest, 1.0, 1.0) {
+            for edge in looks(params, camera, newest, 1.0, 1.0) {
                 uniforms.taps[count] =
                     Tap::new(framing, [edge.passed; 3], [edge.cut; 3], edge.layer);
                 count += 1;
@@ -828,7 +807,7 @@ impl Feedback {
             uniforms.key[2] = -1.0;
             queue.write_buffer(
                 &self.uniforms,
-                UNIFORM_STRIDE * self.recording_slot(unit) as u64,
+                UNIFORM_STRIDE * self.recording_slot(camera) as u64,
                 bytemuck::bytes_of(&uniforms),
             );
         }
@@ -852,7 +831,7 @@ impl Feedback {
                 aspect: wgpu::TextureAspect::All,
             };
             encoder.copy_texture_to_texture(
-                layer(self.newest),
+                layer(newest),
                 layer(next),
                 wgpu::Extent3d {
                     width: self.width,
@@ -893,24 +872,22 @@ impl Feedback {
         }
         // After every monitor's pass, which may still read the picture this
         // one records over, and off the slab those passes read.
-        for unit in (0..UNITS).filter(|_| self.shape.reach > 0) {
-            let view = &self.line_views[self.shape.line(unit, self.frame) - self.shape.lines()];
+        for camera in self.shape.recorded() {
+            let view = &self.line_views[self.shape.line(camera, self.frame) - self.shape.lines()];
             draw(
                 &mut encoder,
                 view,
                 &self.recorder,
                 &self.recording,
-                self.recording_slot(unit),
+                self.recording_slot(camera),
             );
         }
         queue.submit([encoder.finish()]);
-        self.newest = next;
         self.frame += 1;
     }
 
-    /// The uniform slot unit `unit`'s recording reads, past the monitors'.
-    fn recording_slot(&self, unit: usize) -> usize {
-        self.shape.monitors + unit
+    fn recording_slot(&self, camera: usize) -> usize {
+        self.shape.monitors + camera
     }
 }
 

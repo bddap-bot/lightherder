@@ -280,8 +280,6 @@ pub struct Shown {
     /// on its own camera direct — the one bit the select button turns, and a
     /// latch with no lamp on a fullscreen display is a footgun.
     pub program: bool,
-    /// Whether the focused camera reaches the focused monitor through its
-    /// delay unit's Delay output.
     pub inserted: bool,
     pub overlay: bool,
     pub solo: bool,

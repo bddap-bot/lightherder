@@ -308,8 +308,7 @@ pub struct Params {
     /// The frame delay units' reach: how many frames a unit's delay may be
     /// dialled up to, and so how many pictures each unit's line in the bank
     /// keeps. Bought at load, since a frame of it is another picture per
-    /// unit, so the knob runs to here and no further. Zero is a rig whose
-    /// units hold nothing back.
+    /// unit, so the knob runs to here and no further.
     pub reach: u32,
 }
 
@@ -401,8 +400,7 @@ pub enum Knob {
     Zoom,
     /// The camera's turn about its shaft.
     Rotation,
-    /// The frame delay unit on the camera's cable, in whole frames. Camera
-    /// 3 has none, and reads zero.
+    /// The frame delay unit on the camera's cable, in whole frames.
     Delay,
     Hue,
     Saturation,
@@ -708,14 +706,14 @@ impl Params {
     /// instrument has.
     pub fn describe(&self, focus: Focus) -> String {
         let reads = |knob: Knob| knob.reads(self.knob(knob, focus));
-        let unit = match focus.camera < crate::rig::UNITS {
-            true => format!("delay {}/{}", reads(Knob::Delay), self.reach),
-            false => "no delay unit".into(),
+        let unit = match self.rig.delays.get(focus.camera) {
+            Some(_) => format!("delay {}/{}", reads(Knob::Delay), self.reach),
+            None => "no delay unit".into(),
         };
-        let way = match self.rig.point(focus.camera, focus.monitor) {
+        let at = match self.rig.point(focus.camera, focus.monitor) {
             Some(point) => match self.rig.inserted[point as usize] {
-                true => format!(" via {}, delay in", point.name()),
-                false => format!(" via {}, delay out", point.name()),
+                true => format!(" at {}, delayed", point.name()),
+                false => format!(" at {}, live", point.name()),
             },
             None => String::new(),
         };
@@ -746,7 +744,7 @@ impl Params {
             },
             self.route(focus.monitor, focus.camera),
             focus.camera + 1,
-            way,
+            at,
             focus.switcher + 1,
             self.rig.switchers.len(),
             reads(Knob::Switcher),
@@ -1203,22 +1201,22 @@ mod tests {
     }
 
     #[test]
-    fn the_log_line_names_the_crosspoint_on_the_focused_way_and_whether_it_is_in() {
+    fn the_log_line_names_the_insertion_point_on_the_focused_feed_and_what_it_takes() {
         let mut params = crate::config::instrument();
         let focus = Focus::default();
         let line = |params: &Params, focus| params.describe(focus);
         assert!(
-            line(&params, focus).contains("of cam 1 via switcher A In1, delay in"),
+            line(&params, focus).contains("of cam 1 at switcher A In1, delayed\n"),
             "{}",
             line(&params, focus)
         );
         params.rig.insert(0, 0);
-        assert!(line(&params, focus).contains("via switcher A In1, delay out"));
+        assert!(line(&params, focus).contains("of cam 1 at switcher A In1, live\n"));
         params.rig.select(0);
-        assert!(line(&params, focus).contains("via A direct, delay in"));
+        assert!(line(&params, focus).contains("of cam 1 at A direct, delayed\n"));
         let three = focus.with(Node::Camera, 2);
         assert!(
-            !line(&params, three).contains("via"),
+            line(&params, three).contains("of cam 3\n"),
             "{}",
             line(&params, three)
         );

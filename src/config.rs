@@ -97,10 +97,8 @@ pub fn validate(params: &Params) -> Result<(), String> {
             }
         }
     }
-    // Bought in bank rather than in taps: a frame of reach is a picture per
-    // unit, and the lines are sized from it at load. A unit past the reach
-    // is caught by the walk over the knobs above, since the reach is the
-    // delay knob's rail.
+    // A unit past the reach is caught by the walk over the knobs above, since
+    // the reach is the delay knob's rail.
     if params.reach > Params::MAX_DELAY {
         return Err(format!(
             "the delay units reach {} frames; at most {}",
