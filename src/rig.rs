@@ -167,11 +167,22 @@ pub struct Rig {
     /// 0 is In1 whole, 1 is In2 whole.
     pub switchers: [f32; SWITCHERS],
     pub selects: [Select; SELECTS],
-    /// Passes between reversals of each switcher. Zero is the mode off, and
-    /// the only latch it has: the knob at its floor.
+    /// Passes from one beat of each switcher's period to the next. Zero is
+    /// the mode off, and the only latch it has: the knob at its floor.
     pub periods: [u32; SWITCHERS],
+    /// Passes the cut a beat of the period makes holds before the switcher
+    /// cuts back. Zero, or a cut as long as the period, holds it to the next
+    /// beat.
+    pub cuts: [u32; SWITCHERS],
     pub patterns: [Pattern; SWITCHERS],
     owed: [bool; SWITCHERS],
+    /// Whether each switcher's period holds it cut, so a knob turned under a
+    /// running period moves its next beat and never turns a cut the wrong
+    /// way.
+    over: [bool; SWITCHERS],
+    /// Whether each of the last eight beats reversed each switcher, the last
+    /// in the lowest bit: what a late tap asks of a pass already played.
+    turned: [u8; SWITCHERS],
     /// How many frames each delay unit holds its camera's picture back, up
     /// to the graph's reach.
     pub delays: [u32; UNITS],
@@ -224,6 +235,7 @@ pub const MAX_PERIOD: u32 = 60;
 pub const SIXTEENTH: u64 = 8;
 pub const BAR: u64 = 16 * SIXTEENTH;
 const _: () = assert!(BAR == u128::BITS as u64);
+const _: () = assert!(SIXTEENTH / 2 <= u8::BITS as u64);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pattern(u128);
@@ -312,8 +324,11 @@ impl Rig {
         switchers: [1.0; SWITCHERS],
         selects: [Select::Program; SELECTS],
         periods: [0; SWITCHERS],
+        cuts: [0; SWITCHERS],
         patterns: [Pattern(0); SWITCHERS],
         owed: [false; SWITCHERS],
+        over: [false; SWITCHERS],
+        turned: [0; SWITCHERS],
         delays: [0; UNITS],
         inserted: [true; POINTS],
     };
@@ -406,25 +421,42 @@ impl Rig {
         self.switchers[switcher] = 1.0 - self.switchers[switcher];
     }
 
-    fn reverses(&self, switcher: usize, pass: u64) -> bool {
-        let period = u64::from(self.periods[switcher]);
-        (period != 0 && pass.is_multiple_of(period)) || self.patterns[switcher].beats(pass)
+    /// Whether switcher `i`'s period turns it on `pass`: over on a beat, and
+    /// back once the cut has held its length — or on the next beat, which is
+    /// a reversal on every beat. At its floor the period lets go of a cut it
+    /// holds.
+    fn period(&mut self, i: usize, pass: u64) -> bool {
+        let (period, cut) = (u64::from(self.periods[i]), u64::from(self.cuts[i]));
+        let turns = match period {
+            0 => self.over[i],
+            _ if self.over[i] && (1..period).contains(&cut) => pass % period >= cut,
+            _ => pass.is_multiple_of(period),
+        };
+        self.over[i] ^= turns;
+        turns
     }
 
     pub fn beat(&mut self, pass: u64) {
         for i in 0..SWITCHERS {
-            if std::mem::take(&mut self.owed[i]) || self.reverses(i, pass) {
+            let period = self.period(i, pass);
+            let turns = std::mem::take(&mut self.owed[i]) || period || self.patterns[i].beats(pass);
+            if turns {
                 self.flip(i);
             }
+            self.turned[i] = (self.turned[i] << 1) | u8::from(turns);
         }
     }
 
+    /// A tap on `pass`, the pass about to be played.
     pub fn tap(&mut self, switcher: usize, pass: u64, quantize: bool) {
         let at = match quantize {
             true => (pass + SIXTEENTH / 2) / SIXTEENTH * SIXTEENTH,
             false => pass,
         };
-        self.owed[switcher] |= at < pass && !self.reverses(switcher, at);
+        if at < pass {
+            let turned = (self.turned[switcher] >> (pass - 1 - at)) & 1 == 1;
+            self.owed[switcher] |= !turned && !self.patterns[switcher].beats(at);
+        }
         self.patterns[switcher].add(at);
     }
 
@@ -765,6 +797,91 @@ mod tests {
             let mut rig = Rig::IDENTITY;
             assert_eq!(heard(&mut rig, 1..=20, &taps)[1], [17], "{taps:?}");
         }
+    }
+
+    #[test]
+    fn a_cut_length_holds_each_beat_of_the_period_that_long_and_then_cuts_back() {
+        let mut rig = Rig::IDENTITY;
+        rig.periods[2] = 8;
+        rig.cuts[2] = 3;
+        assert_eq!(
+            heard(&mut rig, 1..=30, &[]),
+            [vec![], vec![], vec![8, 11, 16, 19, 24, 27], vec![]]
+        );
+        for cut in [0, 8, 9, MAX_PERIOD] {
+            let mut rig = Rig::IDENTITY;
+            rig.periods[2] = 8;
+            rig.cuts[2] = cut;
+            assert_eq!(heard(&mut rig, 1..=30, &[])[2], [8, 16, 24], "cut {cut}");
+        }
+    }
+
+    #[test]
+    fn a_knob_turned_under_a_running_period_never_turns_its_cut_the_wrong_way() {
+        let away = |rig: &Rig| rig.switchers[0] != Rig::IDENTITY.switchers[0];
+        for (from, to) in [(8, 5), (8, 12), (12, 8), (5, 5)] {
+            for cuts in [[0, 3], [3, 0], [1, 7], [7, 1], [4, 13], [13, 4], [2, 2]] {
+                for turned_at in u64::from(from)..3 * u64::from(from) {
+                    let mut rig = Rig::IDENTITY;
+                    rig.periods[0] = from;
+                    rig.cuts[0] = cuts[0];
+                    heard(&mut rig, 1..=turned_at - 1, &[]);
+                    rig.periods[0] = to;
+                    rig.cuts[0] = cuts[1];
+                    let (period, cut) = (u64::from(to), u64::from(cuts[1]));
+                    for pass in turned_at..turned_at + 4 * period {
+                        let was = away(&rig);
+                        rig.beat(pass);
+                        let case = format!("{from} {cuts:?} -> {to} at {turned_at}: pass {pass}");
+                        match (1..period).contains(&cut) {
+                            true if pass >= turned_at + 2 * period => {
+                                assert_eq!(away(&rig), pass % period < cut, "{case}");
+                            }
+                            true => {}
+                            false => {
+                                assert!(away(&rig) == was || pass.is_multiple_of(period), "{case}")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_cut_shortened_past_where_it_stands_comes_back_on_the_next_pass() {
+        let mut rig = Rig::IDENTITY;
+        rig.periods[0] = 16;
+        rig.cuts[0] = 8;
+        assert_eq!(heard(&mut rig, 1..=20, &[])[0], [16]);
+        rig.cuts[0] = 2;
+        assert_eq!(heard(&mut rig, 21..=40, &[])[0], [21, 32, 34]);
+    }
+
+    #[test]
+    fn the_period_at_its_floor_lets_go_of_the_cut_it_holds() {
+        for cut in [0, 6] {
+            let mut rig = Rig::IDENTITY;
+            rig.periods[0] = 16;
+            rig.cuts[0] = cut;
+            assert_eq!(heard(&mut rig, 1..=17, &[])[0], [16], "cut {cut}");
+            rig.periods[0] = 0;
+            assert_eq!(heard(&mut rig, 18..=60, &[])[0], [18], "cut {cut}");
+            assert_eq!(rig.switchers, Rig::IDENTITY.switchers, "cut {cut}");
+        }
+    }
+
+    #[test]
+    fn a_late_tap_on_the_pass_a_cut_came_back_on_is_that_reversal() {
+        let mut rig = Rig::IDENTITY;
+        rig.periods[0] = 16;
+        rig.cuts[0] = 8;
+        let every_sixteenth: Vec<u64> = (2..=2 * BAR / 8).map(|k| 8 * k).collect();
+        assert_eq!(
+            heard(&mut rig, 1..=2 * BAR, &[(26, 0, true)])[0],
+            every_sixteenth
+        );
+        assert!(rig.patterns[0].beats(24));
     }
 
     #[test]

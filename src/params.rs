@@ -415,9 +415,12 @@ pub enum Knob {
     /// is In2 whole. The routing is these four and the four selects, and
     /// nothing else.
     Switcher,
-    /// Passes between reversals of the focused switcher, the original's
-    /// period mode. Zero is the mode off.
+    /// Passes from one beat of the focused switcher's period to the next,
+    /// the original's period mode. Zero is the mode off.
     Period,
+    /// Passes each cut of the period holds before the switcher cuts back:
+    /// the original's other period knob.
+    Cut,
 }
 
 impl Limit {
@@ -481,7 +484,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 12] = [
+    pub const ALL: [Knob; 13] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::Delay,
@@ -494,6 +497,7 @@ impl Knob {
         Knob::FrameRate,
         Knob::Switcher,
         Knob::Period,
+        Knob::Cut,
     ];
 
     /// The one name a knob has: on the overlay, in the log and in an error.
@@ -511,6 +515,7 @@ impl Knob {
             Knob::FrameRate => "frame rate",
             Knob::Switcher => "switcher",
             Knob::Period => "period",
+            Knob::Cut => "cut length",
         }
     }
 
@@ -521,7 +526,7 @@ impl Knob {
             }
             Knob::Rotation | Knob::Hue | Knob::Brightness => format!("{value:+.3}"),
             Knob::Temperature => format!("{value:+.1}"),
-            Knob::Delay | Knob::Period => format!("{}", value as u32),
+            Knob::Delay | Knob::Period | Knob::Cut => format!("{}", value as u32),
             Knob::FrameRate => format!("{}", Cadence::ALL[value as usize].fps()),
         }
     }
@@ -536,7 +541,7 @@ impl Knob {
             | Knob::Temperature
             | Knob::Sharpness
             | Knob::FrameRate => Node::Monitor,
-            Knob::Switcher | Knob::Period => Node::Switcher,
+            Knob::Switcher | Knob::Period | Knob::Cut => Node::Switcher,
         }
     }
 
@@ -566,7 +571,7 @@ impl Knob {
             // shows its grain and nothing else.
             Knob::Sharpness => Limit::Clamp(0.0, 2.0),
             Knob::FrameRate => Limit::Whole(Cadence::ALL.len() as u32 - 1),
-            Knob::Period => Limit::Whole(crate::rig::MAX_PERIOD),
+            Knob::Period | Knob::Cut => Limit::Whole(crate::rig::MAX_PERIOD),
             // A crossfade stands between its two inputs and nowhere else.
             Knob::Switcher => Limit::Clamp(0.0, 1.0),
         }
@@ -638,6 +643,7 @@ impl Params {
                 .position(|c| *c == mon.cadence)
                 .expect("every cadence is on the ladder") as f32,
             Knob::Period => self.rig.periods[focus.switcher] as f32,
+            Knob::Cut => self.rig.cuts[focus.switcher] as f32,
             Knob::Switcher => self.rig.switchers[focus.switcher],
         }
     }
@@ -661,6 +667,7 @@ impl Params {
                         }
                     }
                     Knob::Period => self.rig.periods[focus.switcher] = count,
+                    Knob::Cut => self.rig.cuts[focus.switcher] = count,
                     Knob::FrameRate => {
                         self.monitors[focus.monitor].cadence = Cadence::ALL[count as usize]
                     }
@@ -696,7 +703,7 @@ impl Params {
             Knob::Temperature => &mut self.monitors[focus.monitor].colour.temperature,
             Knob::Sharpness => &mut self.monitors[focus.monitor].sharpness,
             Knob::Switcher => &mut self.rig.switchers[focus.switcher],
-            Knob::Delay | Knob::Period | Knob::FrameRate => {
+            Knob::Delay | Knob::Period | Knob::Cut | Knob::FrameRate => {
                 unreachable!("nudge() rounds a count to whole steps")
             }
         }
@@ -721,7 +728,7 @@ impl Params {
             "cam {}/{}: zoom {}  rot {}  {}\n\
              mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \
              temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}{}\n\
-             sw {}/{}: switcher {}  period {}  pattern {}",
+             sw {}/{}: switcher {}  period {}  cut {}  pattern {}",
             focus.camera + 1,
             self.cameras.len(),
             reads(Knob::Zoom),
@@ -749,6 +756,7 @@ impl Params {
             self.rig.switchers.len(),
             reads(Knob::Switcher),
             reads(Knob::Period),
+            reads(Knob::Cut),
             self.rig.patterns[focus.switcher],
         )
     }
@@ -787,7 +795,7 @@ mod tests {
     /// nothing else, so a fraction of one is a turn it rounds away.
     fn step_for(knob: Knob, step: f32) -> f32 {
         match knob {
-            Knob::Delay | Knob::Period | Knob::FrameRate => step.signum(),
+            Knob::Delay | Knob::Period | Knob::Cut | Knob::FrameRate => step.signum(),
             _ => step,
         }
     }
@@ -949,6 +957,7 @@ mod tests {
         assert_eq!(params.shafts[0].zoom, 4.0);
         assert_eq!(params.rig.delays, [params.reach, 0]);
         assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
+        assert_eq!(params.rig.cuts[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.switchers[0], 1.0);
         assert_eq!(mon.colour.saturation, 4.0);
         assert_eq!(mon.colour.brightness, 0.5);
@@ -965,6 +974,7 @@ mod tests {
         assert_eq!(params.shafts[0].zoom, 0.25);
         assert_eq!(params.rig.delays, [0, 0]);
         assert_eq!(params.rig.periods[0], 0);
+        assert_eq!(params.rig.cuts[0], 0);
         assert_eq!(params.rig.switchers[0], 0.0);
         assert_eq!(mon.colour.saturation, 0.0);
         assert_eq!(mon.colour.brightness, -0.5);
@@ -1072,7 +1082,7 @@ mod tests {
 
     /// The independent word on where identity is, beside the instrument
     /// [`Knob::identity`] reads it from: the two must agree or one lies.
-    const IDENTITIES: [(Knob, f32); 12] = [
+    const IDENTITIES: [(Knob, f32); 13] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
         (Knob::Delay, 0.0),
@@ -1085,6 +1095,7 @@ mod tests {
         (Knob::FrameRate, 0.0),
         (Knob::Switcher, 1.0),
         (Knob::Period, 0.0),
+        (Knob::Cut, 0.0),
     ];
 
     #[test]
@@ -1144,22 +1155,28 @@ mod tests {
     }
 
     #[test]
-    fn the_period_knob_lands_on_whole_passes() {
-        let mut params = p();
-        let focus = Focus::default();
-        assert_eq!(
-            Knob::Period.limit(&params),
-            Limit::Whole(crate::rig::MAX_PERIOD)
-        );
-        params.set(Knob::Period, 2.4, focus);
-        assert_eq!(params.rig.periods[0], 2);
-        params.set(Knob::Period, 2.6, focus);
-        assert_eq!(params.knob(Knob::Period, focus), 3.0);
-        params.set(Knob::Period, 900.0, focus);
-        assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
-        assert!(params.describe(focus).contains("period 60"));
-        params.reset(Knob::Period, focus);
-        assert_eq!(params.rig.periods[0], 0);
+    fn the_period_and_its_cut_length_land_on_whole_passes() {
+        let field = |params: &Params, knob| match knob {
+            Knob::Period => params.rig.periods[0],
+            _ => params.rig.cuts[0],
+        };
+        for (knob, said) in [
+            (Knob::Period, "period 60  cut 0"),
+            (Knob::Cut, "period 0  cut 60"),
+        ] {
+            let mut params = p();
+            let focus = Focus::default();
+            assert_eq!(knob.limit(&params), Limit::Whole(crate::rig::MAX_PERIOD));
+            params.set(knob, 2.4, focus);
+            assert_eq!(field(&params, knob), 2);
+            params.set(knob, 2.6, focus);
+            assert_eq!(params.knob(knob, focus), 3.0);
+            params.set(knob, 900.0, focus);
+            assert_eq!(field(&params, knob), crate::rig::MAX_PERIOD);
+            assert!(params.describe(focus).contains(said), "{knob:?}");
+            params.reset(knob, focus);
+            assert_eq!(field(&params, knob), 0);
+        }
     }
 
     #[test]
@@ -1549,7 +1566,7 @@ mod tests {
             let (low, high) = knob.limit(&crate::config::instrument()).ends();
             // A count has no field below zero to poison.
             let pasts = match knob {
-                Knob::Delay | Knob::Period => vec![high + 1.0],
+                Knob::Delay | Knob::Period | Knob::Cut => vec![high + 1.0],
                 Knob::FrameRate => continue,
                 _ => vec![low - 1.0, high + 1.0],
             };
@@ -1558,6 +1575,7 @@ mod tests {
                 match knob {
                     Knob::Delay => params.rig.delays[focus.camera] = past as u32,
                     Knob::Period => params.rig.periods[focus.switcher] = past as u32,
+                    Knob::Cut => params.rig.cuts[focus.switcher] = past as u32,
                     _ => *params.knob_mut(knob, focus) = past,
                 }
                 let why = crate::config::validate(&params)
