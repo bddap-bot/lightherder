@@ -6,14 +6,17 @@
 //! rendered, and past it lie the delay units' lines, each a ring of the
 //! pictures its camera took — so what a monitor's pass samples is one layer
 //! index and the shader never learns which kind it got.
-//! Everything between a monitor and what feeds it — the routing matrix, each
-//! camera's beam splitter, each camera's gain — flattens on the CPU into a
-//! list of *taps*: (source layer, sampling affine, weight).
+//! Everything between a switcher and what feeds it — each camera's beam
+//! splitter, each camera's gain — flattens on the CPU into a list of *taps*:
+//! (source layer, sampling affine, weight).
 //! Sampling is linear, so a camera looking through a splitter at a blend of
 //! monitors is exactly the weighted sum of its per-monitor samples; no
 //! intermediate blend texture exists because none is needed. An input is one
-//! tap of its own: the switcher hands its layer straight to the monitor,
-//! there being no camera between the two to frame or colour it.
+//! tap of its own: the switcher takes its layer straight in, there being no
+//! camera between the two to frame or colour it. The switchers themselves
+//! run in the shader, a *stage* each, the chain of them from the deepest
+//! out, since a key's verdict is the picture on its In2, texel by texel;
+//! each stage's In1 taps follow the stage before's.
 //!
 //! A delay unit is the one place a camera's picture is kept: it has to
 //! outlast the monitors it was taken of.
@@ -22,7 +25,7 @@ use bytemuck::Zeroable;
 
 use crate::affine::{flip_uv, sample_transform, Affine2, Framing};
 use crate::params::Params;
-use crate::rig::UNITS;
+use crate::rig::{Keying, Rig, Source, Step, Switcher, UNITS};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
@@ -49,6 +52,11 @@ const _: () = assert!(
      shader that wants MORE than the binding holds — grown here alone, the \
      taps past the array's end read whatever the implementation clamps to"
 );
+
+/// Most switchers one monitor's wiring passes: each once at most.
+const STAGES: usize = crate::rig::SWITCHERS;
+
+const _: () = assert!(STAGES == 4, "shaders/feedback.wgsl spells this number too");
 
 /// The most GPU memory a bank may ask for. A cap in bytes rather than in
 /// pixels because it is the layers that do the multiplying — two frames of
@@ -197,59 +205,48 @@ impl Shape {
 }
 
 /// One edge of a pass: what the light came through, the source layer, and
-/// the share of it the monitor shows times the share of that the glass
-/// passes — where the seed's key has passed, and where it has cut.
+/// the share of it the glass passes.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Edge {
-    pub(crate) through: Through,
-    pub(crate) layer: usize,
-    pub(crate) passed: f32,
-    pub(crate) cut: f32,
+struct Edge {
+    through: Through,
+    layer: usize,
+    share: f32,
 }
 
-/// The edges of monitor `m`'s pass `pass`.
+/// The edges one source lands on its switcher input by, on pass `pass`.
 ///
 /// A camera on time fans out over its beam splitter, since a camera
 /// watching two monitors is two taps; a late one is one tap on the picture
 /// its unit recorded, the glass already in it. The seed is exactly one tap
 /// and carries no camera; it reads the layer [`Feedback::write_seed`] wrote
 /// its frame to.
-pub(crate) fn taps_of(params: &Params, m: usize, pass: u64) -> impl Iterator<Item = Edge> + '_ {
+fn edges(params: &Params, source: Source, pass: u64) -> impl Iterator<Item = Edge> + '_ {
     let shape = Shape::of(params);
-    let newest = shape.newest(pass);
-    let feed = params.rig.feed(m);
-    let through_cameras = (0..params.cameras.len())
-        .filter(move |c| feed.cut(*c) > 0.0)
-        .flat_map(move |c| {
-            let (passed, cut) = (feed.cameras[c], feed.cut(c));
-            let late = params.rig.late(c, m);
-            let recorded = (late > 0).then(|| Edge {
-                through: Through::Line(c),
-                layer: shape.late(c, pass, late),
-                passed,
-                cut,
-            });
-            let live = (late == 0).then(|| looks(params, c, newest, passed, cut));
-            recorded.into_iter().chain(live.into_iter().flatten())
-        });
-    let straight_in = (feed.seed > 0.0)
-        .then(move || Edge {
-            through: Through::Seed,
-            layer: shape.seed(),
-            passed: feed.seed,
-            cut: 0.0,
-        })
-        .into_iter();
-    through_cameras.chain(straight_in)
+    let (recorded, live) = match source {
+        Source::Camera { camera, late: 0 } => {
+            (None, Some(looks(params, camera, shape.newest(pass))))
+        }
+        Source::Camera { camera, late } => (
+            Some(Edge {
+                through: Through::Line(camera),
+                layer: shape.late(camera, pass, late),
+                share: 1.0,
+            }),
+            None,
+        ),
+        Source::Seed => (
+            Some(Edge {
+                through: Through::Seed,
+                layer: shape.seed(),
+                share: 1.0,
+            }),
+            None,
+        ),
+    };
+    recorded.into_iter().chain(live.into_iter().flatten())
 }
 
-fn looks(
-    params: &Params,
-    c: usize,
-    slab: usize,
-    passed: f32,
-    cut: f32,
-) -> impl Iterator<Item = Edge> + '_ {
+fn looks(params: &Params, c: usize, slab: usize) -> impl Iterator<Item = Edge> + '_ {
     let shape = Shape::of(params);
     params.cameras[c]
         .look
@@ -259,16 +256,14 @@ fn looks(
         .map(move |(src, look)| Edge {
             through: Through::Camera(c),
             layer: shape.monitor(slab, src),
-            passed: passed * look,
-            cut: cut * look,
+            share: *look,
         })
 }
 
 /// What a tap came through: one of the graph's cameras, live or off its
-/// unit's line, or the seed on its way in past the switcher, which is what
-/// the key is judged on.
+/// unit's line, or the seed on its way in to the switcher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Through {
+enum Through {
     Camera(usize),
     Line(usize),
     Seed,
@@ -282,22 +277,45 @@ struct Tap {
     /// 16-byte stride a uniform array demands; there is no missing term.
     row0: [f32; 4],
     row1: [f32; 4],
-    /// rgb: routing weight x splitter weight x camera gain, per channel,
-    /// where the seed's key passes. a: the source layer index.
-    passes: [f32; 4],
-    /// rgb: the same where the key cuts — the seed's tap goes to nothing and
-    /// the taps it was keyed over stand whole. a: padding.
-    cuts: [f32; 4],
+    /// rgb: splitter weight x camera gain, per channel. a: the source layer
+    /// index.
+    weight: [f32; 4],
 }
 
 impl Tap {
-    fn new(sampled: Affine2, passed: [f32; 3], cut: [f32; 3], layer: usize) -> Tap {
+    fn new(sampled: Affine2, weight: [f32; 3], layer: usize) -> Tap {
         let rows = sampled.rows();
         Tap {
             row0: [rows[0][0], rows[0][1], rows[0][2], 0.0],
             row1: [rows[1][0], rows[1][1], rows[1][2], 0.0],
-            passes: [passed[0], passed[1], passed[2], layer as f32],
-            cuts: [cut[0], cut[1], cut[2], 0.0],
+            weight: [weight[0], weight[1], weight[2], layer as f32],
+        }
+    }
+}
+
+/// One switcher on a monitor's chain, flipped in `shaders/feedback.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Stage {
+    /// x: one past the last tap of its In1, whose taps follow the stage
+    /// before's. yzw: padding.
+    in1: [f32; 4],
+    /// x: the crossfade. y: the clip, where 0 is the key off. z: the edge's
+    /// width. w: 1 on a chroma key, 0 on a luma key.
+    key: [f32; 4],
+}
+
+impl Stage {
+    fn new(rig: &Rig, switcher: Switcher, end: usize) -> Stage {
+        let s = switcher as usize;
+        let key = rig.keys[s];
+        let chroma = match key.keying {
+            Keying::Luma => 0.0,
+            Keying::Chroma => 1.0,
+        };
+        Stage {
+            in1: [end as f32, 0.0, 0.0, 0.0],
+            key: [rig.switchers[s], key.clip, 1.0 / key.gain, chroma],
         }
     }
 }
@@ -313,21 +331,27 @@ struct Uniforms {
     chroma: [[f32; 4]; 3],
     /// x: brightness. y: contrast. zw: padding.
     levels: [f32; 4],
-    /// x: tap count. y: this monitor's own layer, for the present pass.
-    /// zw: where the bank splits round what this pass writes — the first
-    /// layer past the lower view, and the first layer of the upper one.
+    /// x: how many taps land on the program before any switcher runs — every
+    /// tap, on a pass with none. y: this monitor's own layer, for the present
+    /// pass. zw: where the bank splits round what this pass writes — the
+    /// first layer past the lower view, and the first layer of the upper one.
     info: [f32; 4],
     /// x: the unsharp mask, [`crate::params::Monitor::sharpness`]. yzw:
     /// padding.
     analog: [f32; 4],
-    /// NTSC luma, from [`crate::params::luma_row`]. Passed rather than
-    /// written into the shader so there is one copy of it in the crate.
+    /// The keys' two measures, [`crate::params::luma_row`] and
+    /// [`crate::params::blue_row`], in xyz. Passed rather than written into
+    /// the shader so there is one copy of each in the crate.
     luma: [f32; 4],
-    /// The switcher's keyer, judged on the seed: x luma threshold, y
-    /// softness, z the seed's tap index, or -1 when this monitor carries no
-    /// seed and the key passes everything. w: padding.
-    key: [f32; 4],
+    blue: [f32; 4],
+    /// x: how many of `stages` run. yzw: padding.
+    chain: [f32; 4],
+    stages: [Stage; STAGES],
     taps: [Tap; MAX_TAPS],
+}
+
+fn measure(row: [f32; 3]) -> [f32; 4] {
+    [row[0], row[1], row[2], 0.0]
 }
 
 /// Uniform slots sit this far apart: WebGPU's guaranteed dynamic-offset
@@ -738,29 +762,36 @@ impl Feedback {
             // output is.
             let mirror = flip_uv(monitor.flip);
             let mut taps = [Tap::zeroed(); MAX_TAPS];
-            let mut count = 0usize;
-            let mut seed = -1.0;
-            for edge in taps_of(params, m, self.frame) {
-                let (sampled, gain) = match edge.through {
-                    Through::Camera(c) => (
-                        mirror.then(&framings[crate::rig::SHAFT_OF[c]]),
-                        params.cameras[c].gain,
-                    ),
-                    // Framed when it was recorded: all that is left is the
-                    // cable and the router output.
-                    Through::Line(c) => (mirror, params.cameras[c].gain),
-                    // There is no camera between the switcher and the seed,
-                    // so every stage a camera would have takes its identity
-                    // and the layer arrives as itself.
-                    Through::Seed => {
-                        seed = count as f32;
-                        (mirror.then(&square_on), [1.0; 3])
+            let mut stages = [Stage::zeroed(); STAGES];
+            let (mut count, mut program, mut staged) = (0usize, 0usize, 0usize);
+            params.rig.wiring(m, |step| match step {
+                Step::Program(source) | Step::In1(source) => {
+                    for edge in edges(params, source, self.frame) {
+                        let (sampled, gain) = match edge.through {
+                            Through::Camera(c) => (
+                                mirror.then(&framings[crate::rig::SHAFT_OF[c]]),
+                                params.cameras[c].gain,
+                            ),
+                            // Framed when it was recorded: all that is left is
+                            // the cable and the router output.
+                            Through::Line(c) => (mirror, params.cameras[c].gain),
+                            // There is no camera between the switcher and the
+                            // seed, so every stage a camera would have takes
+                            // its identity and the layer arrives as itself.
+                            Through::Seed => (mirror.then(&square_on), [1.0; 3]),
+                        };
+                        taps[count] = Tap::new(sampled, gain.map(|g| edge.share * g), edge.layer);
+                        count += 1;
                     }
-                };
-                let scaled = |share: f32| gain.map(|g| share * g);
-                taps[count] = Tap::new(sampled, scaled(edge.passed), scaled(edge.cut), edge.layer);
-                count += 1;
-            }
+                    if let Step::Program(_) = step {
+                        program = count;
+                    }
+                }
+                Step::Mix(switcher) => {
+                    stages[staged] = Stage::new(&params.rig, switcher, count);
+                    staged += 1;
+                }
+            });
 
             let chroma = monitor.colour.chroma_matrix();
             let uniforms = Uniforms {
@@ -773,18 +804,17 @@ impl Feedback {
                     HEADROOM,
                     0.0,
                 ],
-                info: [count as f32, (split + m) as f32, split as f32, above as f32],
-                analog: [monitor.sharpness, 0.0, 0.0, 0.0],
-                luma: {
-                    let l = crate::params::luma_row();
-                    [l[0], l[1], l[2], 0.0]
-                },
-                key: [
-                    params.input.key.threshold,
-                    params.input.key.softness,
-                    seed,
-                    0.0,
+                info: [
+                    program as f32,
+                    (split + m) as f32,
+                    split as f32,
+                    above as f32,
                 ],
+                analog: [monitor.sharpness, 0.0, 0.0, 0.0],
+                luma: measure(crate::params::luma_row()),
+                blue: measure(crate::params::blue_row()),
+                chain: [staged as f32, 0.0, 0.0, 0.0],
+                stages,
                 taps,
             };
             queue.write_buffer(
@@ -797,14 +827,12 @@ impl Feedback {
             let framing = framings[crate::rig::SHAFT_OF[camera]];
             let mut uniforms = Uniforms::zeroed();
             let mut count = 0usize;
-            for edge in looks(params, camera, newest, 1.0, 1.0) {
-                uniforms.taps[count] =
-                    Tap::new(framing, [edge.passed; 3], [edge.cut; 3], edge.layer);
+            for edge in looks(params, camera, newest) {
+                uniforms.taps[count] = Tap::new(framing, [edge.share; 3], edge.layer);
                 count += 1;
             }
             let lines = self.shape.lines() as f32;
             uniforms.info = [count as f32, 0.0, lines, lines];
-            uniforms.key[2] = -1.0;
             queue.write_buffer(
                 &self.uniforms,
                 UNIFORM_STRIDE * self.recording_slot(camera) as u64,

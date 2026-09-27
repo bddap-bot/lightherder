@@ -64,18 +64,6 @@ pub fn validate(params: &Params) -> Result<(), String> {
             ));
         }
     }
-    // The switcher's key is fixed character rather than a knob, so this is
-    // the only place its numbers are decided.
-    let key = params.input.key;
-    if !(key.threshold.is_finite() && key.softness.is_finite())
-        || key.threshold < 0.0
-        || key.softness < 0.0
-    {
-        return Err(format!(
-            "the seed's key is {} over {}; both are finite and >= 0",
-            key.threshold, key.softness
-        ));
-    }
     // Every knob, at every focus that names a value of its own, against the
     // one definition of its travel. This is the whole of the per-value
     // checking: a rail spelled a second time here is a rail the two could
@@ -124,9 +112,10 @@ mod tests {
         // brightest thing on any monitor this frame, so `sum < 1` means it
         // settles instead of blooming to white. The seed is left out: it is
         // light entering the graph, so it belongs to what the loop is driven
-        // *by*, not to what it multiplies. Where its key cuts, the cameras it
-        // was keyed over stand at their larger share, so that is the share
-        // measured.
+        // *by*, not to what it multiplies. A key moves light between its two
+        // inputs texel by texel, so every verdict of every key is measured —
+        // the shares are a product of one factor per switcher, so the
+        // verdicts' corners bound them all.
         //
         // At every setting of the switchers, not only the one it starts on:
         // a crossfade is a fader, and a rig that blooms at the top of one is
@@ -137,21 +126,27 @@ mod tests {
                 for bits in 0..16u8 {
                     let mut params = instrument();
                     params.rig.switchers = [a, b, a, b];
+                    params.rig.keys = [params.rig.keys[3]; 4];
                     params.rig.selects = std::array::from_fn(|i| match bits >> i & 1 {
                         0 => crate::rig::Select::Direct,
                         _ => crate::rig::Select::Program,
                     });
                     for m in 0..params.monitors.len() {
-                        let feed = params.rig.feed(m);
-                        let sum = (0..3)
-                            .map(|ch| {
-                                (0..params.cameras.len())
-                                    .map(|c| {
-                                        let cam = &params.cameras[c];
-                                        let round: f32 = cam.look.iter().sum();
-                                        feed.cut(c) * cam.gain[ch] * round
+                        let sum = (0..16u8)
+                            .map(|verdict| {
+                                let passed = std::array::from_fn(|s| f32::from(verdict >> s & 1));
+                                let feed = params.rig.keyed(m, passed);
+                                (0..3)
+                                    .map(|ch| {
+                                        (0..params.cameras.len())
+                                            .map(|c| {
+                                                let cam = &params.cameras[c];
+                                                let round: f32 = cam.look.iter().sum();
+                                                feed.cameras[c] * cam.gain[ch] * round
+                                            })
+                                            .sum::<f32>()
                                     })
-                                    .sum::<f32>()
+                                    .fold(0.0, f32::max)
                             })
                             .fold(0.0, f32::max);
                         assert!(sum < 1.0, "monitor {m}: gain sum {sum} blooms");
@@ -177,7 +172,6 @@ mod tests {
             |p| p.cameras[0].gain[0] = f32::NAN,
             |p| p.shafts[0].rotation = f32::INFINITY,
             |p| p.monitors[0].colour.saturation = f32::NAN,
-            |p| p.input.key.threshold = f32::NAN,
             |p| p.rig.switchers[2] = f32::INFINITY,
             |p| p.cameras[0].look[0] = f32::NAN,
         ];

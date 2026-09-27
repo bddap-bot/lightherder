@@ -68,7 +68,7 @@ impl Cli {
     pub fn instrument(&self) -> Params {
         let mut params = crate::config::instrument();
         if let Some(seed) = &self.seed {
-            params.input.source = seed.clone();
+            params.input = seed.clone();
         }
         params.reach = crate::feedback::reach(&params, self.resolution);
         params
@@ -89,7 +89,7 @@ pub fn usage() -> String {
          \x20 --help              this\n",
         DEFAULT_RESOLUTION.0,
         DEFAULT_RESOLUTION.1,
-        crate::config::instrument().input.source,
+        crate::config::instrument().input,
         crate::bench::FRAMES,
     )
 }
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn the_switcher_takes_whatever_ffmpeg_can_open() {
-        let source = |args: &[&str]| parse_argv(args).unwrap().instrument().input.source;
+        let source = |args: &[&str]| parse_argv(args).unwrap().instrument().input;
         for spelling in [
             vec!["--seed=lavfi:testsrc2=size=640x480:rate=30"],
             vec!["--seed", "lavfi:testsrc2=size=640x480:rate=30"],
@@ -253,7 +253,7 @@ mod tests {
                 }
             );
         }
-        assert_eq!(source(&[]), crate::config::instrument().input.source);
+        assert_eq!(source(&[]), crate::config::instrument().input);
     }
 
     #[test]
@@ -266,7 +266,7 @@ mod tests {
             .to_string();
         assert_eq!(
             printed.parse::<Input>().unwrap(),
-            crate::config::instrument().input.source
+            crate::config::instrument().input
         );
     }
 

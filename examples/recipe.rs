@@ -223,7 +223,7 @@ fn main() -> Result<(), String> {
     lightherder::feedback::bank_fits(&params, script.resolution)?;
     let feedback = Feedback::new(&gpu.device, width, height, &params);
     let present = Present::new(&gpu.device, &feedback, FORMAT);
-    let source = pollster::block_on(Source::open(&params.input.source, (width, height)))?;
+    let source = pollster::block_on(Source::open(&params.input, (width, height)))?;
 
     let mut board = Board::new(params);
     let mut rig = Rig3 {

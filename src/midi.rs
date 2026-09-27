@@ -92,10 +92,11 @@ const fn button(cc: u8, action: Action) -> Button {
 /// camera — where it stands on its shaft and how late its cable is — and
 /// then the focused monitor's frame rate, the one router-output setting a
 /// knob turns. The period's cut length sits over the period's fader, since
-/// the original's period mode is one pair of knobs. Every handle has a
-/// control of its own, so there is no second page and the precision is
-/// absolute on the fifth rotary.
-pub(crate) const FADERS: [Fader; 13] = [
+/// the original's period mode is one pair of knobs, and the key's clip over
+/// the crossfade, since the two share out In2 between them; its gain takes
+/// the rotary left. Every handle has a control of its own, so there is no
+/// second page and the precision is absolute on the fifth rotary.
+pub(crate) const FADERS: [Fader; 15] = [
     fader(0, Knob::Hue),
     fader(1, Knob::Saturation),
     fader(2, Knob::Brightness),
@@ -108,7 +109,9 @@ pub(crate) const FADERS: [Fader; 13] = [
     fader(17, Knob::Rotation),
     fader(18, Knob::Delay),
     fader(19, Knob::FrameRate),
+    fader(21, Knob::KeyGain),
     fader(22, Knob::CutLength),
+    fader(23, Knob::KeyClip),
 ];
 
 /// Where a control number sits on the panel: the one copy of the device's
@@ -192,6 +195,7 @@ const _: () = assert!(crate::rig::count(Node::Switcher) as u8 + R_ROW <= REVERSE
 pub(crate) const INSERT: u8 = S_ROW + 3;
 pub(crate) const TAP_IN: u8 = INSERT + 1;
 pub(crate) const QUANTIZE: u8 = TAP_IN + 1;
+pub(crate) const CHROMA: u8 = QUANTIZE + 1;
 const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= INSERT);
 pub(crate) const PRECISION: u8 = ROTARY_ROW + 4;
 
@@ -236,7 +240,7 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 /// explains all of the above — the one button whose job survives not
 /// knowing what any button does. Marker set takes a still of the display,
 /// and record records it for as long as a hand stays on it.
-pub(crate) const BUTTONS: [Button; 28] = [
+pub(crate) const BUTTONS: [Button; 29] = [
     button(S_ROW, Action::Focus(Node::Camera, 0)),
     button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
     button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
@@ -265,6 +269,7 @@ pub(crate) const BUTTONS: [Button; 28] = [
     button(INSERT, Action::Insert),
     button(TAP_IN, Action::TapIn),
     button(QUANTIZE, Action::Quantize),
+    button(CHROMA, Action::Chroma),
 ];
 
 /// Every control number a button answers to, which is the whole of what the
@@ -288,6 +293,7 @@ pub struct Shown {
     pub armed: bool,
     pub tapping: bool,
     pub quantize: bool,
+    pub chroma: bool,
 }
 
 /// One thing off the wire. A knob or a button is a control change; a system
@@ -628,7 +634,8 @@ impl Midi {
             | when(shown.inserted, Action::Insert)
             | when(shown.armed, Action::Automate)
             | when(shown.tapping, Action::TapIn)
-            | when(shown.quantize, Action::Quantize);
+            | when(shown.quantize, Action::Quantize)
+            | when(shown.chroma, Action::Chroma);
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
@@ -1113,6 +1120,14 @@ mod tests {
             }),
             lamp(QUANTIZE)
         );
+        assert_eq!(
+            lit(Shown {
+                chroma: true,
+                ..Shown::default()
+            }),
+            lamp(CHROMA),
+            "the key's measure is S7, beside the switcher's rhythm"
+        );
     }
 
     #[test]
@@ -1214,7 +1229,9 @@ mod tests {
                 fader(17, Knob::Rotation),
                 fader(18, Knob::Delay),
                 fader(19, Knob::FrameRate),
+                fader(21, Knob::KeyGain),
                 fader(22, Knob::CutLength),
+                fader(23, Knob::KeyClip),
             ]
         );
         assert_eq!(PRECISION, 20);
@@ -1249,9 +1266,10 @@ mod tests {
                 button(35, Action::Insert),
                 button(36, Action::TapIn),
                 button(37, Action::Quantize),
+                button(38, Action::Chroma),
             ]
         );
-        for cc in [21, 23, 38, 39, 53, 54, 55, 58, 59] {
+        for cc in [39, 53, 54, 55, 58, 59] {
             assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
             assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
         }
@@ -1291,6 +1309,7 @@ mod tests {
             Action::Automate,
             Action::TapIn,
             Action::Quantize,
+            Action::Chroma,
         ] {
             let on = BUTTONS.iter().filter(|b| b.action == action).count();
             assert_eq!(on, 1, "{action:?} is on {on} buttons");
@@ -1540,6 +1559,7 @@ mod tests {
         );
         assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), [Action::Select]);
         assert_eq!(feed(&mut midi, &params, &cc(INSERT, 127)), [Action::Insert]);
+        assert_eq!(feed(&mut midi, &params, &cc(CHROMA, 127)), [Action::Chroma]);
         assert_eq!(
             feed(&mut midi, &params, &cc(43, 127)),
             [Action::ResetLastKnob]
@@ -1551,7 +1571,7 @@ mod tests {
     #[test]
     fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        for dead in [38, 39, 53, 54, 55, 58, 59, 100] {
+        for dead in [39, 53, 54, 55, 58, 59, 100] {
             assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
             assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
         }

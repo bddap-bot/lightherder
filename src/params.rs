@@ -3,7 +3,7 @@
 
 use crate::affine::{Axis, Framing};
 use crate::input::Input;
-use crate::rig::Rig;
+use crate::rig::{Keying, Rig};
 
 /// The colour controls on one monitor's front panel, in the order an analog
 /// signal meets them: chroma decode, video amplifier, phosphor.
@@ -113,10 +113,25 @@ fn white_shift(mired: f64) -> [f64; 2] {
 }
 
 /// NTSC luma, in the precision the shader wants it. Row 0 of [`DECODE`] and
-/// nowhere else: the chroma bleed needs it too, and a second copy in WGSL
-/// would be a constant nothing could keep in step with this one.
+/// nowhere else: a second copy in WGSL would be a constant nothing could
+/// keep in step with this one.
 pub fn luma_row() -> [f32; 3] {
     std::array::from_fn(|i| DECODE[0][i] as f32)
+}
+
+/// The colour the chroma key cuts: a blue screen, which is what the
+/// original keyed.
+const BLUE_SCREEN: [f64; 3] = [0.0, 0.0, 1.0];
+
+/// How much of a blue screen's chroma a texel carries, as the row the shader
+/// measures it with: the texel's chroma projected onto the screen's, over
+/// the screen's own — 1 on the screen, 0 on every grey, below 0 toward
+/// yellow. Off [`DECODE`] like the luma, so the key and the hue knob agree
+/// on what a chroma is.
+pub fn blue_row() -> [f32; 3] {
+    let chroma = |row: usize| (0..3).map(|c| DECODE[row][c] * BLUE_SCREEN[c]).sum::<f64>();
+    let (i, q) = (chroma(1), chroma(2));
+    std::array::from_fn(|c| ((i * DECODE[1][c] + q * DECODE[2][c]) / (i * i + q * q)) as f32)
 }
 
 impl Colour {
@@ -157,30 +172,6 @@ impl Colour {
             })
         })
     }
-}
-
-/// The keyer on the switcher: what it refuses of the light coming in. A luma
-/// key, which is what lifts a lit subject off an unlit room — the rig keys
-/// on the switcher and nowhere else, so this is the whole of it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Key {
-    /// The luma the key passes in full. Cutting is complete one `softness`
-    /// below it, so at 0 the key passes everything exactly — which is what
-    /// lets 0 be the off state without a switch beside the knob.
-    pub threshold: f32,
-    /// Width of the key's soft edge, in luma units. Zero is a hard edge; the
-    /// shader keeps its smoothstep legal on its own.
-    pub softness: f32,
-}
-
-impl Key {
-    /// The key off: the switcher hands on everything, exactly. A threshold of
-    /// zero passes every luma there is, which is what lets zero be the off
-    /// state without a switch beside it.
-    pub const OFF: Key = Key {
-        threshold: 0.0,
-        softness: 0.05,
-    };
 }
 
 /// One camera in the graph: what it sees, how it frames it, and how much of
@@ -304,21 +295,12 @@ pub struct Params {
     /// camera may watch it — so it is light entering the graph rather than
     /// light going round it. How much of it each monitor shows is the
     /// switchers' business, [`Params::send`].
-    pub input: Plug,
+    pub input: Input,
     /// The frame delay units' reach: how many frames a unit's delay may be
     /// dialled up to, and so how many pictures each unit's line in the bank
     /// keeps. Bought at load, since a frame of it is another picture per
     /// unit, so the knob runs to here and no further.
     pub reach: u32,
-}
-
-/// The light plugged into the switcher: what it is, and what the switcher
-/// refuses of it on the way in. How much of it each monitor shows is the
-/// switchers' business — see [`Params::send`] — and not written here.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Plug {
-    pub source: Input,
-    pub key: Key,
 }
 
 impl Default for Params {
@@ -412,11 +394,13 @@ pub enum Knob {
     /// a step along [`Cadence::ALL`]: full rate at rest, slower up the travel.
     FrameRate,
     /// How far the focused switcher stands toward its In2: 0 is In1 whole, 1
-    /// is In2 whole. The routing is these four and the four selects, and
-    /// nothing else.
+    /// is In2 whole. The routing is these four, their keys and the four
+    /// selects, and nothing else.
     Switcher,
     Period,
     CutLength,
+    KeyClip,
+    KeyGain,
 }
 
 impl Limit {
@@ -480,7 +464,7 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 13] = [
+    pub const ALL: [Knob; 15] = [
         Knob::Zoom,
         Knob::Rotation,
         Knob::Delay,
@@ -494,6 +478,8 @@ impl Knob {
         Knob::Switcher,
         Knob::Period,
         Knob::CutLength,
+        Knob::KeyClip,
+        Knob::KeyGain,
     ];
 
     /// The one name a knob has: on the overlay, in the log and in an error.
@@ -512,16 +498,24 @@ impl Knob {
             Knob::Switcher => "switcher",
             Knob::Period => "period",
             Knob::CutLength => "cut length",
+            Knob::KeyClip => "key clip",
+            Knob::KeyGain => "key gain",
         }
     }
 
     pub fn reads(self, value: f32) -> String {
         match self {
-            Knob::Zoom | Knob::Saturation | Knob::Contrast | Knob::Sharpness | Knob::Switcher => {
+            Knob::Zoom
+            | Knob::Saturation
+            | Knob::Contrast
+            | Knob::Sharpness
+            | Knob::Switcher
+            | Knob::KeyClip => {
                 format!("{value:.3}")
             }
             Knob::Rotation | Knob::Hue | Knob::Brightness => format!("{value:+.3}"),
             Knob::Temperature => format!("{value:+.1}"),
+            Knob::KeyGain => format!("{value:.1}"),
             Knob::Delay | Knob::Period | Knob::CutLength => format!("{}", value as u32),
             Knob::FrameRate => format!("{}", Cadence::ALL[value as usize].fps()),
         }
@@ -537,7 +531,9 @@ impl Knob {
             | Knob::Temperature
             | Knob::Sharpness
             | Knob::FrameRate => Node::Monitor,
-            Knob::Switcher | Knob::Period | Knob::CutLength => Node::Switcher,
+            Knob::Switcher | Knob::Period | Knob::CutLength | Knob::KeyClip | Knob::KeyGain => {
+                Node::Switcher
+            }
         }
     }
 
@@ -570,6 +566,12 @@ impl Knob {
             Knob::Period | Knob::CutLength => Limit::Whole(crate::rig::MAX_PERIOD),
             // A crossfade stands between its two inputs and nowhere else.
             Knob::Switcher => Limit::Clamp(0.0, 1.0),
+            // From cutting nothing to cutting all but white, or all but what
+            // carries none of a blue screen's colour.
+            Knob::KeyClip => Limit::Clamp(0.0, 1.0),
+            // An edge the whole of the measure wide, down to one finer than a
+            // step of an 8-bit picture, a factor a step.
+            Knob::KeyGain => Limit::Ratio(1.0, 1000.0),
         }
     }
 }
@@ -641,6 +643,8 @@ impl Params {
             Knob::Period => self.rig.periods[focus.switcher] as f32,
             Knob::CutLength => self.rig.cut_lengths[focus.switcher] as f32,
             Knob::Switcher => self.rig.switchers[focus.switcher],
+            Knob::KeyClip => self.rig.keys[focus.switcher].clip,
+            Knob::KeyGain => self.rig.keys[focus.switcher].gain,
         }
     }
 
@@ -675,7 +679,9 @@ impl Params {
                     | Knob::Contrast
                     | Knob::Temperature
                     | Knob::Sharpness
-                    | Knob::Switcher => unreachable!("only a count has a whole limit"),
+                    | Knob::Switcher
+                    | Knob::KeyClip
+                    | Knob::KeyGain => unreachable!("only a count has a whole limit"),
                 }
             }
             Limit::Clamp(low, high) | Limit::Ratio(low, high) => {
@@ -699,6 +705,8 @@ impl Params {
             Knob::Temperature => &mut self.monitors[focus.monitor].colour.temperature,
             Knob::Sharpness => &mut self.monitors[focus.monitor].sharpness,
             Knob::Switcher => &mut self.rig.switchers[focus.switcher],
+            Knob::KeyClip => &mut self.rig.keys[focus.switcher].clip,
+            Knob::KeyGain => &mut self.rig.keys[focus.switcher].gain,
             Knob::Delay | Knob::Period | Knob::CutLength | Knob::FrameRate => {
                 unreachable!("nudge() rounds a count to whole steps")
             }
@@ -720,11 +728,15 @@ impl Params {
             },
             None => String::new(),
         };
+        let keying = match self.rig.keys[focus.switcher].keying {
+            Keying::Luma => "luma",
+            Keying::Chroma => "chroma",
+        };
         format!(
             "cam {}/{}: zoom {}  rot {}  {}\n\
              mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \
              temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}{}\n\
-             sw {}/{}: switcher {}  period {}  cut {}  pattern {}",
+             sw {}/{}: switcher {}  period {}  cut {}  pattern {}  {} key clip {}  gain {}",
             focus.camera + 1,
             self.cameras.len(),
             reads(Knob::Zoom),
@@ -754,6 +766,9 @@ impl Params {
             reads(Knob::Period),
             reads(Knob::CutLength),
             self.rig.patterns[focus.switcher],
+            keying,
+            reads(Knob::KeyClip),
+            reads(Knob::KeyGain),
         )
     }
 }
@@ -893,7 +908,7 @@ mod tests {
             params.set(knob, knob.identity(), focus);
             assert_eq!(params.knob(knob, focus), knob.identity(), "{knob:?}");
         }
-        assert_eq!(ratios, [Knob::Zoom]);
+        assert_eq!(ratios, [Knob::Zoom, Knob::KeyGain]);
     }
 
     #[test]
@@ -955,6 +970,8 @@ mod tests {
         assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.cut_lengths[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.switchers[0], 1.0);
+        assert_eq!(params.rig.keys[0].clip, 1.0);
+        assert_eq!(params.rig.keys[0].gain, 1000.0);
         assert_eq!(mon.colour.saturation, 4.0);
         assert_eq!(mon.colour.brightness, 0.5);
         assert_eq!(mon.colour.contrast, 4.0);
@@ -972,6 +989,8 @@ mod tests {
         assert_eq!(params.rig.periods[0], 0);
         assert_eq!(params.rig.cut_lengths[0], 0);
         assert_eq!(params.rig.switchers[0], 0.0);
+        assert_eq!(params.rig.keys[0].clip, 0.0);
+        assert_eq!(params.rig.keys[0].gain, 1.0);
         assert_eq!(mon.colour.saturation, 0.0);
         assert_eq!(mon.colour.brightness, -0.5);
         assert_eq!(mon.colour.contrast, 0.0);
@@ -1078,7 +1097,7 @@ mod tests {
 
     /// The independent word on where identity is, beside the instrument
     /// [`Knob::identity`] reads it from: the two must agree or one lies.
-    const IDENTITIES: [(Knob, f32); 13] = [
+    const IDENTITIES: [(Knob, f32); 15] = [
         (Knob::Zoom, 1.0),
         (Knob::Rotation, 0.0),
         (Knob::Delay, 0.0),
@@ -1092,6 +1111,8 @@ mod tests {
         (Knob::Switcher, 1.0),
         (Knob::Period, 0.0),
         (Knob::CutLength, 0.0),
+        (Knob::KeyClip, 0.0),
+        (Knob::KeyGain, 12.5),
     ];
 
     #[test]
@@ -1169,6 +1190,40 @@ mod tests {
             params.reset(knob, focus);
             assert_eq!(params.knob(knob, focus), 0.0);
         }
+    }
+
+    #[test]
+    fn the_log_line_names_the_focused_switchers_key() {
+        let mut params = crate::config::instrument();
+        let d = Focus::default().with(Node::Switcher, 3);
+        assert!(params
+            .describe(Focus::default())
+            .ends_with("  luma key clip 0.000  gain 12.5"));
+        assert!(params
+            .describe(d)
+            .ends_with("  luma key clip 0.350  gain 12.5"));
+        params.rig.rekey(3);
+        params.set(Knob::KeyGain, 40.0, d);
+        assert!(
+            params
+                .describe(d)
+                .ends_with("  chroma key clip 0.350  gain 40.0"),
+            "{}",
+            params.describe(d)
+        );
+    }
+
+    #[test]
+    fn the_blue_row_reads_a_blue_screen_as_one_and_every_grey_as_nothing() {
+        let blue = blue_row();
+        let measure = |rgb: [f32; 3]| rgb.iter().zip(blue).map(|(c, w)| c * w).sum::<f32>();
+        assert!((measure([0.0, 0.0, 1.0]) - 1.0).abs() < 1e-6);
+        assert!((measure([0.0, 0.0, 0.4]) - 0.4).abs() < 1e-6);
+        for grey in [0.0, 0.3, 1.0, 2.0] {
+            assert!(measure([grey; 3]).abs() < 1e-6, "grey {grey}");
+        }
+        assert!(measure([1.0, 1.0, 0.0]) < -0.9, "yellow is blue's opposite");
+        assert!(measure([0.0, 1.0, 1.0]) > 0.5 && measure([1.0, 0.0, 1.0]) > 0.0);
     }
 
     #[test]
@@ -1472,7 +1527,7 @@ mod tests {
                     was
                 };
                 assert!(
-                    (now - expected).abs() < 1e-6,
+                    (now - expected).abs() < 1e-6 * expected.abs().max(1.0),
                     "turning {} moved {} from {was} to {now}",
                     knob.name(),
                     other.name()

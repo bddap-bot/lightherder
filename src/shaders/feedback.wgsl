@@ -11,11 +11,17 @@ struct Tap {
     // affine::sample_transform.
     row0: vec4<f32>,
     row1: vec4<f32>,
-    // rgb: routing x splitter x gain, per channel, where the seed's key
-    // passes. a: source layer.
-    passes: vec4<f32>,
-    // rgb: the same where the key cuts. a: padding.
-    cuts: vec4<f32>,
+    // rgb: splitter x gain, per channel. a: source layer.
+    weight: vec4<f32>,
+};
+
+// One switcher on the monitor's chain. See feedback::Stage.
+struct Stage {
+    // x: one past the last tap of its In1. yzw: padding.
+    in1: vec4<f32>,
+    // x: the crossfade. y: the clip, 0 for the key off. z: the edge's width.
+    // w: 1 on a chroma key, 0 on a luma key.
+    key: vec4<f32>,
 };
 
 struct Uniforms {
@@ -25,22 +31,24 @@ struct Uniforms {
     // x: brightness. y: contrast. z: the amplifier's headroom, handed over
     // rather than written here so the crate has one copy. w: padding.
     levels: vec4<f32>,
-    // x: tap count. y: this monitor's own layer, for fs_present. z: the
-    // first bank layer past `lower`. w: the first bank layer of `upper`.
+    // x: the taps that land on the program before any switcher runs. y: this
+    // monitor's own layer, for fs_present. z: the first bank layer past
+    // `lower`. w: the first bank layer of `upper`.
     info: vec4<f32>,
     // x: the unsharp mask, the front panel's sharpness knob. yzw: padding.
     analog: vec4<f32>,
-    // xyz: FCC NTSC luma, handed over rather than written here so the crate
-    // has one copy of it.
+    // xyz: the keys' measures, FCC NTSC luma and a blue screen's share,
+    // handed over rather than written here so the crate has one copy of
+    // each.
     luma: vec4<f32>,
-    // The switcher's keyer, judged on the seed: x luma threshold, y softness,
-    // z the seed's tap index, or -1 when no seed reaches this monitor and the
-    // key passes everything. w: padding.
-    key: vec4<f32>,
-    // As long as feedback::MAX_TAPS, which is every camera through every
-    // monitor plus the seed. A second spelling of that number: a static
-    // assertion beside it fails the build if the Rust side grows, since wgpu
-    // catches only the other direction.
+    blue: vec4<f32>,
+    // x: how many of `stages` run. yzw: padding.
+    chain: vec4<f32>,
+    // As long as feedback::STAGES, and `taps` as feedback::MAX_TAPS, which is
+    // every camera through every monitor plus the seed. Second spellings of
+    // those numbers: a static assertion beside each fails the build if the
+    // Rust side grows, since wgpu catches only the other direction.
+    stages: array<Stage, 4>,
     taps: array<Tap, 16>,
 };
 
@@ -98,7 +106,7 @@ fn front_panel(rgb: vec3<f32>) -> vec3<f32> {
 
 // What one camera sees of one source layer at one point — the sampling,
 // not `Camera::look`, whose splitter weights are already folded into the
-// tap's shares — and in alpha whether it is a monitor it sees there. Past a
+// tap's weight — and in alpha whether it is a monitor it sees there. Past a
 // layer's edge the camera sees an unlit room, but a clamped sampler returns
 // the border texel there, which would smear across the frame. A monitor is
 // opaque across its face; a delay unit's picture keeps where its camera saw
@@ -129,32 +137,39 @@ fn arm(uv: vec2<f32>, layer: i32, centre: vec3<f32>) -> vec3<f32> {
     return select(centre, seen.rgb, seen.a > 0.5);
 }
 
-// Every tap sampled for the texel at `p`, weighed and summed, and in alpha
-// whether any of them saw a monitor there.
-fn gathered(p: vec3<f32>) -> vec4<f32> {
-    var fed_back = vec3<f32>(0.0);
-    var covered = false;
-    let count = u32(u.info.x);
-    // The keyer, judged once per fragment on the seed's own sample: it is
-    // switcher D's, so what it gates is the whole hand-over — the seed in,
-    // and the taps it is keyed over out, share for share. It passes
-    // everything at or above its threshold and finishes cutting one softness
-    // below it, so a threshold of zero is exactly inert — inside a loop,
-    // "almost passes" is a ratchet. The epsilon keeps smoothstep's edges
-    // apart at zero softness, where it would otherwise divide by nothing.
-    var alpha = 1.0;
-    let keyed = i32(u.key.z);
-    if keyed >= 0 {
-        let seed = u.taps[keyed];
-        let seed_uv = vec2<f32>(dot(seed.row0.xyz, p), dot(seed.row1.xyz, p));
-        let soft = max(u.key.y, 1e-4);
-        alpha = smoothstep(u.key.x - soft, u.key.x, dot(u.luma.xyz, seen_at(seed_uv, i32(seed.passes.a)).rgb));
+// How much of In2 a switcher's key passes at this texel, judged on the
+// picture In2 is handed: its luma, or one less its share of a blue screen.
+// It passes everything at or above the clip and finishes cutting one edge
+// below, and a clip of zero is the key off, skipped outright so that it is
+// exactly inert — inside a loop, "almost passes" is a ratchet.
+fn passed(stage: Stage, two: vec3<f32>) -> f32 {
+    let clip = stage.key.y;
+    if clip <= 0.0 {
+        return 1.0;
     }
+    var measured = dot(u.luma.xyz, two);
+    if stage.key.w > 0.5 {
+        measured = 1.0 - dot(u.blue.xyz, two);
+    }
+    return smoothstep(clip - stage.key.z, clip, measured);
+}
 
-    for (var t = 0u; t < count; t++) {
+// What a run of taps lands on one switcher input: the picture that arrives,
+// which is what a key judges; what the monitor shows of it, the sharpness
+// mask included, since that is the monitor's front panel and not the
+// switcher's; and whether any of the taps saw a monitor.
+struct Landed {
+    arrived: vec3<f32>,
+    shown: vec3<f32>,
+    covered: bool,
+};
+
+fn landed(first: u32, end: u32, p: vec3<f32>) -> Landed {
+    var landed = Landed(vec3<f32>(0.0), vec3<f32>(0.0), false);
+    for (var t = first; t < end; t++) {
         let tap = u.taps[t];
         let src_uv = vec2<f32>(dot(tap.row0.xyz, p), dot(tap.row1.xyz, p));
-        let layer = i32(tap.passes.a);
+        let layer = i32(tap.weight.a);
         let seen = seen_at(src_uv, layer);
         let raw = seen.rgb;
         var signal = raw;
@@ -179,10 +194,32 @@ fn gathered(p: vec3<f32>) -> vec4<f32> {
             signal += sharpness * (raw - blurred);
         }
 
-        fed_back += signal * mix(tap.cuts.rgb, tap.passes.rgb, alpha);
-        covered = covered || seen.a > 0.5;
+        landed.arrived += raw * tap.weight.rgb;
+        landed.shown += signal * tap.weight.rgb;
+        landed.covered = landed.covered || seen.a > 0.5;
     }
-    return vec4<f32>(fed_back, select(0.0, 1.0, covered));
+    return landed;
+}
+
+// Every tap sampled for the texel at `p`, run through the monitor's chain of
+// switchers from the deepest out, each keying the program so far — its In2
+// — over its In1; and in alpha whether any tap saw a monitor there.
+fn gathered(p: vec3<f32>) -> vec4<f32> {
+    var t = u32(u.info.x);
+    var program = landed(0u, t, p);
+    for (var s = 0u; s < u32(u.chain.x); s++) {
+        let stage = u.stages[s];
+        let end = u32(stage.in1.x);
+        let in1 = landed(t, end, p);
+        t = end;
+        let level = stage.key.x * passed(stage, program.arrived);
+        program = Landed(
+            mix(in1.arrived, program.arrived, level),
+            mix(in1.shown, program.shown, level),
+            in1.covered || program.covered,
+        );
+    }
+    return vec4<f32>(program.shown, select(0.0, 1.0, program.covered));
 }
 
 @fragment

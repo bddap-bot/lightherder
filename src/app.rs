@@ -21,7 +21,7 @@ use crate::midi::{Midi, Shown};
 use crate::overlay::{Overlay, Readout};
 use crate::params::{Focus, Knob, Node, Params};
 use crate::present::{Present, View};
-use crate::rig::Pattern;
+use crate::rig::{Keying, Pattern};
 
 /// Close a capture and say where it went, which is the only report a
 /// performer on a fullscreen display gets of one.
@@ -173,8 +173,8 @@ pub async fn run(params: Params, cli: &Cli) -> Result<(), Box<dyn std::error::Er
     #[cfg(not(target_arch = "wasm32"))]
     crate::halt::on_signal(event_loop.create_proxy())?;
     crate::feedback::bank_fits(&params, cli.resolution)?;
-    log::info!("seed: {}", params.input.source);
-    let source = Source::open(&params.input.source, cli.resolution).await?;
+    log::info!("seed: {}", params.input);
+    let source = Source::open(&params.input, cli.resolution).await?;
     log::info!("surface: waiting for {}", crate::midi::DEVICE);
     // Through the event loop's own display connection rather than a window's:
     // the adapter is chosen before there is a window, and wgpu forbids a
@@ -415,6 +415,7 @@ impl App {
             armed: self.automation.armed(),
             tapping: self.tapping,
             quantize: self.quantize,
+            chroma: self.params.rig.keys[self.focus.switcher].keying == Keying::Chroma,
         }
     }
 
@@ -620,6 +621,10 @@ impl App {
             Action::Quantize => {
                 self.quantize = !self.quantize;
                 log::info!("quantize {}", if self.quantize { "on" } else { "off" });
+            }
+            Action::Chroma => {
+                self.params.rig.rekey(self.focus.switcher);
+                log::info!("{}", self.params.describe(self.focus));
             }
         }
     }
@@ -915,8 +920,8 @@ mod tests {
         // /dev/video0 would be testing the machine it runs on. Nothing here
         // reads a pixel of it.
         let mut params = params;
-        params.input.source = crate::input::Input::Pattern(crate::input::Pattern::Bars);
-        let source = pollster::block_on(Source::open(&params.input.source, resolution)).unwrap();
+        params.input = crate::input::Input::Pattern(crate::input::Pattern::Bars);
+        let source = pollster::block_on(Source::open(&params.input, resolution)).unwrap();
         Some(App {
             gpu,
             initial: params.clone(),
@@ -1471,6 +1476,59 @@ mod tests {
         app.surface_frame();
     }
 
+    #[test]
+    fn rotaries_8_and_6_key_the_focused_switcher_and_s7_keys_it_by_chroma() {
+        use crate::lamps::lamp;
+        use crate::midi::{CHROMA, PRECISION};
+        use crate::rig::{Key, Keying};
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let started = app.params.rig.keys;
+        let board = plugged(&mut app);
+        let lit = |app: &App| app.midi.wanted(app.focus, app.shown()) & lamp(CHROMA) != 0;
+        app.act(Action::Focus(Node::Switcher, 1));
+        surface(&mut app, &board, PRECISION, 127);
+        surface(&mut app, &board, 23, 0);
+        surface(&mut app, &board, 23, 64);
+        surface(&mut app, &board, 21, 0);
+        surface(&mut app, &board, 21, 32);
+        let b = app.params.rig.keys[1];
+        assert!((b.clip - 64.0 / 127.0).abs() < 1e-6, "{b:?}");
+        let factor = 1000f32.powf(32.0 / 127.0);
+        assert!((b.gain - Key::OFF.gain * factor).abs() < 1e-3, "{b:?}");
+        assert_eq!(b.keying, Keying::Luma);
+        assert!(!lit(&app));
+        press(&mut app, &board, CHROMA);
+        assert_eq!(app.params.rig.keys[1].keying, Keying::Chroma);
+        assert!(lit(&app));
+        assert!(app
+            .params
+            .describe(app.focus)
+            .ends_with("chroma key clip 0.504  gain 71.3"));
+        let others = |app: &App| [0, 2, 3].map(|s| app.params.rig.keys[s]);
+        assert_eq!(others(&app), [0, 2, 3].map(|s| started[s]));
+        // Rewind puts the gain back and leaves the measure.
+        press(&mut app, &board, 43);
+        assert_eq!(
+            app.params.rig.keys[1],
+            Key {
+                keying: Keying::Chroma,
+                clip: b.clip,
+                gain: Key::OFF.gain,
+            }
+        );
+        // The lamp is the focused switcher's measure, and C keys by luma.
+        app.act(Action::Focus(Node::Switcher, 2));
+        assert!(!lit(&app));
+        app.act(Action::Focus(Node::Switcher, 1));
+        assert!(lit(&app));
+        // Stop puts the whole key back.
+        press(&mut app, &board, 42);
+        assert_eq!(app.params.rig.keys, started);
+        assert!(!lit(&app));
+    }
+
     fn brightness(app: &App) -> f32 {
         app.params.knob(Knob::Brightness, app.focus)
     }
@@ -1876,7 +1934,7 @@ mod tests {
             [vec![], vec![5, 6, 40, 5, 6, 40], vec![], vec![]]
         );
         let line = app.params.describe(app.focus);
-        assert!(line.ends_with("pattern .x...x.........."), "{line}");
+        assert!(line.contains("pattern .x...x..........  "), "{line}");
 
         let stood = app.params.rig.switchers[1];
         press(&mut app, &board, REVERSE);

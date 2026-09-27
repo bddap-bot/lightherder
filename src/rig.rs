@@ -2,14 +2,14 @@
 //! switchers and the router selects in front of them, and the graph a
 //! setting of those makes.
 //!
-//! Every switcher on the rig is a crossfade between two feeds — D keys its
-//! In2, the seed, over its In1 — and a router select picks one of two, so
-//! what any monitor shows is a weighted sum of the three cameras and the
-//! seed, the weights moving with the key. [`Rig`] is that setting and the
-//! whole of the routing state; [`Rig::feed`] multiplies the chain out on
-//! demand, and no copy of the products is kept — a stored matrix would be a
-//! second state standing beside the levers that set it, free to drift from
-//! them.
+//! Every switcher on the rig keys its In2 over its In1 and crossfades
+//! between them, and a router select picks one of two, so what any monitor
+//! shows is a weighted sum of the three cameras and the seed, the weights
+//! moving with the keys. [`Rig`] is that setting and the whole of the
+//! routing state; [`Rig::wiring`] walks a monitor's chain on demand, for the
+//! shader to run or for [`Rig::feed`] to multiply out, and no copy of the
+//! products is kept — a stored matrix would be a second state standing
+//! beside the levers that set it, free to drift from them.
 //!
 //! Cameras A and B each hand their picture to a frame delay unit, and at
 //! every [`Point`] its camera's feed reaches the router takes the unit's
@@ -19,7 +19,7 @@ use std::fmt::{self, Write};
 
 use crate::affine::Framing;
 use crate::input::Input;
-use crate::params::{Camera, Key, Monitor, Node, Params, Plug};
+use crate::params::{Camera, Monitor, Node, Params};
 
 /// In [`Params::cameras`] order. A and B are on the rotating, sliding shafts,
 /// one per structure; the third watches the rotating monitor alone.
@@ -28,12 +28,6 @@ enum Cam {
     A,
     B,
     Three,
-}
-
-impl Cam {
-    /// Switcher D's In1, which it keys the seed over: where the key cuts,
-    /// this camera stands whole.
-    const KEYED_OVER: Cam = Cam::Three;
 }
 
 /// The frame delay units, one on each rotating camera's cable and indexed
@@ -78,10 +72,26 @@ impl Point {
     }
 }
 
+/// A camera's cable into the router: through its unit's insertion point, or
+/// camera 3's, which passes none.
+#[derive(Clone, Copy, Debug)]
+enum Cable {
+    Point(Point),
+    Three,
+}
+
+impl Cable {
+    fn camera(self) -> Cam {
+        match self {
+            Cable::Point(point) => point.camera(),
+            Cable::Three => Cam::Three,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Wire {
-    Cable(Point),
-    Three,
+    Cable(Cable),
     Seed,
     Program(Switcher),
 }
@@ -116,19 +126,55 @@ impl Screen {
     }
 }
 
-/// The luma key switcher D keys the seed over its In1 with: passing from
-/// mid-grey up and cutting to nothing a little below it, which is a lit
-/// subject against an unlit room — what a camera pointed at a couch faces.
-/// Where it cuts, In1 stands whole. A fixed character of the rig, not a
-/// control: the board has no key.
+/// What a switcher's key measures on its In2: how bright it is, or how close
+/// it stands to a blue screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keying {
+    Luma,
+    Chroma,
+}
+
+/// A switcher's keyer, the original's clip and gain: where it cuts, In2 goes
+/// to nothing and In1 stands whole; where it passes, the crossfade runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Key {
+    pub keying: Keying,
+    /// The measure the key passes in full: a luma, or on a chroma key one
+    /// less the share of a blue screen's chroma a texel carries. It has
+    /// finished cutting one edge below, so at 0 it passes everything exactly
+    /// — which is what lets 0 be the key off without a switch beside the
+    /// knob.
+    pub clip: f32,
+    /// How steep the edge is: the key cuts across `1 / gain` of its measure.
+    pub gain: f32,
+}
+
+impl Key {
+    /// A key that cuts nothing, at the edge D's key has, so a clip turned up
+    /// keys with the same softness.
+    pub const OFF: Key = Key {
+        clip: 0.0,
+        ..SEED_KEY
+    };
+
+    pub fn cuts(self) -> bool {
+        self.clip > 0.0
+    }
+}
+
+/// The luma key switcher D keys the seed over camera 3 with as the rig
+/// starts: passing from mid-grey up and cutting to nothing a little below
+/// it, which is a lit subject against an unlit room — what a camera pointed
+/// at a couch faces.
 const SEED_KEY: Key = Key {
-    threshold: 0.35,
-    softness: 0.08,
+    keying: Keying::Luma,
+    clip: 0.35,
+    gain: 12.5,
 };
 
-/// The four M/Es, each a crossfade from its In1 to its In2 — D a keyer,
-/// since its In2 is the seed. C and D are the chain that brings the rotating
-/// monitor and the seed into structure B.
+/// The four M/Es, each keying its In2 over its In1 and crossfading between
+/// them. C and D are the chain that brings the rotating monitor and the seed
+/// into structure B.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switcher {
     A,
@@ -138,12 +184,18 @@ pub enum Switcher {
 }
 
 impl Switcher {
-    const fn inputs(self) -> [Wire; 2] {
+    /// In1 is a camera's cable on every switcher, and only In2 carries
+    /// another's program: the rig chains its M/Es one deep through In2, so
+    /// a monitor's switchers are a single chain.
+    const fn inputs(self) -> (Cable, Wire) {
         match self {
-            Switcher::A => [Wire::Cable(Point::InA1), Wire::Cable(Point::InA2)],
-            Switcher::B => [Wire::Cable(Point::InB1), Wire::Program(Switcher::C)],
-            Switcher::C => [Wire::Cable(Point::InC1), Wire::Program(Switcher::D)],
-            Switcher::D => [Wire::Three, Wire::Seed],
+            Switcher::A => (
+                Cable::Point(Point::InA1),
+                Wire::Cable(Cable::Point(Point::InA2)),
+            ),
+            Switcher::B => (Cable::Point(Point::InB1), Wire::Program(Switcher::C)),
+            Switcher::C => (Cable::Point(Point::InC1), Wire::Program(Switcher::D)),
+            Switcher::D => (Cable::Three, Wire::Seed),
         }
     }
 }
@@ -166,6 +218,7 @@ pub struct Rig {
     /// How far each switcher stands toward its In2, in [`Switcher`] order:
     /// 0 is In1 whole, 1 is In2 whole.
     pub switchers: [f32; SWITCHERS],
+    pub keys: [Key; SWITCHERS],
     pub selects: [Select; SELECTS],
     /// How many passes apart each switcher's period reverses it. Zero is the
     /// mode off, and the only latch it has: the knob at its floor.
@@ -255,9 +308,29 @@ impl fmt::Display for Pattern {
     }
 }
 
+/// Where a monitor's light comes from: a camera, as many frames late as its
+/// unit holds it at the point its feed passes, or the seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Source {
+    Camera { camera: usize, late: u32 },
+    Seed,
+}
+
+/// One step of a monitor's wiring, in the order it runs: the switchers from
+/// the deepest out, each keying the program so far — its In2 — over the
+/// camera on its In1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Step {
+    /// A source landing on the program: the deepest switcher's In2, or the
+    /// whole of a monitor no switcher feeds.
+    Program(Source),
+    /// A camera landing on the In1 of the switcher that follows.
+    In1(Source),
+    Mix(Switcher),
+}
+
 /// One feed on the rig's cabling, as the share of each camera and of the
-/// seed it carries where the seed's key passes. The shares sum to one:
-/// nothing on the path amplifies.
+/// seed it carries. The shares sum to one: nothing on the path amplifies.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Feed {
     pub(crate) cameras: [f32; CAMERAS],
@@ -265,15 +338,23 @@ pub(crate) struct Feed {
 }
 
 impl Feed {
-    const SEED: Feed = Feed {
+    const DARK: Feed = Feed {
         cameras: [0.0; CAMERAS],
-        seed: 1.0,
+        seed: 0.0,
     };
 
-    fn camera(cam: Cam) -> Feed {
-        let mut cameras = [0.0; CAMERAS];
-        cameras[cam as usize] = 1.0;
-        Feed { cameras, seed: 0.0 }
+    fn of(source: Source) -> Feed {
+        match source {
+            Source::Camera { camera, .. } => {
+                let mut cameras = [0.0; CAMERAS];
+                cameras[camera] = 1.0;
+                Feed { cameras, seed: 0.0 }
+            }
+            Source::Seed => Feed {
+                seed: 1.0,
+                ..Feed::DARK
+            },
+        }
     }
 
     fn mix(one: Feed, two: Feed, toward_two: f32) -> Feed {
@@ -282,18 +363,6 @@ impl Feed {
         Feed {
             cameras: std::array::from_fn(|c| lerp(one.cameras[c], two.cameras[c])),
             seed: lerp(one.seed, two.seed),
-        }
-    }
-
-    /// Camera `c`'s share where the seed's key cuts: the seed's whole share
-    /// goes back to the camera D keyed it over, and every other camera's
-    /// share is what it was — the key moves light between the seed and that
-    /// one camera, so the shares still sum to one.
-    pub(crate) fn cut(&self, c: usize) -> f32 {
-        if c == Cam::KEYED_OVER as usize {
-            self.cameras[c] + self.seed
-        } else {
-            self.cameras[c]
         }
     }
 }
@@ -317,6 +386,7 @@ impl Rig {
     /// reaches everywhere its camera goes until one is taken out.
     pub const IDENTITY: Rig = Rig {
         switchers: [1.0; SWITCHERS],
+        keys: [Key::OFF, Key::OFF, Key::OFF, SEED_KEY],
         selects: [Select::Program; SELECTS],
         periods: [0; SWITCHERS],
         cut_lengths: [0; SWITCHERS],
@@ -328,23 +398,76 @@ impl Rig {
         inserted: [true; POINTS],
     };
 
-    fn carries(&self, wire: Wire) -> Feed {
-        match wire {
-            Wire::Cable(point) => Feed::camera(point.camera()),
-            Wire::Three => Feed::camera(Cam::Three),
-            Wire::Seed => Feed::SEED,
-            Wire::Program(switcher) => {
-                let [one, two] = switcher.inputs().map(|wire| self.carries(wire));
-                Feed::mix(one, two, self.switchers[switcher as usize])
-            }
+    /// Monitor `m`'s wiring. A source no key verdict lets reach the monitor
+    /// is left dark and not visited — behind a crossfade at the far end of
+    /// its travel, with no key to cut back to it — and so is every step
+    /// behind a switcher none of whose sources reach it.
+    pub(crate) fn wiring(&self, m: usize, mut visit: impl FnMut(Step)) {
+        self.walk(self.on(Screen::ALL[m]), 1.0, &mut visit);
+    }
+
+    fn walk(&self, wire: Wire, reach: f32, visit: &mut impl FnMut(Step)) {
+        if reach <= 0.0 {
+            return;
         }
+        match wire {
+            Wire::Program(switcher) => {
+                let s = switcher as usize;
+                let toward_two = self.switchers[s];
+                let kept = if self.keys[s].cuts() {
+                    1.0
+                } else {
+                    1.0 - toward_two
+                };
+                let (one, two) = switcher.inputs();
+                self.walk(two, reach * toward_two, visit);
+                if kept > 0.0 {
+                    visit(Step::In1(self.carried(one)));
+                }
+                visit(Step::Mix(switcher));
+            }
+            Wire::Cable(cable) => visit(Step::Program(self.carried(cable))),
+            Wire::Seed => visit(Step::Program(Source::Seed)),
+        }
+    }
+
+    fn carried(&self, cable: Cable) -> Source {
+        Source::Camera {
+            camera: cable.camera() as usize,
+            late: match cable {
+                Cable::Point(point) => self.lateness(point),
+                Cable::Three => 0,
+            },
+        }
+    }
+
+    /// How much of In2 switcher `s` hands on where its key passes `passed`
+    /// of it: a key that cuts nothing passes it all, whatever it was told.
+    fn level(&self, s: usize, passed: f32) -> f32 {
+        self.switchers[s] * if self.keys[s].cuts() { passed } else { 1.0 }
+    }
+
+    fn lateness(&self, point: Point) -> u32 {
+        match self.inserted[point as usize] {
+            true => self.delays[point.camera() as usize],
+            false => 0,
+        }
+    }
+
+    /// Key switcher `s` by the other measure, clip and gain as they stand.
+    pub fn rekey(&mut self, s: usize) {
+        let keying = &mut self.keys[s].keying;
+        *keying = match keying {
+            Keying::Luma => Keying::Chroma,
+            Keying::Chroma => Keying::Luma,
+        };
     }
 
     fn on(&self, screen: Screen) -> Wire {
         let (direct, switcher) = screen.wiring();
         match (self.selects.get(screen as usize), switcher) {
             (Some(Select::Program), Some(switcher)) => Wire::Program(switcher),
-            _ => Wire::Cable(direct),
+            _ => Wire::Cable(Cable::Point(direct)),
         }
     }
 
@@ -353,9 +476,12 @@ impl Rig {
     pub fn point(&self, c: usize, m: usize) -> Option<Point> {
         fn find(wire: Wire, c: usize) -> Option<Point> {
             match wire {
-                Wire::Cable(point) => (point.camera() as usize == c).then_some(point),
-                Wire::Program(switcher) => switcher.inputs().into_iter().find_map(|w| find(w, c)),
-                Wire::Three | Wire::Seed => None,
+                Wire::Cable(Cable::Point(point)) => (point.camera() as usize == c).then_some(point),
+                Wire::Program(switcher) => {
+                    let (one, two) = switcher.inputs();
+                    find(Wire::Cable(one), c).or_else(|| find(two, c))
+                }
+                Wire::Cable(Cable::Three) | Wire::Seed => None,
             }
         }
         find(self.on(Screen::ALL[m]), c)
@@ -367,8 +493,7 @@ impl Rig {
     }
 
     pub fn late(&self, c: usize, m: usize) -> u32 {
-        self.delayed(c, m)
-            .map_or(0, |point| self.delays[point.camera() as usize])
+        self.point(c, m).map_or(0, |point| self.lateness(point))
     }
 
     /// Put camera `c`'s unit in or out of its feed into monitor `m`, and say
@@ -380,12 +505,28 @@ impl Rig {
         Some(point)
     }
 
-    /// What monitor `m` shows, as the share of each camera and of the seed:
-    /// the matrix, worked out from the switchers and selects every time it is
-    /// asked for rather than flattened into a copy that could stand apart
-    /// from them.
+    /// What monitor `m` shows where every key passes, as the share of each
+    /// camera and of the seed: the matrix, worked out from the switchers and
+    /// selects every time it is asked for rather than flattened into a copy
+    /// that could stand apart from them.
     pub(crate) fn feed(&self, m: usize) -> Feed {
-        self.shows(Screen::ALL[m])
+        self.keyed(m, [1.0; SWITCHERS])
+    }
+
+    /// The same where each switcher's key passes `passed` of its In2, which
+    /// is the verdict the shader reaches texel by texel.
+    pub(crate) fn keyed(&self, m: usize, passed: [f32; SWITCHERS]) -> Feed {
+        let (mut program, mut in1) = (Feed::DARK, Feed::DARK);
+        self.wiring(m, |step| match step {
+            Step::Program(source) => program = Feed::of(source),
+            Step::In1(source) => in1 = Feed::of(source),
+            Step::Mix(switcher) => {
+                let s = switcher as usize;
+                let in1 = std::mem::replace(&mut in1, Feed::DARK);
+                program = Feed::mix(in1, program, self.level(s, passed[s]));
+            }
+        });
+        program
     }
 
     /// Whether monitor `m` is on its switcher's program rather than on its
@@ -447,10 +588,6 @@ impl Rig {
         self.patterns[switcher].add(at);
     }
 
-    fn shows(&self, screen: Screen) -> Feed {
-        self.carries(self.on(screen))
-    }
-
     /// The rig at this setting, as the graph the instrument runs: both shafts
     /// square on, every knob at its identity. The seed is the one physical camera, and the monitors are dark: on
     /// this rig the seed input is what sparks the loops.
@@ -468,12 +605,9 @@ impl Rig {
                 camera(Cam::Three, [0.985; 3]),
             ],
             monitors: [Monitor::default(); MONITORS],
-            input: Plug {
-                source: Input::Capture {
-                    format: "v4l2".into(),
-                    device: "/dev/video0".into(),
-                },
-                key: SEED_KEY,
+            input: Input::Capture {
+                format: "v4l2".into(),
+                device: "/dev/video0".into(),
             },
             reach: Params::MAX_DELAY,
         }
@@ -507,6 +641,18 @@ mod tests {
         }
     }
 
+    fn shows(rig: &Rig, screen: Screen) -> Feed {
+        rig.feed(screen as usize)
+    }
+
+    /// Every switcher keying, so a verdict handed to any of them counts.
+    fn keyed_everywhere(rig: Rig) -> Rig {
+        Rig {
+            keys: [SEED_KEY; SWITCHERS],
+            ..rig
+        }
+    }
+
     const SETTINGS: [[f32; SWITCHERS]; 4] = [
         [0.0; 4],
         [1.0; 4],
@@ -518,10 +664,10 @@ mod tests {
     fn a_monitor_on_direct_shows_its_own_camera_whatever_the_switchers_say() {
         for switchers in SETTINGS {
             let rig = all(Select::Direct, switchers);
-            assert_feed(rig.shows(Screen::UpperA), [1.0, 0.0, 0.0], 0.0);
-            assert_feed(rig.shows(Screen::LowerA), [1.0, 0.0, 0.0], 0.0);
-            assert_feed(rig.shows(Screen::UpperB), [0.0, 1.0, 0.0], 0.0);
-            assert_feed(rig.shows(Screen::LowerB), [0.0, 1.0, 0.0], 0.0);
+            assert_feed(shows(&rig, Screen::UpperA), [1.0, 0.0, 0.0], 0.0);
+            assert_feed(shows(&rig, Screen::LowerA), [1.0, 0.0, 0.0], 0.0);
+            assert_feed(shows(&rig, Screen::UpperB), [0.0, 1.0, 0.0], 0.0);
+            assert_feed(shows(&rig, Screen::LowerB), [0.0, 1.0, 0.0], 0.0);
         }
     }
 
@@ -529,24 +675,28 @@ mod tests {
     fn upper_a_on_program_with_switcher_a_at_in2_reads_camera_b_and_nothing_else() {
         let mut rig = all(Select::Program, [1.0, 0.0, 0.0, 0.0]);
         rig.selects[1] = Select::Direct;
-        assert_feed(rig.shows(Screen::UpperA), [0.0, 1.0, 0.0], 0.0);
-        assert_feed(rig.shows(Screen::LowerA), [1.0, 0.0, 0.0], 0.0);
-        assert_feed(rig.shows(Screen::UpperB), [0.0, 1.0, 0.0], 0.0);
+        assert_feed(shows(&rig, Screen::UpperA), [0.0, 1.0, 0.0], 0.0);
+        assert_feed(shows(&rig, Screen::LowerA), [1.0, 0.0, 0.0], 0.0);
+        assert_feed(shows(&rig, Screen::UpperB), [0.0, 1.0, 0.0], 0.0);
     }
 
     #[test]
     fn the_seed_reaches_a_b_monitor_only_through_the_whole_chain() {
         let all_the_way = all(Select::Program, [0.5, 1.0, 1.0, 1.0]);
-        assert_feed(all_the_way.shows(Screen::UpperB), [0.0; 3], 1.0);
-        assert_feed(all_the_way.shows(Screen::LowerB), [0.0; 3], 1.0);
+        assert_feed(shows(&all_the_way, Screen::UpperB), [0.0; 3], 1.0);
+        assert_feed(shows(&all_the_way, Screen::LowerB), [0.0; 3], 1.0);
         // Structure A takes camera B's feed, never the seed: on the rig the
         // seed reaches A only as light already round B's loop.
-        assert_feed(all_the_way.shows(Screen::UpperA), [0.5, 0.5, 0.0], 0.0);
+        assert_feed(shows(&all_the_way, Screen::UpperA), [0.5, 0.5, 0.0], 0.0);
         let rotating_instead = Rig {
             switchers: [0.5, 1.0, 1.0, 0.0],
             ..all_the_way
         };
-        assert_feed(rotating_instead.shows(Screen::UpperB), [0.0, 0.0, 1.0], 0.0);
+        assert_feed(
+            shows(&rotating_instead, Screen::UpperB),
+            [0.0, 0.0, 1.0],
+            0.0,
+        );
     }
 
     #[test]
@@ -554,7 +704,7 @@ mod tests {
         for switchers in SETTINGS {
             for select in [Select::Direct, Select::Program] {
                 let rig = all(select, switchers);
-                assert_feed(rig.shows(Screen::Rotating), [0.0, 1.0, 0.0], 0.0);
+                assert_feed(shows(&rig, Screen::Rotating), [0.0, 1.0, 0.0], 0.0);
             }
         }
     }
@@ -564,27 +714,125 @@ mod tests {
         let [a, b, c, d] = [0.3, 0.4, 0.6, 0.2];
         let rig = all(Select::Program, [a, b, c, d]);
         assert_feed(
-            rig.shows(Screen::UpperB),
+            shows(&rig, Screen::UpperB),
             [b * (1.0 - c), 1.0 - b, b * c * (1.0 - d)],
             b * c * d,
         );
-        assert_feed(rig.shows(Screen::UpperA), [1.0 - a, a, 0.0], 0.0);
+        assert_feed(shows(&rig, Screen::UpperA), [1.0 - a, a, 0.0], 0.0);
     }
 
     #[test]
-    fn where_the_key_cuts_the_seed_hands_its_share_to_camera_three() {
-        let [b, c, d] = [0.4, 0.6, 0.2];
-        let rig = all(Select::Program, [0.3, b, c, d]);
-        let feed = rig.shows(Screen::UpperB);
-        let cut: [f32; CAMERAS] = std::array::from_fn(|c| feed.cut(c));
-        assert!(
-            cut.iter()
-                .zip([b * (1.0 - c), 1.0 - b, b * c])
-                .all(|(have, want)| close(*have, want)),
-            "{cut:?}"
+    fn where_a_key_cuts_its_in1_takes_the_share_its_in2_had() {
+        let [a, b, c, d] = [0.3, 0.4, 0.6, 0.2];
+        let rig = all(Select::Program, [a, b, c, d]);
+        let upper_b = |rig: &Rig, passed| rig.keyed(Screen::UpperB as usize, passed);
+        // D keys the seed over camera 3 as the rig starts.
+        assert_feed(
+            upper_b(&rig, [1.0, 1.0, 1.0, 0.0]),
+            [b * (1.0 - c), 1.0 - b, b * c],
+            0.0,
         );
-        let direct = rig.shows(Screen::Rotating);
-        assert_eq!(std::array::from_fn(|c| direct.cut(c)), direct.cameras);
+        // The other three key nothing, whatever they are told.
+        assert_eq!(
+            upper_b(&rig, [0.0, 0.0, 0.0, 1.0]),
+            shows(&rig, Screen::UpperB)
+        );
+        let rig = keyed_everywhere(rig);
+        assert_feed(upper_b(&rig, [1.0, 0.0, 1.0, 1.0]), [0.0, 1.0, 0.0], 0.0);
+        assert_feed(upper_b(&rig, [1.0, 1.0, 0.0, 1.0]), [b, 1.0 - b, 0.0], 0.0);
+        // Half passed is half the crossfade's share.
+        assert_feed(
+            upper_b(&rig, [1.0, 1.0, 0.5, 1.0]),
+            [b * (1.0 - c / 2.0), 1.0 - b, b * c / 2.0 * (1.0 - d)],
+            b * c / 2.0 * d,
+        );
+        let upper_a = |passed| rig.keyed(Screen::UpperA as usize, passed);
+        assert_feed(upper_a([0.0, 1.0, 1.0, 1.0]), [1.0, 0.0, 0.0], 0.0);
+        assert_feed(upper_a([1.0; SWITCHERS]), [1.0 - a, a, 0.0], 0.0);
+        let direct = Rig {
+            selects: [Select::Direct; SELECTS],
+            ..rig
+        };
+        assert_feed(
+            direct.keyed(Screen::UpperA as usize, [0.0; SWITCHERS]),
+            [1.0, 0.0, 0.0],
+            0.0,
+        );
+    }
+
+    fn steps(rig: &Rig, screen: Screen) -> Vec<Step> {
+        let mut steps = Vec::new();
+        rig.wiring(screen as usize, |step| steps.push(step));
+        steps
+    }
+
+    #[test]
+    fn the_wiring_runs_the_chain_from_the_deepest_switcher_out() {
+        use Step::{In1, Mix, Program};
+        let camera = |camera| Source::Camera { camera, late: 0 };
+        let rig = all(Select::Program, [0.3, 0.4, 0.6, 0.2]);
+        assert_eq!(
+            steps(&rig, Screen::UpperB),
+            [
+                Program(Source::Seed),
+                In1(camera(2)),
+                Mix(Switcher::D),
+                In1(camera(0)),
+                Mix(Switcher::C),
+                In1(camera(1)),
+                Mix(Switcher::B),
+            ]
+        );
+        assert_eq!(
+            steps(&rig, Screen::LowerA),
+            [Program(camera(1)), In1(camera(0)), Mix(Switcher::A)]
+        );
+        assert_eq!(steps(&rig, Screen::Rotating), [Program(camera(1))]);
+        let direct = Rig {
+            selects: [Select::Direct; SELECTS],
+            ..rig
+        };
+        assert_eq!(steps(&direct, Screen::UpperA), [Program(camera(0))]);
+        // A unit's delay rides on its camera's arrival at a point that takes
+        // it, and camera 3 has none.
+        let mut late = rig;
+        late.delays = [4, 7];
+        late.inserted[Point::InC1 as usize] = false;
+        assert_eq!(
+            steps(&late, Screen::UpperB)[1..6],
+            [
+                In1(camera(2)),
+                Mix(Switcher::D),
+                In1(camera(0)),
+                Mix(Switcher::C),
+                In1(Source::Camera { camera: 1, late: 7 }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_source_no_verdict_lets_through_is_never_visited() {
+        use Step::{In1, Mix, Program};
+        let camera = |camera| Source::Camera { camera, late: 0 };
+        // A at In2 with no key: camera A's In1 is left dark. Keyed, the key
+        // can cut back to it, so it arrives.
+        let at_in2 = all(Select::Program, [1.0; SWITCHERS]);
+        assert_eq!(
+            steps(&at_in2, Screen::UpperA),
+            [Program(camera(1)), Mix(Switcher::A)]
+        );
+        assert_eq!(
+            steps(&keyed_everywhere(at_in2), Screen::UpperA),
+            [Program(camera(1)), In1(camera(0)), Mix(Switcher::A)]
+        );
+        // B at In1: nothing behind its In2 is walked, key or no key.
+        let at_in1 = all(Select::Program, [1.0, 0.0, 1.0, 1.0]);
+        for rig in [at_in1, keyed_everywhere(at_in1)] {
+            assert_eq!(
+                steps(&rig, Screen::LowerB),
+                [In1(camera(1)), Mix(Switcher::B)]
+            );
+        }
     }
 
     #[test]
@@ -592,36 +840,42 @@ mod tests {
         let mut rig = all(Select::Program, [1.0; SWITCHERS]);
         rig.selects[0] = Select::Direct;
         rig.selects[3] = Select::Direct;
-        assert_feed(rig.shows(Screen::UpperA), [1.0, 0.0, 0.0], 0.0);
-        assert_feed(rig.shows(Screen::LowerA), [0.0, 1.0, 0.0], 0.0);
-        assert_feed(rig.shows(Screen::UpperB), [0.0; 3], 1.0);
-        assert_feed(rig.shows(Screen::LowerB), [0.0, 1.0, 0.0], 0.0);
+        assert_feed(shows(&rig, Screen::UpperA), [1.0, 0.0, 0.0], 0.0);
+        assert_feed(shows(&rig, Screen::LowerA), [0.0, 1.0, 0.0], 0.0);
+        assert_feed(shows(&rig, Screen::UpperB), [0.0; 3], 1.0);
+        assert_feed(shows(&rig, Screen::LowerB), [0.0, 1.0, 0.0], 0.0);
     }
 
     #[test]
     fn every_feed_sums_to_one() {
-        // The rig never amplifies: at any setting, on every monitor, the
-        // shares of the cameras and the seed are the whole picture.
+        // The rig never amplifies: at any setting, on every monitor, under
+        // any verdict of any key, the shares of the cameras and the seed are
+        // the whole picture. The shares are products of one factor per
+        // switcher, so the verdicts' corners are every case there is.
         let positions = [0.0, 0.25, 0.5, 0.9, 1.0];
         let select = |bit: bool| if bit { Select::Program } else { Select::Direct };
+        let verdicts: Vec<[f32; SWITCHERS]> = (0..16u8)
+            .map(|bits| std::array::from_fn(|s| f32::from(bits >> s & 1)))
+            .collect();
         for &a in &positions {
             for &b in &positions {
                 for &c in &positions {
                     for &d in &positions {
                         for bits in 0..16u8 {
-                            let rig = Rig {
+                            let rig = keyed_everywhere(Rig {
                                 switchers: [a, b, c, d],
                                 selects: std::array::from_fn(|i| select(bits >> i & 1 != 0)),
                                 ..Rig::IDENTITY
-                            };
+                            });
                             for screen in Screen::ALL {
-                                let feed = rig.shows(screen);
-                                let cameras: f32 = feed.cameras.iter().sum();
-                                let cut: f32 = (0..CAMERAS).map(|c| feed.cut(c)).sum();
-                                assert!(
-                                    close(cameras + feed.seed, 1.0) && close(cut, 1.0),
-                                    "{rig:?} {screen:?}: {feed:?}"
-                                );
+                                for passed in &verdicts {
+                                    let feed = rig.keyed(screen as usize, *passed);
+                                    let cameras: f32 = feed.cameras.iter().sum();
+                                    assert!(
+                                        close(cameras + feed.seed, 1.0),
+                                        "{rig:?} {screen:?} {passed:?}: {feed:?}"
+                                    );
+                                }
                             }
                         }
                     }
@@ -631,18 +885,36 @@ mod tests {
     }
 
     #[test]
-    fn the_seed_is_the_one_physical_camera_keyed_on_its_way_in() {
+    fn the_seed_is_the_one_physical_camera_and_d_alone_keys_as_the_rig_starts() {
         let params = Rig::IDENTITY.params();
-        let plug = &params.input;
         assert_eq!(
-            plug.source,
+            params.input,
             Input::Capture {
                 format: "v4l2".into(),
                 device: "/dev/video0".into(),
             }
         );
-        assert_eq!(plug.key, SEED_KEY);
-        assert!(plug.key.threshold > 0.0 && plug.key.softness > 0.0);
+        let keys = params.rig.keys;
+        assert_eq!(keys.map(Key::cuts), [false, false, false, true]);
+        assert_eq!(keys.map(|key| key.keying), [Keying::Luma; SWITCHERS]);
+        assert_eq!(keys[Switcher::D as usize], SEED_KEY);
+        assert!(keys.iter().all(|key| key.gain == SEED_KEY.gain));
+    }
+
+    #[test]
+    fn a_rekey_turns_the_measure_over_and_keeps_the_clip_and_gain() {
+        let mut rig = Rig::IDENTITY;
+        rig.rekey(3);
+        assert_eq!(
+            rig.keys[3],
+            Key {
+                keying: Keying::Chroma,
+                ..SEED_KEY
+            }
+        );
+        assert_eq!(rig.keys[..3], [Key::OFF; 3]);
+        rig.rekey(3);
+        assert_eq!(rig, Rig::IDENTITY);
     }
 
     #[test]
@@ -917,12 +1189,11 @@ mod tests {
         // and one share to divide between them.
         fn cameras(wire: Wire, into: &mut Vec<Cam>) {
             match wire {
-                Wire::Cable(point) => into.push(point.camera()),
-                Wire::Three => into.push(Cam::Three),
+                Wire::Cable(cable) => into.push(cable.camera()),
                 Wire::Program(switcher) => {
-                    for wire in switcher.inputs() {
-                        cameras(wire, into);
-                    }
+                    let (one, two) = switcher.inputs();
+                    cameras(Wire::Cable(one), into);
+                    cameras(two, into);
                 }
                 Wire::Seed => {}
             }

@@ -51,6 +51,9 @@ pub enum Action {
     Automate,
     TapIn,
     Quantize,
+    /// A latch with a lamp: the focused switcher's key measures a blue
+    /// screen's colour rather than luma, lit on chroma.
+    Chroma,
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -93,6 +96,7 @@ impl Action {
             Action::Automate => "loop".into(),
             Action::TapIn => "tap in".into(),
             Action::Quantize => "16ths".into(),
+            Action::Chroma => "chroma".into(),
         }
     }
 }
@@ -132,6 +136,7 @@ mod tests {
             Action::Automate,
             Action::TapIn,
             Action::Quantize,
+            Action::Chroma,
             Action::Focus(Node::Camera, 0),
             Action::Record(Edge::Up),
             Action::Cut(Edge::Up),
