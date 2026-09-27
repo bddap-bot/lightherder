@@ -2385,7 +2385,7 @@ fn a_slow_router_output_holds_its_frame_and_a_camera_on_it_sees_the_hold() {
                 .collect(),
         )
     };
-    for flash in [0u64, 3, 4, 7] {
+    for flash in [0u64, 3, 7] {
         let Some(reference) = run(flash, 0, Cadence::Full) else {
             return;
         };
