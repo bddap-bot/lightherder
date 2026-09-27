@@ -1998,11 +1998,8 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
             )
             .expect("a frame down the pipe");
         last = std::time::Instant::now();
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(40));
     }
-    // To the last frame asked for rather than to the release: nothing writes
-    // the span after it, and a display asked this rarely leaves a tenth of a
-    // second of one.
     let held = last.duration_since(started).as_secs_f64();
     let recording = video.finish().expect("a recording");
     let pixels = decoded(&recording, size);
