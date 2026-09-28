@@ -29,7 +29,17 @@ to quit. Plug in a Korg nanoKONTROL2 to play the instrument on Linux.
 
 The web build (`web/build.sh`) plays from the same board in a browser with Web
 MIDI, such as Chrome or Edge, once the page is allowed MIDI access with system
-exclusive. Its monitors share 1 GiB of GPU memory, so delay reaches 23 frames.
+exclusive. The page fixes each virtual monitor at **1920×1080** within a 1 GiB
+GPU bank cap: delay reaches 23 frames, and all three shutter settings (1/60,
+1/30 and 1/24) remain available. Resizing the canvas changes presentation only,
+not the feedback bank's resolution. There is no browser resolution selector
+or query option; `--resolution` below is native-only.
+
+Browser 4K is an intentional parity gap. Keeping the page at 1080p preserves
+those delay and shutter ranges within its bank cap. A 3840×2160 bank costs four
+times as much per stored frame and cannot retain those ranges under 1 GiB;
+the native build has a 2 GiB cap. The page does not offer a board control to
+trade these ranges for resolution. A larger canvas is not a 4K equivalent.
 
 Stills and recording are native-only. The page has no capture output path:
 Marker Set and Record report `capture: lightherder: operation not supported on
