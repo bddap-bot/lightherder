@@ -88,11 +88,7 @@ mod tests {
         let mut clock = Clock::new(RATE, start);
         let stalled = start + Duration::from_secs(1);
         let owed = clock.take_due(stalled);
-        let bound = (BACKLOG.as_secs_f32() * RATE).ceil() as u32 + 1;
-        assert!(
-            (2..=bound).contains(&owed),
-            "{owed} passes for a second gone"
-        );
+        assert!((2..=7).contains(&owed), "{owed} passes for a second gone");
         assert!(clock.due() > stalled, "the clock is still behind");
     }
 

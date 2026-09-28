@@ -2144,9 +2144,6 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
     let Some(mut h) = harness((SIZE, SIZE), (SIZE, SIZE)) else {
         return;
     };
-    // Light on the glass first, and coloured light: a working capture and a
-    // black one have to be different files, and a red one and a blue one
-    // have to be different files too.
     h.step(&Single {
         seed: 1.0,
         loop_gain: [0.0; 3],
@@ -2159,10 +2156,6 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
     });
     h.step_solo(&tinting, SEEDED);
 
-    // 300 rather than a round 320: four bytes a texel is 1200 to the row,
-    // which a texture-to-buffer copy pads out to 1280 — so the packing this
-    // capture does is on the path rather than skipped by a width that
-    // happened to be aligned already.
     let size = (300, 180);
     let dir = std::env::temp_dir().join(format!("lightherder-capture-{}", std::process::id()));
     let still = still_at(&h, &dir, size, TARGET_FORMAT);
@@ -2171,11 +2164,6 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
     assert_eq!(pixels.len() as u32, size.0 * size.1 * 4, "one frame");
     assert!(peak(&pixels) > 32, "the still is black");
 
-    // The same picture through the other byte order a display comes in —
-    // and the deployed instrument's surface is the Bgra one. Decoded they
-    // must be the same picture: a capture that names its byte order wrongly
-    // swaps red and blue, which every oracle that asks only how bright a
-    // frame is passes.
     let swapped = still_at(&h, &dir, size, wgpu::TextureFormat::Bgra8Unorm);
     let coloured = pixels.chunks_exact(4).any(|p| p[0].abs_diff(p[2]) > 16);
     assert!(coloured, "a grey picture cannot tell red from blue");
@@ -2185,14 +2173,16 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
         "red and blue changed places"
     );
 
-    // An hour ahead of the machine's clock, so nothing but the moments handed
-    // in can time the recording, and slower than the capture's rate, so the
-    // file keeps time by writing some frames twice.
     let pressed = std::time::Instant::now() + std::time::Duration::from_secs(3600);
     let slot = std::time::Duration::from_millis(41);
     let presents = 11;
     let mut video = Capture::video(h.device, &dir, size, TARGET_FORMAT, pressed).expect("ffmpeg");
     for k in 0..presents {
+        h.step(&Single {
+            seed: if k % 2 == 0 { 1.0 } else { 0.25 },
+            loop_gain: [0.0; 3],
+            ..frozen(Single::default())
+        });
         video
             .frame(
                 h.device,
@@ -2211,9 +2201,6 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
     let frames: Vec<&[u8]> = pixels
         .chunks_exact((size.0 * size.1 * 4) as usize)
         .collect();
-    // What the file says it is, which is a different fact from what it
-    // holds: a file written at the wrong declared rate plays back at the
-    // wrong speed with every frame present and correct.
     let stamps: Vec<f64> = probed(&recording, "frame=best_effort_timestamp_time")
         .lines()
         .map(|stamp| stamp.parse().expect("a timestamp"))
@@ -2232,8 +2219,16 @@ fn a_capture_writes_the_lit_picture_to_a_file() {
         );
     }
 
-    // A capture nothing was written to is not a capture, and leaves nothing
-    // behind — the file ffmpeg opened for it included.
+    let changes = frames
+        .windows(2)
+        .filter(|pair| peak(pair[0]).abs_diff(peak(pair[1])) > 32)
+        .count();
+    assert_eq!(
+        changes,
+        presents as usize - 1,
+        "picture changes between presents"
+    );
+
     let left = std::fs::read_dir(&dir)
         .expect("the capture directory")
         .count();
