@@ -32,3 +32,11 @@ low-power adapter if the default adapter cannot present to that display.
 `nix-shell --run './web/build.sh'` builds the browser module into `web/dist`.
 The wasm-bindgen CLI must match the exact crate version in `Cargo.toml`;
 `shell.nix` supplies it and `web/build.sh` checks the match.
+
+For browser picture verification, run Chromium headed under `xvfb-run -a -s
+'-screen 0 1920x1080x24'`, set `VK_ICD_FILENAMES` to the GPU vendor's Vulkan ICD,
+and pass `--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan
+--use-angle=vulkan --ignore-gpu-blocklist`. Headless Chromium can fall back to
+SwiftShader and capture none of the WebGPU bank (white screenshots or black
+canvas copies). Confirm a non-fallback adapter and view every captured frame
+before citing it; use a synthetic camera seed and label synthetic MIDI input.

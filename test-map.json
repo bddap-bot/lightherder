@@ -1,49 +1,85 @@
 {
-  "landing": ["scripts/landing check"],
-  "about": "Touched-path → test-suite map, read by `botq test-map`. The acceptance gate derives a landed change's touched paths from its own diff and requires the commands mapped here green. First matching rule wins: specific rules above broad ones. `tests: []` means CONSCIOUSLY untested and must carry its why. An unmapped path fails the resolver loud. Commands run from the repo root.",
+  "landing": [
+    "scripts/landing check"
+  ],
+  "about": "Touched-path \u2192 test-suite map, read by `botq test-map`. The acceptance gate derives a landed change's touched paths from its own diff and requires the commands mapped here green. First matching rule wins: specific rules above broad ones. `tests: []` means CONSCIOUSLY untested and must carry its why. An unmapped path fails the resolver loud. Commands run from the repo root.",
   "rules": [
     {
-      "paths": ["scripts/**"],
-      "tests": ["nix-shell --run 'shellcheck scripts/landing scripts/recipes'", "scripts/recipes check"],
+      "paths": [
+        "docs/verification/*.png"
+      ],
+      "tests": [],
+      "why": "Viewed deployed-page evidence for the parity audit; synthetic camera frames are observations, not executable fixtures."
+    },
+    {
+      "paths": [
+        "scripts/**"
+      ],
+      "tests": [
+        "nix-shell --run 'shellcheck scripts/landing scripts/recipes'",
+        "scripts/recipes check"
+      ],
       "why": "the landing contract and the recipe compositor; shellcheck is what a shell script has, running the landing for real is the gate's job, and a moved gutter or scale in the compositor stales every committed composite"
     },
     {
-      "paths": ["**/*.md", ".gitignore", "LICENSE-*"],
+      "paths": [
+        "**/*.md",
+        ".gitignore",
+        "LICENSE-*"
+      ],
       "tests": [],
-      "why": "prose and licenses — nothing executes them"
+      "why": "prose and licenses \u2014 nothing executes them"
     },
     {
-      "paths": ["recipes/**"],
-      "tests": ["scripts/recipes check"],
+      "paths": [
+        "recipes/**"
+      ],
+      "tests": [
+        "scripts/recipes check"
+      ],
       "why": "the reference frames, the frames this rig answered them with, and the written control sequences that produced them. The composites claim to be what main renders from the scripts beside them, and re-rendering is the only thing that checks the claim; the verdicts in the README are a reader's by eye"
     },
     {
-      "paths": ["web/**"],
+      "paths": [
+        "web/**"
+      ],
       "tests": [
         "nix-shell --run 'shellcheck web/build.sh'",
         "nix-shell --run './web/build.sh'"
       ],
-      "why": "the web build is one script, and running it is the only thing that reads the page and the wasm-bindgen pin at once — a wasm module is not compiled by any native build"
+      "why": "the web build is one script, and running it is the only thing that reads the page and the wasm-bindgen pin at once \u2014 a wasm module is not compiled by any native build"
     },
     {
-      "paths": [".github/workflows/**"],
+      "paths": [
+        ".github/workflows/**"
+      ],
       "tests": [],
-      "why": "GitHub is the only runner that executes these, and the push that lands one is the run that checks it — there is nothing here a local command could assert that the deploy does not"
+      "why": "GitHub is the only runner that executes these, and the push that lands one is the run that checks it \u2014 there is nothing here a local command could assert that the deploy does not"
     },
     {
-      "paths": ["shell.nix"],
-      "tests": ["nix-instantiate --parse shell.nix", "nix-shell --run 'cargo build --tests'"],
+      "paths": [
+        "shell.nix"
+      ],
+      "tests": [
+        "nix-instantiate --parse shell.nix",
+        "nix-shell --run 'cargo build --tests'"
+      ],
       "why": "the pinned dev environment: parsing catches a syntax error, and a build inside it catches a package that the toolchain or the wgpu/winit runtime loads actually needed"
     },
     {
-      "paths": ["**/*.rs", "**/*.wgsl", "Cargo.toml", "Cargo.lock"],
+      "paths": [
+        "**/*.rs",
+        "**/*.wgsl",
+        "Cargo.toml",
+        "Cargo.lock"
+      ],
       "tests": [
         "nix-shell --run 'cargo fmt --check'",
         "nix-shell --run 'cargo clippy --all-targets -- --deny warnings'",
         "nix-shell --run 'cargo test'",
         "scripts/recipes check"
       ],
-      "why": "one crate, one suite, and the recipe frames re-rendered: the committed composites are what this crate draws, so a shader or knob change that moves a picture lands with the frames and the README's verdicts re-done, not two commits later. The WGSL rides the same rule because nothing parses it until a pipeline is built, which only the GPU tests in tests/ do — a shader typo is a runtime error, so `cargo build` alone would pass it. `cargo test` needs no --test-threads: the suite shares one wgpu device precisely so parallel tests cannot fight over device creation"
+      "why": "one crate, one suite, and the recipe frames re-rendered: the committed composites are what this crate draws, so a shader or knob change that moves a picture lands with the frames and the README's verdicts re-done, not two commits later. The WGSL rides the same rule because nothing parses it until a pipeline is built, which only the GPU tests in tests/ do \u2014 a shader typo is a runtime error, so `cargo build` alone would pass it. `cargo test` needs no --test-threads: the suite shares one wgpu device precisely so parallel tests cannot fight over device creation"
     }
   ]
 }
