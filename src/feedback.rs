@@ -64,8 +64,13 @@ const _: () = assert!(STAGES == 4, "shaders/feedback.wgsl spells this number too
 /// pixels because it is the layers that do the multiplying — two frames of
 /// every monitor, the seed, a picture per delay unit per frame of reach and
 /// one per camera per pass of shutter reach — and a card asked for more than
-/// it has fails inside the driver rather than at the command line.
-pub const MAX_BANK_BYTES: u64 = 2 << 30;
+/// it has fails inside the driver rather than at the command line. A page's
+/// is half, the most a browser's software adapter grants one texture.
+pub const MAX_BANK_BYTES: u64 = if cfg!(target_arch = "wasm32") {
+    1 << 30
+} else {
+    2 << 30
+};
 
 /// One texel of [`MONITOR_FORMAT`], in bytes. Asked of the format rather than
 /// written down beside it, since a second copy of it is a second thing to

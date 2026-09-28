@@ -3,10 +3,9 @@
 //! Everything below the window is already portable — the graph, the shader
 //! and the knobs are the same code the deployed instrument runs — so this is
 //! only the three things a page supplies that a terminal does not: an entry
-//! point, somewhere for the log to go, and the canvas winit draws on — and
-//! the one thing it lacks, a control surface, so its delay units reach
-//! nothing and its shutters open a pass at most. Nothing arrives in the
-//! query string: there is one instrument.
+//! point, somewhere for the log to go, and the canvas winit draws on. The
+//! board reaches it over Web MIDI (see [`crate::midi`]). Nothing arrives in
+//! the query string: there is one instrument.
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -66,14 +65,7 @@ pub fn start() {
             fullscreen: false,
             ..crate::cli::Cli::default()
         };
-        // No hand dials a delay or a shutter here, and thirty frames of lines
-        // are more bank than some browsers allocate in one texture.
-        let params = crate::params::Params {
-            reach: 0,
-            shutter_reach: 0,
-            ..cli.instrument()
-        };
-        if let Err(why) = crate::app::run(params, &cli).await {
+        if let Err(why) = crate::app::run(cli.instrument(), &cli).await {
             complain(&format!("{why}"));
         }
     });

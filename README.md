@@ -27,6 +27,10 @@ nix-shell --run 'cargo run --release -- --windowed --seed bars'
 This opens a window with a generated test pattern as its input. Close the window
 to quit. Plug in a Korg nanoKONTROL2 to play the instrument on Linux.
 
+The web build (`web/build.sh`) plays from the same board in a browser with Web
+MIDI, such as Chrome or Edge, once the page is allowed MIDI access with system
+exclusive. Its monitors share 1 GiB of GPU memory, so delay reaches 23 frames.
+
 | Option | Effect |
 | --- | --- |
 | `--windowed` | Open a window; fullscreen is the default. |
