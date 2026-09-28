@@ -80,11 +80,10 @@ const fn button(cc: u8, action: Action) -> Button {
 /// piece is played on, on the fader nearest the hand that is already on the
 /// select rows. The rotaries above them are the right hand's: the focused
 /// camera — where it stands on its shaft and how late its cable is — and
-/// then the focused monitor's frame rate, the one router-output setting a
-/// knob turns. The period's cut length sits over the period's fader, since
-/// the original's period mode is one pair of knobs, and the key's clip over
-/// the crossfade, since the two share out In2 between them; its gain takes
-/// the rotary left. Every handle has a control of its own, so there is no
+/// then where the focused monitor stands behind the glass. The period's cut
+/// length sits over the period's fader, since the original's period mode is
+/// one pair of knobs, and the key's clip over the crossfade, since the two
+/// share out In2 between them; its gain takes the rotary left. Every handle has a control of its own, so there is no
 /// second page and the precision is absolute on the fifth rotary.
 pub(crate) const FADERS: [Fader; 15] = [
     fader(0, Knob::Hue),
@@ -98,7 +97,7 @@ pub(crate) const FADERS: [Fader; 15] = [
     fader(16, Knob::Slide),
     fader(17, Knob::Rotation),
     fader(18, Knob::Delay),
-    fader(19, Knob::FrameRate),
+    fader(19, Knob::Height),
     fader(21, Knob::KeyGain),
     fader(22, Knob::CutLength),
     fader(23, Knob::KeyClip),
@@ -191,6 +190,9 @@ pub(crate) const TAP_IN: u8 = INSERT + 1;
 pub(crate) const QUANTIZE: u8 = TAP_IN + 1;
 pub(crate) const CHROMA: u8 = QUANTIZE + 1;
 pub(crate) const SHUTTER: u8 = CHROMA + 1;
+pub(crate) const RATE: u8 = M_ROW + crate::rig::MONITORS as u8;
+pub(crate) const QUARTER: u8 = RATE + 1;
+const _: () = assert!(QUARTER < M_ROW + STRIPS as u8);
 const _: () = assert!(SHUTTER < S_ROW + STRIPS as u8);
 const _: () = assert!(crate::rig::count(Node::Camera) as u8 + S_ROW <= INSERT);
 pub(crate) const PRECISION: u8 = ROTARY_ROW + 4;
@@ -238,7 +240,7 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 /// and record records it for as long as a hand stays on it. The track pair
 /// is the focused camera's zoom lens, wider and longer: every rotary is
 /// taken, and a lens is a knob, so each press turns it a step.
-pub(crate) const BUTTONS: [Button; 32] = [
+pub(crate) const BUTTONS: [Button; 34] = [
     button(S_ROW, Action::Focus(Node::Camera, 0)),
     button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
     button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
@@ -269,6 +271,8 @@ pub(crate) const BUTTONS: [Button; 32] = [
     button(QUANTIZE, Action::Quantize),
     button(CHROMA, Action::Chroma),
     button(SHUTTER, Action::Shutter),
+    button(RATE, Action::Rate),
+    button(QUARTER, Action::Quarter),
     button(58, Action::Turn(Knob::Lens, -LENS_PRESS)),
     button(59, Action::Turn(Knob::Lens, LENS_PRESS)),
 ];
@@ -296,6 +300,8 @@ pub struct Shown {
     pub quantize: bool,
     pub chroma: bool,
     pub shutter: bool,
+    pub slowed: bool,
+    pub turned: bool,
 }
 
 /// One thing off the wire. A knob or a button is a control change; a system
@@ -691,7 +697,9 @@ impl Midi {
             | when(shown.tapping, Action::TapIn)
             | when(shown.quantize, Action::Quantize)
             | when(shown.chroma, Action::Chroma)
-            | when(shown.shutter, Action::Shutter);
+            | when(shown.shutter, Action::Shutter)
+            | when(shown.slowed, Action::Rate)
+            | when(shown.turned, Action::Quarter);
         for axis in Axis::ALL {
             want |= when(shown.flipped[axis as usize], Action::Flip(axis));
         }
@@ -1545,7 +1553,7 @@ mod tests {
                 fader(16, Knob::Slide),
                 fader(17, Knob::Rotation),
                 fader(18, Knob::Delay),
-                fader(19, Knob::FrameRate),
+                fader(19, Knob::Height),
                 fader(21, Knob::KeyGain),
                 fader(22, Knob::CutLength),
                 fader(23, Knob::KeyClip),
@@ -1585,14 +1593,14 @@ mod tests {
                 button(37, Action::Quantize),
                 button(38, Action::Chroma),
                 button(39, Action::Shutter),
+                button(53, Action::Rate),
+                button(54, Action::Quarter),
                 button(58, Action::Turn(Knob::Lens, -1.0 / 32.0)),
                 button(59, Action::Turn(Knob::Lens, 1.0 / 32.0)),
             ]
         );
-        for cc in [53, 54, 55] {
-            assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
-            assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
-        }
+        assert!(!FADERS.iter().any(|f| f.cc == 55), "M8 is bound");
+        assert!(!BUTTONS.iter().any(|b| b.cc == 55), "M8 is bound");
     }
 
     #[test]
@@ -1791,11 +1799,11 @@ mod tests {
     }
 
     #[test]
-    fn rotaries_3_and_4_turn_delay_and_frame_rate_on_the_rig_as_launched() {
+    fn rotaries_3_and_4_turn_delay_and_height_on_the_rig_as_launched() {
         let mut params = crate::config::instrument();
         let focus = Focus::default();
         let mut midi = Midi::default();
-        for (control, knob) in [(18, Knob::Delay), (19, Knob::FrameRate)] {
+        for (control, knob) in [(18, Knob::Delay), (19, Knob::Height)] {
             let before = params.knob(knob, focus);
             let mut wire = cc(control, 20);
             wire.extend(cc(control, 127));
@@ -1810,7 +1818,8 @@ mod tests {
             assert_ne!(knob.reads(after), knob.reads(before));
         }
         assert_eq!(params.rig.delays[0], 25);
-        assert_eq!(params.monitors[0].cadence, crate::params::Cadence::Film);
+        assert!(params.structures[0].upper > 0.0);
+        assert_eq!(params.structures[0].lower, crate::affine::Stand::default());
     }
 
     #[test]
@@ -1935,6 +1944,11 @@ mod tests {
             feed(&mut midi, &params, &cc(SHUTTER, 127)),
             [Action::Shutter]
         );
+        assert_eq!(feed(&mut midi, &params, &cc(RATE, 127)), [Action::Rate]);
+        assert_eq!(
+            feed(&mut midi, &params, &cc(QUARTER, 127)),
+            [Action::Quarter]
+        );
         assert_eq!(
             feed(&mut midi, &params, &cc(43, 127)),
             [Action::ResetLastKnob]
@@ -1946,7 +1960,7 @@ mod tests {
     #[test]
     fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        for dead in [53, 54, 55, 100] {
+        for dead in [55, 100] {
             assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
             assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
         }

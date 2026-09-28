@@ -24,9 +24,9 @@
 
 use bytemuck::Zeroable;
 
-use crate::affine::{flip_uv, sample_transform, Affine2, Framing};
+use crate::affine::{flip_uv, sample_transform, Affine2, Framing, Stand};
 use crate::params::{Params, Shutter};
-use crate::rig::{Measure, Origin, Rig, Step, Switcher, CAMERAS, UNITS};
+use crate::rig::{Measure, Origin, Rig, Step, Switcher, CAMERAS, MONITORS, UNITS};
 
 /// Half-float so the loop keeps headroom above 1.0 and does not quantise to
 /// bands after a few dozen passes.
@@ -45,7 +45,7 @@ pub const HEADROOM: f32 = 2.0;
 /// on every earlier pass the slowest shutter is open on, plus the seed. The
 /// rig never reaches it, but it is the bound a look matrix cannot cross, so
 /// nothing has to check.
-pub const MAX_TAPS: usize = CAMERAS * (crate::rig::MONITORS + EARLIER) + 1;
+pub const MAX_TAPS: usize = CAMERAS * (MONITORS + EARLIER) + 1;
 
 const EARLIER: usize = Shutter::SLOWEST.earlier() as usize;
 
@@ -291,17 +291,20 @@ fn looks(params: &Params, c: usize, slab: usize) -> impl Iterator<Item = Edge> +
         .enumerate()
         .filter(|(_, look)| **look > 0.0)
         .map(move |(src, look)| Edge {
-            through: Through::Camera(c),
+            through: Through::Camera {
+                camera: c,
+                monitor: src,
+            },
             layer: shape.monitor(slab, src),
             share: *look,
         })
 }
 
-/// What a tap came through: one of the graph's cameras, live or off its
-/// line, or the seed on its way in to the switcher.
+/// What a tap came through: one of the graph's cameras, live on the monitor
+/// it looks at or off its line, or the seed on its way in to the switcher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Through {
-    Camera(usize),
+    Camera { camera: usize, monitor: usize },
     Line(usize),
     Seed,
 }
@@ -771,13 +774,18 @@ impl Feedback {
         }
         let aspect = self.aspect();
 
-        let framings: [_; CAMERAS] =
-            std::array::from_fn(|c| sample_transform(&params.framing(c), aspect));
-        // What the seed's tap samples through. It is plugged into the
-        // switcher, so nothing frames it: it arrives square on and fills the
-        // monitor, which is the identity framing carried through the same
-        // transform every camera's is.
-        let square_on = sample_transform(&Framing::identity(), aspect);
+        let views: [[_; MONITORS]; CAMERAS] = std::array::from_fn(|c| {
+            std::array::from_fn(|m| sample_transform(&params.framing(c), params.stand(m), aspect))
+        });
+        let square_on = sample_transform(&Framing::identity(), Stand::default(), aspect);
+        let seen = |through: Through| match through {
+            Through::Camera { camera, monitor } => views[camera][monitor],
+            // Framed when it was recorded, the stand already in it.
+            Through::Line(_) => Affine2::IDENTITY,
+            // There is no camera between the switcher and the seed: it
+            // arrives square on and fills the monitor.
+            Through::Seed => square_on,
+        };
         let (newest, next) = (
             self.shape.newest(self.frame),
             self.shape.newest(self.frame + 1),
@@ -803,19 +811,17 @@ impl Feedback {
                 };
                 if let Some(origin) = origin {
                     edges(params, origin, self.frame, |edge| {
-                        let (sampled, gain) = match edge.through {
-                            Through::Camera(c) => {
-                                (mirror.then(&framings[c]), params.cameras[c].gain)
+                        let gain = match edge.through {
+                            Through::Camera { camera, .. } | Through::Line(camera) => {
+                                params.cameras[camera].gain
                             }
-                            // Framed when it was recorded: all that is left is
-                            // the cable and the router output.
-                            Through::Line(c) => (mirror, params.cameras[c].gain),
-                            // There is no camera between the switcher and the
-                            // seed, so every stage a camera would have takes
-                            // its identity and the layer arrives as itself.
-                            Through::Seed => (mirror.then(&square_on), [1.0; 3]),
+                            Through::Seed => [1.0; 3],
                         };
-                        taps[count] = Tap::new(sampled, gain.map(|g| edge.share * g), edge.layer);
+                        taps[count] = Tap::new(
+                            mirror.then(&seen(edge.through)),
+                            gain.map(|g| edge.share * g),
+                            edge.layer,
+                        );
                         count += 1;
                     });
                 }
@@ -857,11 +863,10 @@ impl Feedback {
             );
         }
         for camera in self.shape.recorded() {
-            let framing = framings[camera];
             let mut uniforms = Uniforms::zeroed();
             let mut count = 0usize;
             for edge in looks(params, camera, newest) {
-                uniforms.taps[count] = Tap::new(framing, [edge.share; 3], edge.layer);
+                uniforms.taps[count] = Tap::new(seen(edge.through), [edge.share; 3], edge.layer);
                 count += 1;
             }
             let lines = self.shape.lines() as f32;
@@ -1115,7 +1120,10 @@ mod tests {
         // whole.
         let three = Origin::Camera { camera: 2, late: 0 };
         let live = Edge {
-            through: Through::Camera(2),
+            through: Through::Camera {
+                camera: 2,
+                monitor: 4,
+            },
             layer: shape.monitor(shape.newest(9), 4),
             share: 1.0,
         };

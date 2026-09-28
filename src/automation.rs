@@ -41,7 +41,7 @@ impl Automation {
                     .flat_map(|monitor| {
                         Knob::ALL
                             .into_iter()
-                            .filter(|knob| knob.node() == Node::Monitor && *knob != Knob::FrameRate)
+                            .filter(|knob| knob.node() == Node::Monitor && *knob != Knob::Height)
                             .map(move |knob| Lane {
                                 knob,
                                 monitor,
@@ -141,7 +141,7 @@ mod tests {
             params.nudge(Knob::Brightness, -0.05, at(1));
             if pass == 2 {
                 params.nudge(Knob::Temperature, 1.0, at(3));
-                params.nudge(Knob::FrameRate, 1.0, at(3));
+                params.nudge(Knob::Height, 0.1, at(3));
                 params.nudge(Knob::Slide, 0.1, Focus::default());
             }
             automation.pass(&mut params);

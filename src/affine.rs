@@ -10,6 +10,11 @@ pub struct Affine2 {
 }
 
 impl Affine2 {
+    pub const IDENTITY: Affine2 = Affine2 {
+        m: [[1.0, 0.0], [0.0, 1.0]],
+        t: [0.0, 0.0],
+    };
+
     /// Counter-clockwise by `radians`, in a y-up space.
     pub fn rotation(radians: f32) -> Affine2 {
         let (s, c) = radians.sin_cos();
@@ -88,6 +93,28 @@ impl Framing {
     }
 }
 
+/// A monitor's place in its camera's view: raised by `height` monitor
+/// heights, and turned a quarter counter-clockwise about its own centre.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stand {
+    pub height: f32,
+    pub turned: bool,
+}
+
+impl Stand {
+    /// A literal quarter turn: `Affine2::rotation` misses zero by 4e-8 there.
+    fn seen(self) -> Affine2 {
+        let lowered = Affine2::translation(0.0, -self.height);
+        match self.turned {
+            true => lowered.then(&Affine2 {
+                m: [[0.0, 1.0], [-1.0, 0.0]],
+                t: [0.0, 0.0],
+            }),
+            false => lowered,
+        }
+    }
+}
+
 /// In the order the pair of flips is written down, which is the order
 /// [`crate::params::Monitor::flip`] holds them in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,8 +145,8 @@ impl Default for Framing {
 }
 
 /// Centred, y-up and normalised to the monitor's height — the space the
-/// framing numbers are expressed in, so a pan of 0.25 means the same fraction
-/// of the monitor's height whatever its shape.
+/// framing numbers are expressed in, so a height of 0.25 means the same
+/// fraction of the monitor's height whatever its shape.
 pub fn uv_to_screen(aspect: f32) -> Affine2 {
     Affine2 {
         m: [[aspect, 0.0], [0.0, -1.0]],
@@ -136,17 +163,17 @@ pub fn screen_to_uv(aspect: f32) -> Affine2 {
 }
 
 /// UV -> UV map from a destination texel to the source texel the camera saw
-/// there, i.e. the inverse of the framing.
+/// there: the framing undone, then the monitor's stand.
 ///
 /// The intermediate space is centred, y-up and normalised to the monitor's
 /// height, so rotation stays circular on a non-square monitor and the framing
 /// numbers mean the same thing at any resolution.
-///
-pub fn sample_transform(framing: &Framing, aspect: f32) -> Affine2 {
+pub fn sample_transform(framing: &Framing, stand: Stand, aspect: f32) -> Affine2 {
     let inv_zoom = 1.0 / framing.zoom;
     uv_to_screen(aspect)
         .then(&Affine2::rotation(-framing.rotation))
         .then(&Affine2::scale(inv_zoom, inv_zoom))
+        .then(&stand.seen())
         .then(&screen_to_uv(aspect))
 }
 
@@ -215,7 +242,7 @@ mod tests {
     }
     #[test]
     fn identity_framing_samples_where_it_draws() {
-        let t = sample_transform(&framing(1.0, 0.0), 16.0 / 9.0);
+        let t = sample_transform(&framing(1.0, 0.0), Stand::default(), 16.0 / 9.0);
         for p in [[0.3, 0.7], [0.0, 0.0], [1.0, 1.0]] {
             assert!(close(t.apply(p), p), "{:?} -> {:?}", p, t.apply(p));
         }
@@ -223,14 +250,14 @@ mod tests {
 
     #[test]
     fn zoom_pulls_the_sample_toward_the_centre() {
-        let t = sample_transform(&framing(2.0, 0.0), 1.0);
+        let t = sample_transform(&framing(2.0, 0.0), Stand::default(), 1.0);
         assert!(close(t.apply([1.0, 0.5]), [0.75, 0.5]));
         assert!(close(t.apply([0.5, 0.5]), [0.5, 0.5]));
     }
 
     #[test]
     fn positive_rotation_turns_the_image_counter_clockwise() {
-        let t = sample_transform(&framing(1.0, FRAC_PI_2), 1.0);
+        let t = sample_transform(&framing(1.0, FRAC_PI_2), Stand::default(), 1.0);
         // The right edge shows what was at the bottom (v = 1), which is the
         // bottom sweeping round to the right: counter-clockwise on screen.
         assert!(
@@ -241,8 +268,44 @@ mod tests {
     }
 
     #[test]
+    fn a_monitor_is_seen_where_it_stands_behind_the_framing() {
+        let to_uv = screen_to_uv(2.0);
+        let seen = |framing: Framing, stand: Stand, at: [f32; 2]| {
+            sample_transform(&framing, stand, 2.0).apply(to_uv.apply(at))
+        };
+        let (square, raised) = (
+            framing(1.0, 0.0),
+            Stand {
+                height: 0.25,
+                turned: false,
+            },
+        );
+        // Raised a quarter of its height: its centre is seen a quarter above
+        // the axis.
+        assert!(close(seen(square, raised, [0.0, 0.25]), [0.5, 0.5]));
+        // Turned a quarter counter-clockwise about its own centre: the right
+        // of its face is seen above that centre, a monitor's height being
+        // the unit either way up.
+        let turned = Stand {
+            turned: true,
+            ..raised
+        };
+        let right = to_uv.apply([0.3, 0.0]);
+        assert!(close(seen(square, turned, [0.0, 0.55]), right));
+        // The camera turns what it sees, stand and all: a quarter turn of
+        // the camera puts the raised centre left of the axis.
+        let quarter = framing(1.0, FRAC_PI_2);
+        assert!(close(seen(quarter, raised, [-0.25, 0.0]), [0.5, 0.5]));
+        // And magnifies it: the raised centre is twice as high at zoom 2.
+        assert!(close(
+            seen(framing(2.0, 0.0), raised, [0.0, 0.5]),
+            [0.5, 0.5]
+        ));
+    }
+
+    #[test]
     fn rotation_accounts_for_a_non_square_monitor() {
-        let t = sample_transform(&framing(1.0, FRAC_PI_2), 2.0);
+        let t = sample_transform(&framing(1.0, FRAC_PI_2), Stand::default(), 2.0);
         // A quarter turn of a 2:1 monitor overflows its own height; a naive
         // uv-space rotation would land at v = 1.0 instead.
         assert!(

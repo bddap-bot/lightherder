@@ -9,11 +9,11 @@
 use std::io::Write;
 use std::sync::OnceLock;
 
-use lightherder::affine::Framing;
+use lightherder::affine::{Framing, Stand};
 use lightherder::capture::Capture;
 use lightherder::feedback::Feedback;
 use lightherder::input::{Input, Pattern, Source};
-use lightherder::params::{Cadence, Camera, Colour, Monitor, Params, Shutter};
+use lightherder::params::{Cadence, Camera, Colour, Monitor, Params, Shutter, Structure};
 use lightherder::present::{Present, View};
 use lightherder::rig::{
     Key, Measure, Point, Rig, Select, Switcher, MONITORS, SELECTS, SHAFTS, SWITCHERS,
@@ -3060,6 +3060,103 @@ fn a_slow_shutter_gathers_its_earlier_pass_through_the_lens() {
         h.present(Some(0));
         let img = h.read();
         let (there, here) = (img.at(long[0], long[1]), img.at(square[0], square[1]));
+        match pass {
+            0 => assert!(there < 2.0 && here < 2.0, "{there} {here}"),
+            1 => assert!((100.0..160.0).contains(&there), "{there}"),
+            _ => assert!(there > 200.0 && here < 100.0, "pass {pass}: {there} {here}"),
+        }
+    }
+}
+
+/// Where the seed's spot lands, in uv on a square monitor, from a point of
+/// the camera's view in the screen space.
+fn landing(at: [f32; 2]) -> [f32; 2] {
+    lightherder::affine::screen_to_uv(1.0).apply(at)
+}
+
+#[test]
+fn a_monitor_is_seen_where_it_stands_behind_the_glass() {
+    // The seed's spot on both of structure B's monitors, and camera A
+    // watching one of them, drawing to monitor 1 direct. Raised, the upper's
+    // spot is seen higher by its height; the lower, turned a quarter and
+    // lowered, turns the spot to above its centre and takes it down with
+    // it. The camera turns what it sees, stand and all, so a quarter turn of
+    // the shaft puts the raised spot left of centre, not above it. Structure
+    // A's monitors stand elsewhere, and move nothing camera A sees of B's.
+    let cases = [
+        (SEEDED, 0.0, false, 0.0, [SPOT[0], 0.125]),
+        (SEEDED + 1, -0.125, true, 0.0, [0.0, 0.125]),
+        (
+            SEEDED,
+            0.0,
+            false,
+            std::f32::consts::FRAC_PI_2,
+            [-0.125, SPOT[0]],
+        ),
+    ];
+    for (m, lower, turned, rotation, want) in cases {
+        let mut p = blank();
+        p.rig.keys[Switcher::D as usize] = Key::OFF;
+        seeding(&mut p);
+        p.rig.selects[SEEDED + 1] = Select::Program;
+        p.cameras[0].look = one_hot(m);
+        p.shafts[0].rotation = rotation;
+        p.structures[0] = Structure {
+            upper: 0.3,
+            lower: Stand {
+                height: -0.3,
+                turned: true,
+            },
+        };
+        p.structures[1] = Structure {
+            upper: 0.125,
+            lower: Stand {
+                height: lower,
+                turned,
+            },
+        };
+        let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+            return;
+        };
+        h.feedback.step(h.device, h.queue, &p);
+        h.feedback.step(h.device, h.queue, &p);
+        h.present(Some(0));
+        let img = h.read();
+        let found = img.brightest_uv();
+        assert!(
+            img.at(found[0], found[1]) > 200.0,
+            "monitor {}: no spot",
+            m + 1
+        );
+        assert!(
+            landed(found, landing(want)),
+            "monitor {} at {rotation}: {found:?}, not {:?}",
+            m + 1,
+            landing(want)
+        );
+    }
+}
+
+#[test]
+fn a_slow_shutter_gathers_its_earlier_pass_where_the_monitor_stood() {
+    // Camera A, a thirtieth open, on the seed held on monitor 3 raised an
+    // eighth. From pass 2 both halves of its exposure are the raised spot; a
+    // picture recorded without the stand would put half the light back where
+    // the seed is.
+    let mut p = blank();
+    p.cameras[0].look = one_hot(SEEDED);
+    p.cameras[0].shutter = Shutter::Thirtieth;
+    p.structures[1].upper = 0.125;
+    seeding(&mut p);
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    let (raised, square) = (landing([SPOT[0], 0.125]), landing(SPOT));
+    for pass in 0..4 {
+        h.feedback.step(h.device, h.queue, &p);
+        h.present(Some(0));
+        let img = h.read();
+        let (there, here) = (img.at(raised[0], raised[1]), img.at(square[0], square[1]));
         match pass {
             0 => assert!(there < 2.0 && here < 2.0, "{there} {here}"),
             1 => assert!((100.0..160.0).contains(&there), "{there}"),

@@ -52,12 +52,14 @@ monitor or switcher; Cycle shows their values on screen.
 | S1–S3 | Select camera A, B or 3. |
 | S4 | Switch the camera's feed into the monitor between its delay unit's delayed and live outputs; lit on delayed. |
 | M1–M5 | Select upper A, lower A, upper B, lower B or the rotating monitor. |
+| M6 | Step the monitor's frame rate through 60, 50, 30 and 24, then back to 60; lit when slower than 60. |
+| M7 | Turn a lower monitor 90°, or back; lit while turned. Other monitors do not turn. |
 | R1–R4 | Select switcher A, B, C or D. |
 | Faders 1–6 | Monitor hue, saturation, brightness, contrast, temperature, sharpness. |
 | Faders 7–8 | Switcher reversal period (0–60 passes; 0 disables it and undoes a reversal it still holds), crossfade from In1 (down) to In2 (up). |
 | Rotaries 1–3 | Camera slide toward or away from its monitors, rotation, delay (0–30 frames). A and 3 are on one shaft, so they share slide and rotation; 3 has no delay unit. |
 | Track ◀ / ▶ | Zoom the camera's lens out / in, 28–70 mm: a press changes the focal length by up to 3%, less at finer precision. The lens magnifies its own camera only; 3's is fixed. |
-| Rotary 4 | Monitor frame rate: 60, 50, 30 or 24. |
+| Rotary 4 | Raise or lower the monitor in its camera's view, up to half a monitor; at 0 it lines up with the other monitor that camera sees. The rotating monitor has none. |
 | Rotary 5 | Precision: a full movement spans 1/64 to all of a continuous control's range. |
 | Rotary 6 | Switcher key gain, 1–1000: raise to harden the key's edge. |
 | Rotary 7 | Switcher cut length: the switcher reverses back this many passes after each reversal of its period (0–60; at 0, or at least the period, it waits for the next reversal). |
@@ -66,7 +68,7 @@ monitor or switcher; Cycle shows their values on screen.
 | S5 | Tap in: lighting S5 empties the switcher's one-bar pattern (128 passes, about 2.1 s); while it is lit, each R5 press adds a beat, and the switcher reverses on every beat, every bar. Press S5 again, or select another switcher, to keep the pattern; press S5 twice to clear it. |
 | S6 | While lit, each beat R5 adds lands on the nearest sixteenth of the bar. |
 | S7 | Toggle the switcher's key between luma and chroma; lit on chroma. |
-| S8 | Step the camera's shutter through 1/60, 1/30 and 1/24, then back to 1/60; lit when slower than 1/60. The frame rate stays as rotary 4 sets it; each camera frame averages the light over the shutter's time, so whatever moves in its view smears. |
+| S8 | Step the camera's shutter through 1/60, 1/30 and 1/24, then back to 1/60; lit when slower than 1/60. The frame rate stays as M6 sets it; each camera frame averages the light over the shutter's time, so whatever moves in its view smears. |
 | R6 / R7 | Flip the monitor horizontally / vertically. |
 | R8 | Select direct camera feed or switcher output on a structure monitor. |
 | Rewind / Stop | Reset the last knob moved / reset all knobs and patterns. |

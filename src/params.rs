@@ -1,9 +1,9 @@
 //! The knobs on the instrument. No windowing, no GPU — a MIDI surface drives
 //! the same values a fader does.
 
-use crate::affine::{Axis, Framing};
+use crate::affine::{Axis, Framing, Stand};
 use crate::input::Input;
-use crate::rig::{Measure, Rig};
+use crate::rig::{Measure, Mount, Rig};
 
 /// The colour controls on one monitor's front panel, in the order an analog
 /// signal meets them: chroma decode, video amplifier, phosphor.
@@ -319,6 +319,14 @@ impl Monitor {
     }
 }
 
+/// Tilting the glass off 45° moves the reflection as the lower monitor's
+/// rails do, so the lower's height is the glass's angle as well.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Structure {
+    pub upper: f32,
+    pub lower: Stand,
+}
+
 /// The whole instrument for one frame: the shafts the cameras stand on,
 /// every camera, every monitor, and the switchers routing the first onto the
 /// second. The live state the knobs mutate, and the only one there is.
@@ -332,6 +340,7 @@ pub struct Params {
     /// and B have one, and camera 3, past the end, has a fixed lens. A lens
     /// magnifies what its own camera sees and nothing else on the shaft.
     pub lenses: [f32; crate::rig::LENSES],
+    pub structures: [Structure; crate::rig::STRUCTURES],
     pub cameras: [Camera; crate::rig::CAMERAS],
     pub monitors: [Monitor; crate::rig::MONITORS],
     /// The switchers and the router selects: the whole of the routing, and
@@ -445,9 +454,7 @@ pub enum Knob {
     Contrast,
     Temperature,
     Sharpness,
-    /// The frame rate of the router output feeding the focused monitor, as
-    /// a step along [`Cadence::ALL`]: full rate at rest, slower up the travel.
-    FrameRate,
+    Height,
     /// How far the focused switcher stands toward its In2: 0 is In1 whole, 1
     /// is In2 whole. The routing is these four, their keys and the four
     /// selects, and nothing else.
@@ -530,7 +537,7 @@ impl Knob {
         Knob::Contrast,
         Knob::Temperature,
         Knob::Sharpness,
-        Knob::FrameRate,
+        Knob::Height,
         Knob::Switcher,
         Knob::Period,
         Knob::CutLength,
@@ -551,7 +558,7 @@ impl Knob {
             Knob::Contrast => "contrast",
             Knob::Temperature => "temperature",
             Knob::Sharpness => "sharpness",
-            Knob::FrameRate => "frame rate",
+            Knob::Height => "height",
             Knob::Switcher => "switcher",
             Knob::Period => "period",
             Knob::CutLength => "cut length",
@@ -570,12 +577,13 @@ impl Knob {
             | Knob::KeyClip => {
                 format!("{value:.3}")
             }
-            Knob::Rotation | Knob::Hue | Knob::Brightness => format!("{value:+.3}"),
+            Knob::Rotation | Knob::Hue | Knob::Brightness | Knob::Height => {
+                format!("{value:+.3}")
+            }
             Knob::Temperature => format!("{value:+.1}"),
             Knob::Lens => format!("{value:.1}"),
             Knob::KeyGain => format!("{value:.1}"),
             Knob::Delay | Knob::Period | Knob::CutLength => format!("{}", value as u32),
-            Knob::FrameRate => format!("{}", Cadence::ALL[value as usize].fps()),
         }
     }
 
@@ -588,7 +596,7 @@ impl Knob {
             | Knob::Contrast
             | Knob::Temperature
             | Knob::Sharpness
-            | Knob::FrameRate => Node::Monitor,
+            | Knob::Height => Node::Monitor,
             Knob::Switcher | Knob::Period | Knob::CutLength | Knob::KeyClip | Knob::KeyGain => {
                 Node::Switcher
             }
@@ -622,7 +630,9 @@ impl Knob {
             // the travel is fivefold on it every pass; past that the loop
             // shows its grain and nothing else.
             Knob::Sharpness => Limit::Clamp(0.0, 2.0),
-            Knob::FrameRate => Limit::Whole(Cadence::ALL.len() as u32 - 1),
+            // Half a monitor either way: past that, most of it is out of
+            // its camera's view.
+            Knob::Height => Limit::Clamp(-0.5, 0.5),
             Knob::Period | Knob::CutLength => Limit::Whole(crate::rig::MAX_PERIOD),
             // A crossfade stands between its two inputs and nowhere else.
             Knob::Switcher => Limit::Clamp(0.0, 1.0),
@@ -709,10 +719,7 @@ impl Params {
             Knob::Contrast => mon.colour.contrast,
             Knob::Temperature => mon.colour.temperature,
             Knob::Sharpness => mon.sharpness,
-            Knob::FrameRate => Cadence::ALL
-                .iter()
-                .position(|c| *c == mon.cadence)
-                .expect("every cadence is on the ladder") as f32,
+            Knob::Height => self.stand(focus.monitor).height,
             Knob::Period => self.rig.periods[focus.switcher] as f32,
             Knob::CutLength => self.rig.cut_lengths[focus.switcher] as f32,
             Knob::Switcher => self.rig.switchers[focus.switcher],
@@ -741,9 +748,6 @@ impl Params {
                     }
                     Knob::Period => self.rig.periods[focus.switcher] = count,
                     Knob::CutLength => self.rig.cut_lengths[focus.switcher] = count,
-                    Knob::FrameRate => {
-                        self.monitors[focus.monitor].cadence = Cadence::ALL[count as usize]
-                    }
                     Knob::Slide
                     | Knob::Lens
                     | Knob::Rotation
@@ -753,6 +757,7 @@ impl Params {
                     | Knob::Contrast
                     | Knob::Temperature
                     | Knob::Sharpness
+                    | Knob::Height
                     | Knob::Switcher
                     | Knob::KeyClip
                     | Knob::KeyGain => unreachable!("only a count has a whole limit"),
@@ -772,7 +777,8 @@ impl Params {
     }
 
     /// Every index is one the caller has already landed inside this graph.
-    /// `None` on a camera without the part: camera 3's lens is fixed.
+    /// `None` on a node without the part: camera 3's lens is fixed, and the
+    /// rotating monitor stands on a shaft.
     fn knob_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut f32> {
         Some(match knob {
             Knob::Slide => &mut self.shaft_mut(focus.camera).zoom,
@@ -784,10 +790,15 @@ impl Params {
             Knob::Contrast => &mut self.monitors[focus.monitor].colour.contrast,
             Knob::Temperature => &mut self.monitors[focus.monitor].colour.temperature,
             Knob::Sharpness => &mut self.monitors[focus.monitor].sharpness,
+            Knob::Height => match crate::rig::mount(focus.monitor) {
+                Mount::Slides(s) => &mut self.structures[s].upper,
+                Mount::Rails(s) => &mut self.structures[s].lower.height,
+                Mount::Shaft => return None,
+            },
             Knob::Switcher => &mut self.rig.switchers[focus.switcher],
             Knob::KeyClip => &mut self.rig.keys[focus.switcher].clip,
             Knob::KeyGain => &mut self.rig.keys[focus.switcher].gain,
-            Knob::Delay | Knob::Period | Knob::CutLength | Knob::FrameRate => {
+            Knob::Delay | Knob::Period | Knob::CutLength => {
                 unreachable!("nudge() rounds a count to whole steps")
             }
         })
@@ -797,12 +808,37 @@ impl Params {
     /// bank holds back round to a sixtieth: a button turns one way.
     pub fn turn_shutter(&mut self, c: usize) {
         let (reach, at) = (self.shutter_reach, self.cameras[c].shutter);
-        self.cameras[c].shutter = Shutter::ALL
-            .into_iter()
-            .skip_while(|shutter| *shutter != at)
-            .nth(1)
+        self.cameras[c].shutter = after(&Shutter::ALL, at)
             .filter(|shutter| shutter.earlier() <= reach)
             .unwrap_or(Shutter::Sixtieth);
+    }
+
+    /// From the slowest back round to full: a button turns one way.
+    pub fn turn_rate(&mut self, m: usize) {
+        self.monitors[m].cadence =
+            after(&Cadence::ALL, self.monitors[m].cadence).unwrap_or(Cadence::Full);
+    }
+
+    /// False, and nothing moved, on a monitor that does not turn.
+    pub fn turn_quarter(&mut self, m: usize) -> bool {
+        match crate::rig::mount(m) {
+            Mount::Rails(s) => {
+                self.structures[s].lower.turned = !self.structures[s].lower.turned;
+                true
+            }
+            Mount::Slides(_) | Mount::Shaft => false,
+        }
+    }
+
+    pub fn stand(&self, m: usize) -> Stand {
+        match crate::rig::mount(m) {
+            Mount::Slides(s) => Stand {
+                height: self.structures[s].upper,
+                turned: false,
+            },
+            Mount::Rails(s) => self.structures[s].lower,
+            Mount::Shaft => Stand::default(),
+        }
     }
 
     /// The focused nodes and every knob's value: the only readout the
@@ -824,6 +860,13 @@ impl Params {
             },
             None => String::new(),
         };
+        let stand = match (crate::rig::mount(focus.monitor), self.stand(focus.monitor)) {
+            (Mount::Shaft, _) => "on the shaft".into(),
+            (_, Stand { turned: true, .. }) => {
+                format!("height {}, turned a quarter", reads(Knob::Height))
+            }
+            (_, Stand { turned: false, .. }) => format!("height {}", reads(Knob::Height)),
+        };
         let measure = match self.rig.keys[focus.switcher].measure {
             Measure::Luma => "luma",
             Measure::Chroma => "chroma",
@@ -831,7 +874,7 @@ impl Params {
         format!(
             "cam {}/{}: slide {}  {}  rot {}  shutter 1/{}  {}\n\
              mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \
-             temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}{}\n\
+             temp {}  sharp {}  flip {:?}  rate {}/{}  {}  {}  shows {:.3} of cam {}{}\n\
              sw {}/{}: switcher {}  period {}  cut {}  pattern {}  {} key clip {}  gain {}",
             focus.camera + 1,
             self.cameras.len(),
@@ -849,8 +892,9 @@ impl Params {
             reads(Knob::Temperature),
             reads(Knob::Sharpness),
             self.monitors[focus.monitor].flip,
-            reads(Knob::FrameRate),
+            self.monitors[focus.monitor].cadence.fps(),
             Cadence::SECOND,
+            stand,
             match self.rig.on_program(focus.monitor) {
                 true => "program",
                 false => "direct",
@@ -869,6 +913,10 @@ impl Params {
             reads(Knob::KeyGain),
         )
     }
+}
+
+fn after<T: Copy + PartialEq>(ladder: &[T], at: T) -> Option<T> {
+    ladder.iter().copied().skip_while(|step| *step != at).nth(1)
 }
 
 /// Into `(-pi, pi]`, so a knob spun in one direction never runs away.
@@ -904,7 +952,7 @@ mod tests {
     /// nothing else, so a fraction of one is a turn it rounds away.
     fn step_for(knob: Knob, step: f32) -> f32 {
         match knob {
-            Knob::Delay | Knob::Period | Knob::CutLength | Knob::FrameRate => step.signum(),
+            Knob::Delay | Knob::Period | Knob::CutLength => step.signum(),
             _ => step,
         }
     }
@@ -983,20 +1031,71 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_rate_knob_steps_through_the_rates_and_stops_at_the_slowest() {
+    fn the_rate_turns_slower_and_back_round_to_full_on_its_own_monitor() {
+        use Cadence::*;
         let mut params = p();
-        let focus = Focus::default();
-        assert_eq!(params.monitors[0].cadence, Cadence::Full);
-        for want in [Cadence::Pal, Cadence::Half, Cadence::Film, Cadence::Film] {
-            nudge(&mut params, Knob::FrameRate, 1.0);
-            assert_eq!(params.monitors[0].cadence, want);
+        for want in [Pal, Half, Film, Full, Pal] {
+            params.turn_rate(4);
+            assert_eq!(params.monitors[4].cadence, want);
         }
-        assert_eq!(params.knob(Knob::FrameRate, focus), 3.0);
-        assert!(params.monitors[1..]
-            .iter()
-            .all(|m| m.cadence == Cadence::Full));
-        nudge(&mut params, Knob::FrameRate, -4.0);
-        assert_eq!(params.monitors[0].cadence, Cadence::Full);
+        assert!(params.monitors[..4].iter().all(|m| m.cadence == Full));
+        let at = |m| Focus::default().with(Node::Monitor, m);
+        assert!(params.describe(at(4)).contains("rate 50/60"));
+        assert!(params.describe(at(3)).contains("rate 60/60"));
+    }
+
+    #[test]
+    fn a_monitor_stands_where_its_mount_lets_it() {
+        let mut params = crate::config::instrument();
+        let at = |m| Focus::default().with(Node::Monitor, m);
+        let heights = [0.125, -0.25, 0.375, -0.5, 0.25];
+        for (m, height) in heights.into_iter().enumerate() {
+            params.set(Knob::Height, height, at(m));
+        }
+        let placed = |upper, height| Structure {
+            upper,
+            lower: Stand {
+                height,
+                turned: false,
+            },
+        };
+        assert_eq!(
+            params.structures,
+            [placed(0.125, -0.25), placed(0.375, -0.5)]
+        );
+        assert_eq!(params.stand(4), Stand::default());
+        assert_eq!(params.knob(Knob::Height, at(4)), 0.0);
+        assert!(params
+            .describe(at(4))
+            .contains("rate 60/60  on the shaft  "));
+        for (m, height) in heights[..4].iter().enumerate() {
+            assert_eq!(params.knob(Knob::Height, at(m)), *height);
+        }
+
+        for m in [0, 2, 4] {
+            let before = params.clone();
+            assert!(!params.turn_quarter(m), "monitor {m} turned");
+            assert_eq!(params, before);
+        }
+        assert!(params.turn_quarter(3));
+        let turned = Stand {
+            height: -0.5,
+            turned: true,
+        };
+        assert_eq!(params.stand(3), turned);
+        assert!(!params.stand(1).turned);
+        assert!(params
+            .describe(at(3))
+            .contains("height -0.500, turned a quarter  program"));
+        assert!(params.describe(at(2)).contains("height +0.375  program"));
+        assert!(params.turn_quarter(3));
+        assert_eq!(
+            params.stand(3),
+            Stand {
+                turned: false,
+                ..turned
+            }
+        );
     }
 
     #[test]
@@ -1117,6 +1216,7 @@ mod tests {
         assert_eq!(mon.colour.contrast, 4.0);
         assert_eq!(mon.colour.temperature, 340.0);
         assert_eq!(mon.sharpness, 2.0);
+        assert_eq!(params.structures[0].upper, 0.5);
 
         for _ in 0..10_000 {
             for knob in Knob::ALL {
@@ -1137,6 +1237,7 @@ mod tests {
         assert_eq!(mon.colour.contrast, 0.0);
         assert_eq!(mon.colour.temperature, -100.0);
         assert_eq!(mon.sharpness, 0.0);
+        assert_eq!(params.structures[0].upper, -0.5);
     }
 
     #[test]
@@ -1275,7 +1376,7 @@ mod tests {
         (Knob::Contrast, 1.0),
         (Knob::Temperature, 0.0),
         (Knob::Sharpness, 0.0),
-        (Knob::FrameRate, 0.0),
+        (Knob::Height, 0.0),
         (Knob::Switcher, 1.0),
         (Knob::Period, 0.0),
         (Knob::CutLength, 0.0),
@@ -1795,7 +1896,6 @@ mod tests {
             // A count has no field below zero to poison.
             let pasts = match knob {
                 Knob::Delay | Knob::Period | Knob::CutLength => vec![high + 1.0],
-                Knob::FrameRate => continue,
                 _ => vec![low - 1.0, high + 1.0],
             };
             for past in pasts {

@@ -19,7 +19,7 @@ use std::fmt::{self, Write};
 
 use crate::affine::Framing;
 use crate::input::Input;
-use crate::params::{Camera, Monitor, Node, Params, Shutter};
+use crate::params::{Camera, Monitor, Node, Params, Shutter, Structure};
 
 /// In [`Params::cameras`] order. A and B are on the rotating, sliding shafts,
 /// one per structure; the third watches the rotating monitor alone.
@@ -124,6 +124,16 @@ impl Screen {
         Screen::Rotating,
     ];
 
+    const fn mount(self) -> Mount {
+        match self {
+            Screen::UpperA => Mount::Slides(0),
+            Screen::LowerA => Mount::Rails(0),
+            Screen::UpperB => Mount::Slides(1),
+            Screen::LowerB => Mount::Rails(1),
+            Screen::Rotating => Mount::Shaft,
+        }
+    }
+
     const fn wiring(self) -> (Point, Option<Switcher>) {
         match self {
             Screen::UpperA | Screen::LowerA => (Point::DirectA, Some(Switcher::A)),
@@ -131,6 +141,21 @@ impl Screen {
             Screen::Rotating => (Point::Rotating, None),
         }
     }
+}
+
+/// The build guide's structure: the upper monitor slides up and down in
+/// drawer slides, the lower back and forth on rails under the glass, which
+/// shows it to the camera as up and down, and lifted off its rails the lower
+/// turns a quarter. The rotating monitor moves with camera A's shaft alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mount {
+    Slides(usize),
+    Rails(usize),
+    Shaft,
+}
+
+pub const fn mount(m: usize) -> Mount {
+    Screen::ALL[m].mount()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,6 +292,8 @@ pub const SHAFT_OF: [usize; CAMERAS] = [0, 1, 0];
 
 pub const MONITORS: usize = 5;
 pub const SWITCHERS: usize = 4;
+
+pub const STRUCTURES: usize = 2;
 
 /// The monitors a router select stands in front of: every monitor but the
 /// rotating one, which is wired to camera B and has no select to press. Its
@@ -583,6 +610,7 @@ impl Rig {
             rig: *self,
             shafts: [Framing::identity(); SHAFTS],
             lenses: [Params::NORMAL_LENS; LENSES],
+            structures: [Structure::default(); STRUCTURES],
             cameras: [
                 camera(Cam::A, [0.980, 0.986, 0.992]),
                 camera(Cam::B, [0.992, 0.986, 0.980]),
@@ -893,10 +921,24 @@ mod tests {
     }
 
     #[test]
+    fn a_structures_camera_sees_its_upper_on_slides_and_its_lower_on_rails() {
+        let params = Rig::IDENTITY.params();
+        for (camera, structure) in [(Cam::A, 0), (Cam::B, 1)] {
+            let seen: Vec<Mount> = (0..MONITORS)
+                .filter(|m| params.cameras[camera as usize].look[*m] > 0.0)
+                .map(mount)
+                .collect();
+            assert_eq!(seen, [Mount::Slides(structure), Mount::Rails(structure)]);
+        }
+        assert_eq!(mount(Screen::Rotating as usize), Mount::Shaft);
+    }
+
+    #[test]
     fn the_shafts_start_square_on_and_the_cables_lose_a_little() {
         let params = Rig::IDENTITY.params();
         assert_eq!(params.shafts, [Framing::identity(); SHAFTS]);
         assert_eq!(params.lenses, [Params::NORMAL_LENS; LENSES]);
+        assert_eq!(params.structures, [Structure::default(); STRUCTURES]);
         for camera in &params.cameras {
             assert!(
                 camera.gain.iter().all(|g| 0.9 < *g && *g < 1.0),

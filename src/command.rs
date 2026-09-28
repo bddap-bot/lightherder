@@ -55,6 +55,10 @@ pub enum Action {
     Chroma,
     /// The original sets its cameras by a switch, so this is a button.
     Shutter,
+    /// The router output's frame rate is a switch too.
+    Rate,
+    /// Dead on a monitor that does not turn.
+    Quarter,
 }
 
 /// Which way a control is moving. Only the ones a hand *holds* have two
@@ -102,6 +106,8 @@ impl Action {
             Action::Quantize => "16ths".into(),
             Action::Chroma => "chroma".into(),
             Action::Shutter => "shutter".into(),
+            Action::Rate => "rate".into(),
+            Action::Quarter => "turn".into(),
         }
     }
 }
@@ -143,6 +149,8 @@ mod tests {
             Action::Quantize,
             Action::Chroma,
             Action::Shutter,
+            Action::Rate,
+            Action::Quarter,
             Action::Focus(Node::Camera, 0),
             Action::Record(Edge::Up),
             Action::Cut(Edge::Up),

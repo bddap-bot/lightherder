@@ -19,7 +19,7 @@ use crate::gpu::Gpu;
 use crate::input::Source;
 use crate::midi::{ControlChange, Midi, Shown};
 use crate::overlay::{Overlay, Readout};
-use crate::params::{Focus, Knob, Node, Params, Shutter};
+use crate::params::{Cadence, Focus, Knob, Node, Params, Shutter};
 use crate::present::{Present, View};
 use crate::rig::{Measure, Pattern};
 
@@ -417,6 +417,8 @@ impl App {
             quantize: self.quantize,
             chroma: self.params.rig.keys[self.focus.switcher].measure == Measure::Chroma,
             shutter: self.params.cameras[self.focus.camera].shutter != Shutter::Sixtieth,
+            slowed: self.params.monitors[self.focus.monitor].cadence != Cadence::Full,
+            turned: self.params.stand(self.focus.monitor).turned,
         }
     }
 
@@ -632,6 +634,17 @@ impl App {
             Action::Shutter => {
                 self.params.turn_shutter(self.focus.camera);
                 log::info!("{}", self.params.describe(self.focus));
+            }
+            Action::Rate => {
+                self.params.turn_rate(self.focus.monitor);
+                log::info!("{}", self.params.describe(self.focus));
+            }
+            Action::Quarter => {
+                let monitor = self.focus.monitor;
+                match self.params.turn_quarter(monitor) {
+                    true => log::info!("{}", self.params.describe(self.focus)),
+                    false => log::info!("monitor {} does not turn", monitor + 1),
+                }
             }
         }
     }
@@ -1594,6 +1607,78 @@ mod tests {
     }
 
     #[test]
+    fn m6_turns_the_focused_monitors_rate_and_is_lit_while_it_runs_slow() {
+        use crate::lamps::lamp;
+        use crate::midi::RATE;
+        use Cadence::*;
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        let lit = |app: &App| app.midi.wanted(app.focus, app.shown()) & lamp(RATE) != 0;
+        let rates = |app: &App| app.params.monitors.map(|m| m.cadence);
+        app.act(Action::Focus(Node::Monitor, 4));
+        assert!(!lit(&app));
+        for want in [Pal, Half, Film, Full, Pal] {
+            press(&mut app, &board, RATE);
+            assert_eq!(rates(&app), [Full, Full, Full, Full, want]);
+            assert_eq!(lit(&app), want != Full, "{want:?}");
+        }
+        app.act(Action::Focus(Node::Monitor, 3));
+        assert!(!lit(&app));
+        app.act(Action::Focus(Node::Monitor, 4));
+        assert!(lit(&app));
+        // Rewind puts back the knob last turned, never the rate; Stop does.
+        surface(&mut app, &board, 19, 0);
+        surface(&mut app, &board, 19, 40);
+        press(&mut app, &board, 43);
+        assert_eq!(rates(&app)[4], Pal);
+        press(&mut app, &board, 42);
+        assert_eq!(rates(&app), [Full; 5]);
+        assert!(!lit(&app));
+    }
+
+    #[test]
+    fn m7_turns_a_lower_monitor_a_quarter_and_nothing_else_and_is_lit_while_turned() {
+        use crate::lamps::lamp;
+        use crate::midi::QUARTER;
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        let lit = |app: &App| app.midi.wanted(app.focus, app.shown()) & lamp(QUARTER) != 0;
+        for m in [0, 2, 4] {
+            app.act(Action::Focus(Node::Monitor, m));
+            press(&mut app, &board, QUARTER);
+            assert!(!lit(&app), "monitor {m}");
+        }
+        assert_eq!(app.params, app.initial);
+        app.act(Action::Focus(Node::Monitor, 1));
+        press(&mut app, &board, QUARTER);
+        assert!(lit(&app));
+        assert!(app.params.structures[0].lower.turned);
+        assert!(!app.params.structures[1].lower.turned);
+        app.act(Action::Focus(Node::Monitor, 3));
+        assert!(!lit(&app));
+        press(&mut app, &board, QUARTER);
+        press(&mut app, &board, QUARTER);
+        assert!(!lit(&app));
+        app.act(Action::Focus(Node::Monitor, 1));
+        assert!(lit(&app));
+        // The lower's height rides rotary 4 beside it, and Rewind takes that
+        // back and leaves the turn; Stop squares it.
+        surface(&mut app, &board, 19, 0);
+        surface(&mut app, &board, 19, 40);
+        assert!(app.params.structures[0].lower.height > 0.0);
+        press(&mut app, &board, 43);
+        assert_eq!(app.params.structures[0].lower.height, 0.0);
+        assert!(lit(&app));
+        press(&mut app, &board, 42);
+        assert!(!lit(&app));
+        assert_eq!(app.params, app.initial);
+    }
+
+    #[test]
     fn the_track_pair_zooms_the_focused_cameras_lens_and_rewind_puts_it_back() {
         use crate::midi::{Precision, LENS_PRESS};
         let Some(mut app) = playing(config::instrument()) else {
@@ -1882,10 +1967,7 @@ mod tests {
         };
         let board = plugged(&mut app);
         app.overlay_shown = true;
-        for (rotary, knob, name) in [
-            (18, Knob::Delay, "delay"),
-            (19, Knob::FrameRate, "frame-rate"),
-        ] {
+        for (rotary, knob, name) in [(18, Knob::Delay, "delay"), (19, Knob::Height, "height")] {
             let before = app.readout().reads(knob);
             proof(&app, &format!("{name}-before"), View::Solo(0));
             surface(&mut app, &board, rotary, 20);
@@ -1896,7 +1978,7 @@ mod tests {
             proof(&app, &format!("{name}-after"), View::Solo(0));
         }
         assert_eq!(app.readout().reads(Knob::Delay), "25");
-        assert_eq!(app.readout().reads(Knob::FrameRate), "24");
+        assert_eq!(app.readout().reads(Knob::Height), "+0.211");
     }
 
     #[test]

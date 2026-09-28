@@ -176,6 +176,13 @@ fn play(board: &mut Board, rig: &mut Rig3, words: &[String]) -> Result<(), Strin
         }
         Some("reverse") => board.params.rig.flip(board.focus.switcher),
         Some("flip") => board.params.monitors[board.focus.monitor].flip(axis(arg(1))?),
+        Some("rate") => board.params.turn_rate(board.focus.monitor),
+        Some("quarter") => {
+            let monitor = board.focus.monitor;
+            if !board.params.turn_quarter(monitor) {
+                return Err(format!("monitor {} does not turn", monitor + 1));
+            }
+        }
         Some("cut") => {
             let switcher = board.focus.switcher;
             board.params.rig.flip(switcher);
