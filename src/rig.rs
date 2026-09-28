@@ -34,7 +34,16 @@ enum Cam {
 /// as the camera is: camera 3, past the end, has none.
 pub const UNITS: usize = 2;
 
-const _: () = assert!(Cam::A as usize == 0 && Cam::B as usize == 1 && Cam::Three as usize == UNITS);
+/// The zoom lenses, one on each rotating camera and indexed as the camera
+/// is: camera 3, past the end, has a fixed lens.
+pub const LENSES: usize = 2;
+
+const _: () = assert!(
+    Cam::A as usize == 0
+        && Cam::B as usize == 1
+        && Cam::Three as usize == UNITS
+        && Cam::Three as usize == LENSES
+);
 
 /// The insertion points: the places a delay unit's camera feeds, Loop A's
 /// three then Loop B's four, as the schematic's router blocks have them.
@@ -573,6 +582,7 @@ impl Rig {
         Params {
             rig: *self,
             shafts: [Framing::identity(); SHAFTS],
+            lenses: [Params::NORMAL_LENS; LENSES],
             cameras: [
                 camera(Cam::A, [0.980, 0.986, 0.992]),
                 camera(Cam::B, [0.992, 0.986, 0.980]),
@@ -886,6 +896,7 @@ mod tests {
     fn the_shafts_start_square_on_and_the_cables_lose_a_little() {
         let params = Rig::IDENTITY.params();
         assert_eq!(params.shafts, [Framing::identity(); SHAFTS]);
+        assert_eq!(params.lenses, [Params::NORMAL_LENS; LENSES]);
         for camera in &params.cameras {
             assert!(
                 camera.gain.iter().all(|g| 0.9 < *g && *g < 1.0),

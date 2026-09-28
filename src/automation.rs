@@ -142,7 +142,7 @@ mod tests {
             if pass == 2 {
                 params.nudge(Knob::Temperature, 1.0, at(3));
                 params.nudge(Knob::FrameRate, 1.0, at(3));
-                params.nudge(Knob::Zoom, 0.1, Focus::default());
+                params.nudge(Knob::Slide, 0.1, Focus::default());
             }
             automation.pass(&mut params);
             taken.push(reading(&params, &tracked));
@@ -239,7 +239,7 @@ mod tests {
         }
         automation.press();
         automation.take_back(Knob::Brightness, at(1));
-        automation.take_back(Knob::Zoom, at(4));
+        automation.take_back(Knob::Slide, at(4));
         params.set(Knob::Brightness, -0.3, at(1));
         for pass in 0..6 {
             automation.pass(&mut params);

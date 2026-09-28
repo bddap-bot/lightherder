@@ -55,7 +55,8 @@ monitor or switcher; Cycle shows their values on screen.
 | R1–R4 | Select switcher A, B, C or D. |
 | Faders 1–6 | Monitor hue, saturation, brightness, contrast, temperature, sharpness. |
 | Faders 7–8 | Switcher reversal period (0–60 passes; 0 disables it and undoes a reversal it still holds), crossfade from In1 (down) to In2 (up). |
-| Rotaries 1–3 | Camera zoom, rotation, delay (0–30 frames). A and 3 share zoom and rotation; 3 has no delay unit. |
+| Rotaries 1–3 | Camera slide, rotation, delay (0–30 frames). A and 3 share slide and rotation; 3 has no delay unit. |
+| Track ◀ / ▶ | Zoom the camera's lens out / in, 28–70 mm, up to 13% a press as the precision allows. A's lens magnifies camera A alone, where the slide also moves what 3 sees; 3's lens is fixed. |
 | Rotary 4 | Monitor frame rate: 60, 50, 30 or 24. |
 | Rotary 5 | Precision: a full movement spans 1/64 to all of a continuous control's range. |
 | Rotary 6 | Switcher key gain, 1–1000: raise to harden the key's edge. |
@@ -78,7 +79,7 @@ All faders, and every rotary but 5, change values by movement. A switcher revers
 each beat of its period and of its pattern, and keeps its period, cut length
 and pattern while R1–R4 select another. To start feedback, select switcher B
 with R2 and lower fader 8, then
-select camera B with S2 and turn its zoom and rotation slightly.
+select camera B with S2 and turn its slide and rotation slightly.
 
 ## Topology
 

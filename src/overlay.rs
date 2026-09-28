@@ -1,3 +1,4 @@
+use crate::command::Action;
 use crate::lamps::{lamp, Lamplight};
 use crate::midi::{spot, Precision, Spot, BUTTONS, FADERS, PRECISION, TRANSPORT};
 use crate::params::{End, Flow, Focus, Knob, Node, Params};
@@ -276,6 +277,32 @@ fn group_labels(c: &mut Canvas) {
     }
 }
 
+/// A knob a pair of transport buttons turns has no needle or thumb to show
+/// where it stands, so its name and reading sit over the pair, on the line
+/// the rotaries are captioned on.
+fn stepped_readings(c: &mut Canvas, readout: &Readout) {
+    for knob in Knob::ALL {
+        let span = BUTTONS
+            .iter()
+            .filter_map(|b| match (b.action, spot(b.cc)) {
+                (Action::Turn(turned, _), Some(Spot::Transport(t))) if turned == knob => {
+                    Some(t.col)
+                }
+                _ => None,
+            })
+            .fold(None, |span: Option<(u8, u8)>, col| {
+                Some(span.map_or((col, col), |(lo, hi)| (lo.min(col), hi.max(col))))
+            });
+        let Some((lo, hi)) = span else { continue };
+        c.text_centred(
+            (button_x(lo) + button_x(hi) + BUTTON_W) / 2,
+            ROTARY_CAPTION_Y,
+            &format!("{} {}", knob.name(), readout.reads(knob)),
+            LIT,
+        );
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Control {
     Knob(Knob),
@@ -398,6 +425,7 @@ fn rasterize(readout: &Readout) -> Raster {
     for (cc, control) in controls() {
         place(&mut c, cc, &control, readout);
     }
+    stepped_readings(&mut c, readout);
     c.raster()
 }
 
@@ -954,6 +982,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_lens_reads_over_the_track_pair_and_nothing_else_moves() {
+        let mut params = crate::config::instrument();
+        let focus = Focus::default();
+        let rest = rasterize(&Readout::of(&params, focus, Precision::DEFAULT, 0));
+        params.lenses[0] = 70.0;
+        let moved = Readout::of(&params, focus, Precision::DEFAULT, 0);
+        assert_eq!(moved.reads(Knob::Lens), "70.0");
+        let zoomed = rasterize(&moved);
+        let over_the_pair = |x: i32, y: i32| {
+            (button_x(0)..button_x(1) + BUTTON_W).contains(&x)
+                && (ROTARY_CAPTION_Y..ROTARY_CAPTION_Y + GLYPH).contains(&y)
+        };
+        let mut changed = 0;
+        for y in 0..PANEL_H {
+            for x in 0..PANEL_W {
+                let at = ((y * PANEL_W + x) * 4) as usize;
+                if rest.pixels[at..at + 4] != zoomed.pixels[at..at + 4] {
+                    assert!(over_the_pair(x, y), "a lens moved changed {x},{y}");
+                    changed += 1;
+                }
+            }
+        }
+        assert!(changed > 0, "the lens reads nowhere");
     }
 
     #[test]

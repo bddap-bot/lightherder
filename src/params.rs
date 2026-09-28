@@ -203,6 +203,12 @@ impl Params {
     /// original's dial up to. A bound because the reach is bought in bank:
     /// every frame of it is another picture per unit.
     pub const MAX_DELAY: u32 = 30;
+
+    /// The focal length, in mm, at which a lens adds nothing to its shaft's
+    /// magnification: where every lens starts, and the one a fixed lens has.
+    /// The normal lens of a full-frame camera, inside the 28 to 70 the zoom
+    /// lenses run.
+    pub const NORMAL_LENS: f32 = 50.0;
 }
 
 /// The frame rate of a router output, as the cadence of passes it takes a
@@ -322,6 +328,10 @@ pub struct Params {
     /// A and the rotating monitor share the first, so turning it turns both
     /// and there is nothing to keep in step.
     pub shafts: [Framing; crate::rig::SHAFTS],
+    /// The zoom lenses' focal lengths, in mm, indexed as the cameras are: A
+    /// and B have one, and camera 3, past the end, has a fixed lens. A lens
+    /// magnifies what its own camera sees and nothing else on the shaft.
+    pub lenses: [f32; crate::rig::LENSES],
     pub cameras: [Camera; crate::rig::CAMERAS],
     pub monitors: [Monitor; crate::rig::MONITORS],
     /// The switchers and the router selects: the whole of the routing, and
@@ -419,10 +429,12 @@ impl Focus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Knob {
-    /// The camera's slide along its shaft, which is what a zoom of the image
-    /// is at this end. The lens's own zoom is a setting of its own and not
-    /// this one — see #48.
-    Zoom,
+    /// The camera's slide along its shaft, which magnifies what every camera
+    /// on the shaft sees.
+    Slide,
+    /// The focal length of the camera's zoom lens, which magnifies what that
+    /// camera sees alone.
+    Lens,
     /// The camera's turn about its shaft.
     Rotation,
     /// The frame delay unit on the camera's cable, in whole frames.
@@ -507,8 +519,9 @@ pub enum Limit {
 impl Knob {
     /// Every `for knob in ALL` test is silently vacuous for a knob missing
     /// from this list, including the ones that exist to catch omissions.
-    pub const ALL: [Knob; 15] = [
-        Knob::Zoom,
+    pub const ALL: [Knob; 16] = [
+        Knob::Slide,
+        Knob::Lens,
         Knob::Rotation,
         Knob::Delay,
         Knob::Hue,
@@ -528,7 +541,8 @@ impl Knob {
     /// The one name a knob has: on the overlay, in the log and in an error.
     pub const fn name(self) -> &'static str {
         match self {
-            Knob::Zoom => "zoom",
+            Knob::Slide => "slide",
+            Knob::Lens => "lens",
             Knob::Rotation => "rotation",
             Knob::Delay => "delay",
             Knob::Hue => "hue",
@@ -548,7 +562,7 @@ impl Knob {
 
     pub fn reads(self, value: f32) -> String {
         match self {
-            Knob::Zoom
+            Knob::Slide
             | Knob::Saturation
             | Knob::Contrast
             | Knob::Sharpness
@@ -558,6 +572,7 @@ impl Knob {
             }
             Knob::Rotation | Knob::Hue | Knob::Brightness => format!("{value:+.3}"),
             Knob::Temperature => format!("{value:+.1}"),
+            Knob::Lens => format!("{value:.1}"),
             Knob::KeyGain => format!("{value:.1}"),
             Knob::Delay | Knob::Period | Knob::CutLength => format!("{}", value as u32),
             Knob::FrameRate => format!("{}", Cadence::ALL[value as usize].fps()),
@@ -566,7 +581,7 @@ impl Knob {
 
     pub const fn node(self) -> Node {
         match self {
-            Knob::Zoom | Knob::Rotation | Knob::Delay => Node::Camera,
+            Knob::Slide | Knob::Lens | Knob::Rotation | Knob::Delay => Node::Camera,
             Knob::Hue
             | Knob::Saturation
             | Knob::Brightness
@@ -589,7 +604,9 @@ impl Knob {
             // Whole frames, as far as the lines the graph bought go.
             Knob::Delay => Limit::Whole(params.reach),
             // Zero would divide by zero in the sampling transform.
-            Knob::Zoom => Limit::Ratio(0.25, 4.0),
+            Knob::Slide => Limit::Ratio(0.25, 4.0),
+            // The original's 28-70mm zoom lenses.
+            Knob::Lens => Limit::Ratio(28.0, 70.0),
             // Spinning one way for long enough must not run the number away.
             Knob::Rotation => Limit::Wrap,
             // A phase: it comes back round instead of running away.
@@ -618,13 +635,25 @@ impl Knob {
 }
 
 impl Params {
-    /// How camera `c`'s view is magnified and turned, which is where the
-    /// shaft it stands on stands.
+    /// How camera `c`'s view is magnified and turned: where the shaft it
+    /// stands on stands, magnified again by its own lens.
     pub fn framing(&self, c: usize) -> Framing {
+        let shaft = self.shaft(c);
+        Framing {
+            zoom: shaft.zoom * self.lens(c) / Params::NORMAL_LENS,
+            ..shaft
+        }
+    }
+
+    fn shaft(&self, c: usize) -> Framing {
         self.shafts[crate::rig::SHAFT_OF[c]]
     }
 
-    fn framing_mut(&mut self, c: usize) -> &mut Framing {
+    fn lens(&self, c: usize) -> f32 {
+        self.lenses.get(c).copied().unwrap_or(Params::NORMAL_LENS)
+    }
+
+    fn shaft_mut(&mut self, c: usize) -> &mut Framing {
         &mut self.shafts[crate::rig::SHAFT_OF[c]]
     }
 
@@ -666,8 +695,9 @@ impl Params {
     pub fn knob(&self, knob: Knob, focus: Focus) -> f32 {
         let mon = &self.monitors[focus.monitor];
         match knob {
-            Knob::Zoom => self.framing(focus.camera).zoom,
-            Knob::Rotation => self.framing(focus.camera).rotation,
+            Knob::Slide => self.shaft(focus.camera).zoom,
+            Knob::Lens => self.lens(focus.camera),
+            Knob::Rotation => self.shaft(focus.camera).rotation,
             Knob::Delay => self
                 .rig
                 .delays
@@ -714,7 +744,8 @@ impl Params {
                     Knob::FrameRate => {
                         self.monitors[focus.monitor].cadence = Cadence::ALL[count as usize]
                     }
-                    Knob::Zoom
+                    Knob::Slide
+                    | Knob::Lens
                     | Knob::Rotation
                     | Knob::Hue
                     | Knob::Saturation
@@ -728,19 +759,25 @@ impl Params {
                 }
             }
             Limit::Clamp(low, high) | Limit::Ratio(low, high) => {
-                *self.knob_mut(knob, focus) = value.clamp(low, high);
+                if let Some(at) = self.knob_mut(knob, focus) {
+                    *at = value.clamp(low, high);
+                }
             }
             Limit::Wrap => {
-                *self.knob_mut(knob, focus) = wrap_pi(value);
+                if let Some(at) = self.knob_mut(knob, focus) {
+                    *at = wrap_pi(value);
+                }
             }
         }
     }
 
     /// Every index is one the caller has already landed inside this graph.
-    fn knob_mut(&mut self, knob: Knob, focus: Focus) -> &mut f32 {
-        match knob {
-            Knob::Zoom => &mut self.framing_mut(focus.camera).zoom,
-            Knob::Rotation => &mut self.framing_mut(focus.camera).rotation,
+    /// `None` on a camera without the part: camera 3's lens is fixed.
+    fn knob_mut(&mut self, knob: Knob, focus: Focus) -> Option<&mut f32> {
+        Some(match knob {
+            Knob::Slide => &mut self.shaft_mut(focus.camera).zoom,
+            Knob::Lens => return self.lenses.get_mut(focus.camera),
+            Knob::Rotation => &mut self.shaft_mut(focus.camera).rotation,
             Knob::Hue => &mut self.monitors[focus.monitor].colour.hue,
             Knob::Saturation => &mut self.monitors[focus.monitor].colour.saturation,
             Knob::Brightness => &mut self.monitors[focus.monitor].colour.brightness,
@@ -753,7 +790,7 @@ impl Params {
             Knob::Delay | Knob::Period | Knob::CutLength | Knob::FrameRate => {
                 unreachable!("nudge() rounds a count to whole steps")
             }
-        }
+        })
     }
 
     /// Camera `c`'s shutter a position slower, and from the slowest the
@@ -776,6 +813,10 @@ impl Params {
             Some(_) => format!("delay {}/{}", reads(Knob::Delay), self.reach),
             None => "no delay unit".into(),
         };
+        let lens = match self.lenses.get(focus.camera) {
+            Some(_) => format!("lens {}", reads(Knob::Lens)),
+            None => "fixed lens".into(),
+        };
         let at = match self.rig.point(focus.camera, focus.monitor) {
             Some(point) => match self.rig.inserted[point as usize] {
                 true => format!(" at {}, delayed", point.name()),
@@ -788,13 +829,14 @@ impl Params {
             Measure::Chroma => "chroma",
         };
         format!(
-            "cam {}/{}: zoom {}  rot {}  shutter 1/{}  {}\n\
+            "cam {}/{}: slide {}  {}  rot {}  shutter 1/{}  {}\n\
              mon {}/{}: hue {}  sat {}  bright {}  contrast {}  \
              temp {}  sharp {}  flip {:?}  rate {}/{}  {}  shows {:.3} of cam {}{}\n\
              sw {}/{}: switcher {}  period {}  cut {}  pattern {}  {} key clip {}  gain {}",
             focus.camera + 1,
             self.cameras.len(),
-            reads(Knob::Zoom),
+            reads(Knob::Slide),
+            lens,
             reads(Knob::Rotation),
             self.cameras[focus.camera].shutter.fps(),
             unit,
@@ -989,22 +1031,23 @@ mod tests {
             let middle = (low * high).sqrt();
             let half = knob.limit(&p()).travel() / 2.0;
             let mut params = p();
+            let centred = |params: &Params| (params.knob(knob, focus) / middle - 1.0).abs() < 1e-6;
             params.set(knob, low, focus);
             params.nudge(knob, half, focus);
-            assert!((params.knob(knob, focus) - middle).abs() < 1e-5, "{knob:?}");
+            assert!(centred(&params), "{knob:?}");
             params.set(knob, high, focus);
             params.nudge(knob, -half, focus);
-            assert!((params.knob(knob, focus) - middle).abs() < 1e-5, "{knob:?}");
+            assert!(centred(&params), "{knob:?}");
             params.nudge(knob, 0.3, focus);
             params.nudge(knob, -0.3, focus);
-            assert!((params.knob(knob, focus) - middle).abs() < 1e-5, "{knob:?}");
+            assert!(centred(&params), "{knob:?}");
             params.nudge(knob, 2.0 * half + 1.0, focus);
             assert_eq!(params.knob(knob, focus), high, "{knob:?}");
             // Exactly, which a step through the log would not manage.
             params.set(knob, knob.identity(), focus);
             assert_eq!(params.knob(knob, focus), knob.identity(), "{knob:?}");
         }
-        assert_eq!(ratios, [Knob::Zoom, Knob::KeyGain]);
+        assert_eq!(ratios, [Knob::Slide, Knob::Lens, Knob::KeyGain]);
     }
 
     #[test]
@@ -1062,6 +1105,7 @@ mod tests {
         }
         let mon = &params.monitors[0];
         assert_eq!(params.shafts[0].zoom, 4.0);
+        assert_eq!(params.lenses, [70.0, Params::NORMAL_LENS]);
         assert_eq!(params.rig.delays, [params.reach, 0]);
         assert_eq!(params.rig.periods[0], crate::rig::MAX_PERIOD);
         assert_eq!(params.rig.cut_lengths[0], crate::rig::MAX_PERIOD);
@@ -1081,6 +1125,7 @@ mod tests {
         }
         let mon = &params.monitors[0];
         assert_eq!(params.shafts[0].zoom, 0.25);
+        assert_eq!(params.lenses, [28.0, Params::NORMAL_LENS]);
         assert_eq!(params.rig.delays, [0, 0]);
         assert_eq!(params.rig.periods[0], 0);
         assert_eq!(params.rig.cut_lengths[0], 0);
@@ -1102,15 +1147,40 @@ mod tests {
         // camera index rather than through SHAFT_OF agrees with this one on
         // cameras 1 and 2 and indexes past the end on camera 3.
         params.nudge(Knob::Rotation, 0.3, at(0));
-        params.nudge(Knob::Zoom, -0.2, at(2));
+        params.nudge(Knob::Slide, -0.2, at(2));
         assert_eq!(params.framing(0), params.framing(2));
         assert!(params.framing(0).rotation > 0.0 && params.framing(0).zoom < 1.0);
         assert_eq!(params.framing(1), Framing::identity());
-        params.nudge(Knob::Zoom, 0.1, at(1));
+        params.nudge(Knob::Slide, 0.1, at(1));
         params.nudge(Knob::Rotation, -0.4, at(1));
         assert!((params.framing(0).rotation - 0.3).abs() < 1e-6);
         assert_ne!(params.framing(0).zoom, params.framing(1).zoom);
         assert_ne!(params.framing(0).rotation, params.framing(1).rotation);
+    }
+
+    #[test]
+    fn a_lens_magnifies_its_own_camera_and_nothing_else_on_its_shaft() {
+        let mut params = crate::config::instrument();
+        let at = |camera| Focus::default().with(Node::Camera, camera);
+        params.set(Knob::Slide, 0.8, at(0));
+        params.set(Knob::Lens, 70.0, at(0));
+        assert!((params.framing(0).zoom - 0.8 * 70.0 / 50.0).abs() < 1e-6);
+        assert_eq!(params.knob(Knob::Slide, at(0)), 0.8);
+        assert_eq!(params.framing(2), params.shafts[0]);
+        assert_eq!(params.framing(1), Framing::identity());
+        params.set(Knob::Lens, 28.0, at(1));
+        assert!((params.framing(1).zoom - 28.0 / 50.0).abs() < 1e-6);
+        assert_eq!(params.lenses, [70.0, 28.0]);
+        assert!(params
+            .describe(at(0))
+            .contains("slide 0.800  lens 70.0  rot"));
+
+        let before = params.clone();
+        params.nudge(Knob::Lens, -0.5, at(2));
+        params.reset(Knob::Lens, at(2));
+        assert_eq!(params, before, "camera 3's lens is fixed");
+        assert_eq!(params.knob(Knob::Lens, at(2)), Params::NORMAL_LENS);
+        assert!(params.describe(at(2)).contains("fixed lens"));
     }
 
     #[test]
@@ -1193,8 +1263,9 @@ mod tests {
 
     /// The independent word on where identity is, beside the instrument
     /// [`Knob::identity`] reads it from: the two must agree or one lies.
-    const IDENTITIES: [(Knob, f32); 15] = [
-        (Knob::Zoom, 1.0),
+    const IDENTITIES: [(Knob, f32); 16] = [
+        (Knob::Slide, 1.0),
+        (Knob::Lens, Params::NORMAL_LENS),
         (Knob::Rotation, 0.0),
         (Knob::Delay, 0.0),
         (Knob::Hue, 0.0),
@@ -1732,7 +1803,7 @@ mod tests {
                     Knob::Delay => params.rig.delays[focus.camera] = past as u32,
                     Knob::Period => params.rig.periods[focus.switcher] = past as u32,
                     Knob::CutLength => params.rig.cut_lengths[focus.switcher] = past as u32,
-                    _ => *params.knob_mut(knob, focus) = past,
+                    _ => *params.knob_mut(knob, focus).expect("camera B has a lens") = past,
                 }
                 let why = crate::config::validate(&params)
                     .expect_err(&format!("{name} loaded at {past}"));

@@ -771,7 +771,8 @@ impl Feedback {
         }
         let aspect = self.aspect();
 
-        let framings = params.shafts.map(|shaft| sample_transform(&shaft, aspect));
+        let framings: [_; CAMERAS] =
+            std::array::from_fn(|c| sample_transform(&params.framing(c), aspect));
         // What the seed's tap samples through. It is plugged into the
         // switcher, so nothing frames it: it arrives square on and fills the
         // monitor, which is the identity framing carried through the same
@@ -803,10 +804,9 @@ impl Feedback {
                 if let Some(origin) = origin {
                     edges(params, origin, self.frame, |edge| {
                         let (sampled, gain) = match edge.through {
-                            Through::Camera(c) => (
-                                mirror.then(&framings[crate::rig::SHAFT_OF[c]]),
-                                params.cameras[c].gain,
-                            ),
+                            Through::Camera(c) => {
+                                (mirror.then(&framings[c]), params.cameras[c].gain)
+                            }
                             // Framed when it was recorded: all that is left is
                             // the cable and the router output.
                             Through::Line(c) => (mirror, params.cameras[c].gain),
@@ -857,7 +857,7 @@ impl Feedback {
             );
         }
         for camera in self.shape.recorded() {
-            let framing = framings[crate::rig::SHAFT_OF[camera]];
+            let framing = framings[camera];
             let mut uniforms = Uniforms::zeroed();
             let mut count = 0usize;
             for edge in looks(params, camera, newest) {

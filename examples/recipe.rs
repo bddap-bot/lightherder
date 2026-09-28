@@ -267,12 +267,12 @@ fn main() -> Result<(), String> {
 fn state(board: &Board) -> String {
     let rig = &board.params.rig;
     let mut out = format!(
-        "shafts A+3: zoom {:.4} rotation {:+.4}  B: zoom {:.4} rotation {:+.4}\n\
+        "shafts A+3: slide {:.4} rotation {:+.4}  B: slide {:.4} rotation {:+.4}\n\
          switchers {:.3?} periods {:?}\nselects {:?}",
-        board.params.framing(0).zoom,
-        board.params.framing(0).rotation,
-        board.params.framing(1).zoom,
-        board.params.framing(1).rotation,
+        board.params.shafts[0].zoom,
+        board.params.shafts[0].rotation,
+        board.params.shafts[1].zoom,
+        board.params.shafts[1].rotation,
         rig.switchers,
         rig.periods,
         std::array::from_fn::<_, { rig::SELECTS }, _>(|m| match rig.on_program(m) {

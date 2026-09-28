@@ -93,7 +93,7 @@ pub(crate) const FADERS: [Fader; 15] = [
     fader(5, Knob::Sharpness),
     fader(6, Knob::Period),
     fader(7, Knob::Switcher),
-    fader(16, Knob::Zoom),
+    fader(16, Knob::Slide),
     fader(17, Knob::Rotation),
     fader(18, Knob::Delay),
     fader(19, Knob::FrameRate),
@@ -101,6 +101,11 @@ pub(crate) const FADERS: [Fader; 15] = [
     fader(22, Knob::CutLength),
     fader(23, Knob::KeyClip),
 ];
+
+/// How far a press of a track button turns the lens at full precision, in
+/// the knob's nepers: a seventh of the way from 28 to 70 mm, give or take.
+/// Scaled by the precision as a fader's throw is.
+pub(crate) const LENS_PRESS: f32 = 0.125;
 
 /// Where a control number sits on the panel: the one copy of the device's
 /// physical facts, which the overlay draws off.
@@ -229,8 +234,10 @@ pub(crate) const fn row_of(node: Node) -> u8 {
 /// puts the whole panel back. Cycle shows and hides the overlay that
 /// explains all of the above — the one button whose job survives not
 /// knowing what any button does. Marker set takes a still of the display,
-/// and record records it for as long as a hand stays on it.
-pub(crate) const BUTTONS: [Button; 30] = [
+/// and record records it for as long as a hand stays on it. The track pair
+/// is the focused camera's zoom lens, wider and longer: every rotary is
+/// taken, and a lens is a knob, so each press turns it a step.
+pub(crate) const BUTTONS: [Button; 32] = [
     button(S_ROW, Action::Focus(Node::Camera, 0)),
     button(S_ROW + 1, Action::Focus(Node::Camera, 1)),
     button(S_ROW + 2, Action::Focus(Node::Camera, 2)),
@@ -261,6 +268,8 @@ pub(crate) const BUTTONS: [Button; 30] = [
     button(QUANTIZE, Action::Quantize),
     button(CHROMA, Action::Chroma),
     button(SHUTTER, Action::Shutter),
+    button(58, Action::Turn(Knob::Lens, -LENS_PRESS)),
+    button(59, Action::Turn(Knob::Lens, LENS_PRESS)),
 ];
 
 /// Every control number a button answers to, which is the whole of what the
@@ -756,7 +765,10 @@ impl Midi {
         let down = message.value >= PUSHED;
         let was = std::mem::replace(&mut self.held[usize::from(message.control)], down);
         match (down, was) {
-            (true, false) => Some(button.action),
+            (true, false) => Some(match button.action {
+                Action::Turn(knob, by) => Action::Turn(knob, by * self.precision.gain()),
+                action => action,
+            }),
             (false, true) => crate::command::released(button.action),
             _ => None,
         }
@@ -1525,7 +1537,7 @@ mod tests {
                 fader(5, Knob::Sharpness),
                 fader(6, Knob::Period),
                 fader(7, Knob::Switcher),
-                fader(16, Knob::Zoom),
+                fader(16, Knob::Slide),
                 fader(17, Knob::Rotation),
                 fader(18, Knob::Delay),
                 fader(19, Knob::FrameRate),
@@ -1568,9 +1580,11 @@ mod tests {
                 button(37, Action::Quantize),
                 button(38, Action::Chroma),
                 button(39, Action::Shutter),
+                button(58, Action::Turn(Knob::Lens, -0.125)),
+                button(59, Action::Turn(Knob::Lens, 0.125)),
             ]
         );
-        for cc in [53, 54, 55, 58, 59] {
+        for cc in [53, 54, 55] {
             assert!(!FADERS.iter().any(|f| f.cc == cc), "cc {cc} is bound");
             assert!(!BUTTONS.iter().any(|b| b.cc == cc), "cc {cc} is bound");
         }
@@ -1592,7 +1606,7 @@ mod tests {
     }
 
     #[test]
-    fn every_press_has_exactly_one_button_and_every_knob_a_fader() {
+    fn every_press_has_exactly_one_button_and_every_knob_a_control() {
         for action in [
             Action::Clear,
             Action::Reset,
@@ -1616,9 +1630,15 @@ mod tests {
             let on = BUTTONS.iter().filter(|b| b.action == action).count();
             assert_eq!(on, 1, "{action:?} is on {on} buttons");
         }
+        let turned = |knob: Knob| {
+            FADERS.iter().any(|f| f.knob == knob)
+                || BUTTONS
+                    .iter()
+                    .any(|b| matches!(b.action, Action::Turn(k, _) if k == knob))
+        };
         let missing: Vec<&str> = Knob::ALL
             .into_iter()
-            .filter(|knob| !FADERS.iter().any(|f| f.knob == *knob))
+            .filter(|knob| !turned(*knob))
             .map(Knob::name)
             .collect();
         assert_eq!(missing, [""; 0]);
@@ -1741,6 +1761,35 @@ mod tests {
         midi.drop_port();
         assert_eq!(delay(&mut midi, 112), None);
         assert_eq!(delay(&mut midi, 111), None, "a fresh cable owes nothing");
+    }
+
+    #[test]
+    fn a_track_press_turns_the_lens_a_step_by_the_precision_and_a_release_nothing() {
+        let (mut midi, params) = surface();
+        let press = |midi: &mut Midi, control: u8| {
+            let mut wire = cc(control, 127);
+            wire.extend(cc(control, 0));
+            feed(midi, &params, &wire)
+        };
+        let gain = Precision::DEFAULT.gain();
+        assert_eq!(
+            press(&mut midi, 58),
+            [Action::Turn(Knob::Lens, -LENS_PRESS * gain)]
+        );
+        assert_eq!(
+            press(&mut midi, 59),
+            [Action::Turn(Knob::Lens, LENS_PRESS * gain)]
+        );
+        feed(&mut midi, &params, &cc(PRECISION, 0));
+        assert_eq!(
+            press(&mut midi, 59),
+            [Action::Turn(Knob::Lens, LENS_PRESS / 64.0)]
+        );
+        feed(&mut midi, &params, &cc(PRECISION, 127));
+        assert_eq!(
+            press(&mut midi, 58),
+            [Action::Turn(Knob::Lens, -LENS_PRESS)]
+        );
     }
 
     #[test]
@@ -1899,7 +1948,7 @@ mod tests {
     #[test]
     fn a_dead_control_does_nothing() {
         let (mut midi, params) = surface();
-        for dead in [53, 54, 55, 58, 59, 100] {
+        for dead in [53, 54, 55, 100] {
             assert_eq!(feed(&mut midi, &params, &cc(dead, 127)), [], "cc {dead}");
             assert_eq!(feed(&mut midi, &params, &cc(dead, 0)), [], "cc {dead}");
         }

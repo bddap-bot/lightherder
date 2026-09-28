@@ -43,7 +43,7 @@ reads, and the instrument takes the same spelling as `--seed FORMAT:NAME`.
 
 ## The three levers that shape a scene
 
-- **zoom** decides whether the copies walk inward (a nautilus) or outward (an
+- **slide** decides whether the copies walk inward (a nautilus) or outward (an
   annulus). It is the sensitive one: `0.966` and `1.028` are opposite scenes, and
   everything worth playing lives inside a couple of percent of `1.000`.
 - **rotation** decides how far apart consecutive copies land. Under a degree a pass
@@ -77,7 +77,7 @@ rotary 5 to the top       precision 1/1: a full throw is now the whole travel
 fader 8  -0.95 throw     switcher A almost to In1: camera A's own loop, a twentieth of a
                          seed left in to keep feeding it
 rotary 5 to two-thirds    precision 1/4 again, which is where it starts
-rotary 1 -0.02 throw     zoom 0.986 — the copies walk inward
+rotary 1 -0.02 throw     slide 0.986 — the copies walk inward
 rotary 2 +0.09 throw     rotation +0.141 rad a pass — about eight degrees, far enough
                          apart that each copy reads
 M1                       focus monitor upper A
@@ -89,7 +89,7 @@ fader 2  +0.20 throw     saturation 1.20 — lifts the tint the camera's own gai
 **Lands on:**
 
 ```
-shafts A+3: zoom 0.9862 rotation +0.1414  B: zoom 1.0000 rotation +0.0000
+shafts A+3: slide 0.9862 rotation +0.1414  B: slide 1.0000 rotation +0.0000
 switchers [0.050, 1.000, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 1/5: hue +0.000  sat 1.200  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 1
@@ -113,7 +113,7 @@ R2                       focus switcher B
 rotary 5 to the top       precision 1/1
 fader 8  -0.95 throw     switcher B to 0.05: structure B's own loop
 rotary 5 to two-thirds    precision 1/4
-rotary 1 -0.05 throw     zoom 0.966 — a strong pull inward, so the arm is short and steep
+rotary 1 -0.05 throw     slide 0.966 — a strong pull inward, so the arm is short and steep
 rotary 2 +0.22 throw     rotation +0.346 rad — twenty degrees a copy
 M3                       focus monitor upper B
 fader 2  +0.30 throw     saturation 1.30
@@ -124,7 +124,7 @@ fader 2  +0.30 throw     saturation 1.30
 **Lands on:**
 
 ```
-shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9659 rotation +0.3456
+shafts A+3: slide 1.0000 rotation +0.0000  B: slide 0.9659 rotation +0.3456
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
@@ -143,7 +143,7 @@ One spiral arm sweeping across the frame, about ten nested copies, the colour ru
 
 ```
 as dense-orange-spiral, with a coloured seed, and then
-rotary 1 -0.04 throw     zoom 0.973
+rotary 1 -0.04 throw     slide 0.973
 rotary 2 +0.18 throw     rotation +0.283 rad
 M3
 fader 2  +0.40 throw     saturation 1.40
@@ -156,7 +156,7 @@ fader 1  +0.05 throw     hue +0.079 rad a pass — the phase walks the trail thr
 **Lands on:**
 
 ```
-shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9727 rotation +0.2827
+shafts A+3: slide 1.0000 rotation +0.0000  B: slide 0.9727 rotation +0.2827
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.079  sat 1.400  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
@@ -179,7 +179,7 @@ S2 / R2
 rotary 5 to the top
 fader 8  -0.90 throw     switcher B to 0.10
 rotary 5 to two-thirds
-rotary 1 -0.03 throw     zoom 0.979
+rotary 1 -0.03 throw     slide 0.979
 rotary 2 +0.80 throw     rotation +1.257 rad = 2π/5 exactly. Every fifth copy lands on
                          the first, so the arm closes into a rosette instead of a spiral
 M3
@@ -191,7 +191,7 @@ fader 2  +0.25 throw     saturation 1.25
 **Lands on:**
 
 ```
-shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9794 rotation +1.2566
+shafts A+3: slide 1.0000 rotation +0.0000  B: slide 0.9794 rotation +1.2566
 switchers [1.000, 0.100, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.250  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
@@ -213,7 +213,7 @@ S2 / R2
 rotary 5 to the top
 fader 8  -0.90 throw
 rotary 5 to two-thirds
-rotary 1 -0.012 throw    zoom 0.992 — barely inward, so the copies pile up rather than
+rotary 1 -0.012 throw    slide 0.992 — barely inward, so the copies pile up rather than
                          run away
 rotary 2 +0.05 throw     rotation +0.079 rad — four degrees, tight enough that the copies
                          overlap into lace
@@ -226,7 +226,7 @@ fader 2  +0.10 throw     saturation 1.10 — almost none: this one is a luminanc
 **Lands on:**
 
 ```
-shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9917 rotation +0.0785
+shafts A+3: slide 1.0000 rotation +0.0000  B: slide 0.9917 rotation +0.0785
 switchers [1.000, 0.100, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.100  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.900 of cam 2
@@ -250,7 +250,7 @@ S2 / R2
 rotary 5 to the top
 fader 8  -0.95 throw
 rotary 5 to two-thirds
-rotary 1 +0.04 throw     zoom 1.028 — above one, so the copies blow OUTWARD and leave the
+rotary 1 +0.04 throw     slide 1.028 — above one, so the copies blow OUTWARD and leave the
                          middle empty. This is the only lever that turns a spiral into a
                          ring
 rotary 2 +0.20 throw     rotation +0.314 rad
@@ -263,7 +263,7 @@ fader 2  +0.50 throw     saturation 1.50
 **Lands on:**
 
 ```
-shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 1.0281 rotation +0.3142
+shafts A+3: slide 1.0000 rotation +0.0000  B: slide 1.0281 rotation +0.3142
 switchers [1.000, 0.050, 1.000, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.500  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.950 of cam 2
@@ -292,7 +292,7 @@ R1
 fader 8  -0.85 throw     switcher A to 0.15: structure A keeps its own loop
 rotary 5 to two-thirds
 S2                       focus camera B; camera A stays square on
-rotary 1 -0.02 throw     zoom 0.986
+rotary 1 -0.02 throw     slide 0.986
 rotary 2 +0.09 throw     rotation +0.141
 M3
 fader 2  +0.30 throw     saturation 1.30
@@ -303,7 +303,7 @@ fader 2  +0.30 throw     saturation 1.30
 **Lands on:**
 
 ```
-shafts A+3: zoom 1.0000 rotation +0.0000  B: zoom 0.9862 rotation +0.1414
+shafts A+3: slide 1.0000 rotation +0.0000  B: slide 0.9862 rotation +0.1414
 switchers [0.150, 0.500, 0.200, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 3/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 0.500 of cam 2
@@ -331,10 +331,10 @@ fader 8  -0.95 throw     switcher C to In1 = camera A. Switchers A and B are alr
                          is the whole of Insanity Mode — one fader from reset
 rotary 5 to two-thirds
 S1                       focus camera A
-rotary 1 -0.012 throw    zoom 0.992 — barely inward
+rotary 1 -0.012 throw    slide 0.992 — barely inward
 rotary 2 +0.04 throw     rotation +0.063 rad, under four degrees a pass
 S2                       focus camera B
-rotary 1 -0.05 throw     zoom 0.966 — a much stronger pull
+rotary 1 -0.05 throw     slide 0.966 — a much stronger pull
 rotary 2 -0.35 throw     rotation -0.550 rad, and the other way round
 M1  fader 2 +0.30        saturation 1.30 on upper A
 M3  fader 2 +0.30        saturation 1.30 on upper B
@@ -345,7 +345,7 @@ M3  fader 2 +0.30        saturation 1.30 on upper B
 **Lands on:**
 
 ```
-shafts A+3: zoom 0.9917 rotation +0.0628  B: zoom 0.9659 rotation -0.5498
+shafts A+3: slide 0.9917 rotation +0.0628  B: slide 0.9659 rotation -0.5498
 switchers [1.000, 1.000, 0.050, 1.000] periods [0, 0, 0, 0]
 selects ["program", "program", "program", "program"]
 mon 1/5: hue +0.000  sat 1.300  bright +0.000  contrast 1.000  temp +0.0  sharp 0.000  flip [false, false]  rate 60/60  program  shows 1.000 of cam 2
@@ -387,7 +387,7 @@ and ours carry one. Three things stood between them, and only one is technique:
   whether the trail survives the seed at all — and keying a second loop over the
   first is how the original's densest scenes are made. Fixed: M/E D now keys the
   seed over camera 3, and the frames here are rendered with it. **#71**
-- **One shaft.** Both cameras shared one zoom and one rotation, so two structures
+- **One shaft.** Both cameras shared one slide and one rotation, so two structures
   crossed into each other evolved identically and Insanity Mode came out a
   mirror. Fixed: each structure's camera is framed on its own shaft, camera 3
   riding camera A's, as the schematic draws them. **#75**
@@ -411,7 +411,7 @@ control to a line —
 | --- | --- |
 | `resolution WxH` | how big every monitor is, before the first pass |
 | `seed FORMAT:NAME` | what is on the switcher, as ffmpeg's `-f` and `-i` |
-| `cam N` / `mon N` / `sw N` | the S, M and R select rows; `cam N` also says which shaft a later `turn zoom` or `turn rotation` lands on |
+| `cam N` / `mon N` / `sw N` | the S, M and R select rows; `cam N` also says which shaft a later `turn slide` or `turn rotation` lands on |
 | `turn KNOB THROW` | a fader or rotary moved `THROW` of its travel, signed |
 | `precision X` | rotary 5, where X is its travel: the precision is 2^-6(1-X) |
 | `select` / `reverse` / `flip x` / `flip y` | R8 / R5 / R6 / R7 |

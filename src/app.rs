@@ -1001,7 +1001,7 @@ mod tests {
             return;
         };
         let started = app.params.clone();
-        turn(&mut app, Knob::Zoom, 0.5);
+        turn(&mut app, Knob::Slide, 0.5);
         app.act(Action::Focus(Node::Monitor, 0));
         turn(&mut app, Knob::Contrast, 0.5);
         assert_ne!(app.params, started);
@@ -1031,15 +1031,15 @@ mod tests {
             switcher: 0,
         };
         let before = app.params.clone();
-        assert_ne!(before.knob(Knob::Zoom, app.focus), Knob::Zoom.identity());
+        assert_ne!(before.knob(Knob::Slide, app.focus), Knob::Slide.identity());
         turn(&mut app, Knob::Saturation, 1.0);
-        turn(&mut app, Knob::Zoom, 0.5);
+        turn(&mut app, Knob::Slide, 0.5);
         assert_ne!(app.params, before);
 
         app.act(Action::ResetLastKnob);
         assert_eq!(
-            app.params.knob(Knob::Zoom, app.focus),
-            Knob::Zoom.identity()
+            app.params.knob(Knob::Slide, app.focus),
+            Knob::Slide.identity()
         );
         assert_eq!(
             app.params.knob(Knob::Saturation, app.focus),
@@ -1051,8 +1051,8 @@ mod tests {
         // the one before it.
         app.act(Action::ResetLastKnob);
         assert_eq!(
-            app.params.knob(Knob::Zoom, app.focus),
-            Knob::Zoom.identity()
+            app.params.knob(Knob::Slide, app.focus),
+            Knob::Slide.identity()
         );
         assert_eq!(
             app.params.knob(Knob::Saturation, app.focus),
@@ -1207,13 +1207,13 @@ mod tests {
             return;
         };
 
-        turn(&mut app, Knob::Zoom, 0.5);
+        turn(&mut app, Knob::Slide, 0.5);
         app.act(Action::Focus(Node::Camera, 1));
         let moved = app.params.clone();
         app.act(Action::ResetLastKnob);
         assert_eq!(app.params, moved, "a focus change left the knob named");
 
-        turn(&mut app, Knob::Zoom, 0.5);
+        turn(&mut app, Knob::Slide, 0.5);
         app.act(Action::Reset);
         let reset = app.params.clone();
         app.act(Action::ResetLastKnob);
@@ -1246,10 +1246,10 @@ mod tests {
         app.act(Action::Focus(Node::Switcher, 1));
         assert_eq!(app.last_knob, None, "the switcher moved out from under it");
 
-        turn(&mut app, Knob::Zoom, 0.5);
+        turn(&mut app, Knob::Slide, 0.5);
         app.act(Action::Focus(Node::Monitor, 0));
         app.act(Action::Focus(Node::Switcher, 0));
-        assert_eq!(app.last_knob, Some(Knob::Zoom), "zoom reads neither");
+        assert_eq!(app.last_knob, Some(Knob::Slide), "the slide reads neither");
         app.act(Action::Focus(Node::Camera, 0));
         assert_eq!(app.last_knob, None);
     }
@@ -1591,6 +1591,39 @@ mod tests {
         press(&mut app, &board, 42);
         assert_eq!(shutters(&app), [Sixtieth; 3]);
         assert!(!lit(&app));
+    }
+
+    #[test]
+    fn the_track_pair_zooms_the_focused_cameras_lens_and_rewind_puts_it_back() {
+        use crate::midi::{Precision, LENS_PRESS};
+        let Some(mut app) = playing(config::instrument()) else {
+            return;
+        };
+        let board = plugged(&mut app);
+        let normal = Params::NORMAL_LENS;
+        let step = |app: &App, c: usize| (app.params.lenses[c] / normal).ln();
+        let press_on = Precision::DEFAULT.gain() * LENS_PRESS;
+        app.act(Action::Focus(Node::Camera, 1));
+        press(&mut app, &board, 59);
+        press(&mut app, &board, 59);
+        press(&mut app, &board, 58);
+        assert!((step(&app, 1) - press_on).abs() < 1e-5, "{}", step(&app, 1));
+        assert_eq!(app.params.lenses[0], normal);
+        assert_eq!(app.params.shafts, config::instrument().shafts);
+
+        app.act(Action::Focus(Node::Camera, 2));
+        let before = app.params.clone();
+        press(&mut app, &board, 58);
+        press(&mut app, &board, 59);
+        assert_eq!(app.params, before, "camera 3's lens is fixed");
+
+        app.act(Action::Focus(Node::Camera, 0));
+        press(&mut app, &board, 58);
+        assert!((step(&app, 0) + press_on).abs() < 1e-5);
+        press(&mut app, &board, 43);
+        assert_eq!(app.params.lenses, [normal, before.lenses[1]]);
+        press(&mut app, &board, 42);
+        assert_eq!(app.params.lenses, [normal; 2]);
     }
 
     fn brightness(app: &App) -> f32 {

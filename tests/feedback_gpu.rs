@@ -2995,6 +2995,77 @@ fn camera_3_gathers_its_earlier_pass_as_it_framed_it() {
     }
 }
 
+/// Where the seed's spot lands, in uv on a square monitor, through a lens
+/// of `focal` mm on a shaft square on.
+fn spot_through(focal: f32) -> [f32; 2] {
+    let zoom = focal / Params::NORMAL_LENS;
+    lightherder::affine::screen_to_uv(1.0).apply([SPOT[0] * zoom, SPOT[1] * zoom])
+}
+
+fn landed(found: [f32; 2], want: [f32; 2]) -> bool {
+    (found[0] - want[0]).abs() <= 1.5 / SIZE as f32
+        && (found[1] - want[1]).abs() <= 1.5 / SIZE as f32
+}
+
+#[test]
+fn a_lens_magnifies_its_own_camera_and_not_the_one_watching_its_shaft() {
+    // Camera A, lens long, and camera 3 both watch the seed on monitor 3.
+    // A draws to monitor 1 direct; 3 reaches monitor 3 through the switcher
+    // chain. They share shaft A, so a lens riding the shaft would move camera
+    // 3's spot too, and a lens left out of the camera's view would leave A's
+    // where the seed is.
+    let mut p = blank();
+    p.rig.keys[Switcher::D as usize] = Key::OFF;
+    p.cameras[0].look = one_hot(SEEDED);
+    p.cameras[2].look = one_hot(SEEDED);
+    p.lenses[0] = 70.0;
+    seeding(&mut p);
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    h.feedback.step(h.device, h.queue, &p);
+    p.rig.switchers = [0.0, 1.0, 1.0, 0.0];
+    h.feedback.step(h.device, h.queue, &p);
+    for (m, focal) in [(0, 70.0), (SEEDED, Params::NORMAL_LENS)] {
+        h.present(Some(m));
+        let found = h.read().brightest_uv();
+        let want = spot_through(focal);
+        assert!(
+            landed(found, want),
+            "monitor {}: {found:?}, not {want:?}",
+            m + 1
+        );
+    }
+}
+
+#[test]
+fn a_slow_shutter_gathers_its_earlier_pass_through_the_lens() {
+    // Camera A, lens long and a thirtieth open, on the seed held on monitor
+    // 3, drawing to monitor 1. From pass 2 both halves of its exposure are
+    // the seed through the lens; a picture recorded without the lens would
+    // put half the light back where the seed is.
+    let mut p = blank();
+    p.cameras[0].look = one_hot(SEEDED);
+    p.cameras[0].shutter = Shutter::Thirtieth;
+    p.lenses[0] = 70.0;
+    seeding(&mut p);
+    let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
+        return;
+    };
+    let (long, square) = (spot_through(70.0), spot_through(Params::NORMAL_LENS));
+    for pass in 0..4 {
+        h.feedback.step(h.device, h.queue, &p);
+        h.present(Some(0));
+        let img = h.read();
+        let (there, here) = (img.at(long[0], long[1]), img.at(square[0], square[1]));
+        match pass {
+            0 => assert!(there < 2.0 && here < 2.0, "{there} {here}"),
+            1 => assert!((100.0..160.0).contains(&there), "{there}"),
+            _ => assert!(there > 200.0 && here < 100.0, "pass {pass}: {there} {here}"),
+        }
+    }
+}
+
 fn proof(h: &Harness, name: &str, view: View) {
     let Some(dir) = std::env::var_os("LIGHTHERDER_PROOF_DIR") else {
         return;
