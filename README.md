@@ -31,6 +31,14 @@ The web build (`web/build.sh`) plays from the same board in a browser with Web
 MIDI, such as Chrome or Edge, once the page is allowed MIDI access with system
 exclusive. Its monitors share 1 GiB of GPU memory, so delay reaches 23 frames.
 
+Stills and recording are native-only. The page has no capture output path:
+Marker Set and Record report `capture: lightherder: operation not supported on
+this platform` and save nothing. This is an intentional browser parity gap:
+the current writer needs a local directory and an ffmpeg process. A browser
+writer would need separate encoding and download support; it is not supplied
+by Web MIDI. External screen recording remains outside the instrument, not a
+board-driven equivalent.
+
 | Option | Effect |
 | --- | --- |
 | `--windowed` | Open a window; fullscreen is the default. |
@@ -74,7 +82,7 @@ monitor or switcher; Cycle shows their values on screen.
 | Rewind / Stop | Reset the last knob moved / reset all knobs and patterns. |
 | Marker ▶ | Clear the monitors. |
 | Forward / Cycle | Toggle solo monitor view / control overlay. |
-| Marker Set / Record | Save a still / record while held, in `~/lightherder`. |
+| Marker Set / Record | Native only: save a PNG still / record H.264 MP4 while held, in `~/lightherder`. On the page both are unsupported and save nothing. |
 | Play | While Play is lit, record how faders 1–6 move on every monitor, keeping the last ten minutes; press again to loop those moves, and again to stop the loop and record anew. Moving or resetting a looping fader takes it out of the loop. |
 
 All faders, and every rotary but 5, change values by movement. A switcher reverses on
