@@ -2974,12 +2974,14 @@ fn camera_3_gathers_its_earlier_pass_as_it_framed_it() {
     // monitor 3 shows camera 3 alone, a thirtieth open on it and a quarter
     // turned on shaft A. Pass 1 is half of the spot turned, the other half
     // of the exposure the dark before pass 0; pass 2 is half of that turned
-    // picture as it was taken, and half of the half turned again.
+    // picture as it was taken, and half of the half turned again. Camera A's
+    // lens is long, and camera 3 does not look through it.
     let mut p = blank();
     p.rig.keys[Switcher::D as usize] = Key::OFF;
     p.cameras[2].look = one_hot(SEEDED);
     p.cameras[2].shutter = Shutter::Thirtieth;
     p.shafts[0].rotation = std::f32::consts::FRAC_PI_2;
+    p.lenses[0] = 70.0;
     seeding(&mut p);
     let Some(mut h) = graph_harness((SIZE, SIZE), (SIZE, SIZE), &p) else {
         return;

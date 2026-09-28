@@ -1000,6 +1000,20 @@ mod tests {
             }
         }
         assert!(changed > 0, "the lens reads nowhere");
+        let inked: Vec<i32> = (0..button_x(2))
+            .filter(|x| {
+                (ROTARY_CAPTION_Y..ROTARY_CAPTION_Y + GLYPH).any(|y| {
+                    let at = ((y * PANEL_W + x) * 4) as usize;
+                    zoomed.pixels[at..at + 4] == LIT
+                })
+            })
+            .collect();
+        let (left, right) = (inked[0], inked[inked.len() - 1]);
+        let centre = (button_x(0) + button_x(1) + BUTTON_W) / 2;
+        assert!(
+            ((left + right) / 2 - centre).abs() <= GLYPH,
+            "the reading spans {left}..{right}, not about {centre}"
+        );
     }
 
     #[test]

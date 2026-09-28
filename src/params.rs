@@ -1171,6 +1171,7 @@ mod tests {
         params.set(Knob::Lens, 28.0, at(1));
         assert!((params.framing(1).zoom - 28.0 / 50.0).abs() < 1e-6);
         assert_eq!(params.lenses, [70.0, 28.0]);
+        assert!(params.describe(at(1)).contains("lens 28.0"));
         assert!(params
             .describe(at(0))
             .contains("slide 0.800  lens 70.0  rot"));
