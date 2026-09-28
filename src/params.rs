@@ -204,10 +204,10 @@ impl Params {
     /// every frame of it is another picture per unit.
     pub const MAX_DELAY: u32 = 30;
 
-    /// The focal length, in mm, at which a lens adds nothing to its shaft's
-    /// magnification: where every lens starts, and the one a fixed lens has.
-    /// The normal lens of a full-frame camera, inside the 28 to 70 the zoom
-    /// lenses run.
+    /// The focal length, in mm, at which a zoom lens adds nothing to its
+    /// shaft's magnification, and where every one starts: a full-frame
+    /// camera's normal lens, inside the 28 to 70 the zoom lenses run. A
+    /// fixed lens reads it.
     pub const NORMAL_LENS: f32 = 50.0;
 }
 

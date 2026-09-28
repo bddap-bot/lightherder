@@ -59,6 +59,8 @@ pub(crate) struct Fader {
     pub(crate) knob: Knob,
 }
 
+/// A button bound to [`Action::Turn`] names a throw rather than a turn: the
+/// fraction of the knob's travel a press moves, paid out as a fader's is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Button {
     pub(crate) cc: u8,
@@ -102,10 +104,9 @@ pub(crate) const FADERS: [Fader; 15] = [
     fader(23, Knob::KeyClip),
 ];
 
-/// How far a press of a track button turns the lens at full precision, in
-/// the knob's nepers: a seventh of the way from 28 to 70 mm, give or take.
-/// Scaled by the precision as a fader's throw is.
-pub(crate) const LENS_PRESS: f32 = 0.125;
+/// The throw of a track button: fine enough at the default precision to
+/// step inside the couple of percent a loop is played in.
+pub(crate) const LENS_PRESS: f32 = 1.0 / 32.0;
 
 /// Where a control number sits on the panel: the one copy of the device's
 /// physical facts, which the overlay draws off.
@@ -747,31 +748,35 @@ impl Midi {
         }
         if let Some(fader) = FADERS.iter().find(|f| f.cc == message.control) {
             let steps = f32::from(message.value) - f32::from(from?);
-            let limit = fader.knob.limit(params);
-            let throw = steps / 127.0 * limit.travel();
-            let paid = match limit {
-                Limit::Whole(_) => {
-                    let owed = &mut self.owed[fader.knob as usize];
-                    *owed += throw;
-                    let paid = owed.round();
-                    *owed -= paid;
-                    paid
-                }
-                Limit::Clamp(..) | Limit::Ratio(..) | Limit::Wrap => throw * self.precision.gain(),
-            };
-            return (paid != 0.0).then_some(Action::Turn(fader.knob, paid));
+            return self.pay(fader.knob, steps / 127.0, params);
         }
         let button = BUTTONS.iter().find(|b| b.cc == message.control)?;
         let down = message.value >= PUSHED;
         let was = std::mem::replace(&mut self.held[usize::from(message.control)], down);
-        match (down, was) {
-            (true, false) => Some(match button.action {
-                Action::Turn(knob, by) => Action::Turn(knob, by * self.precision.gain()),
-                action => action,
-            }),
-            (false, true) => crate::command::released(button.action),
+        match (down, was, button.action) {
+            (true, false, Action::Turn(knob, throw)) => self.pay(knob, throw, params),
+            (true, false, action) => Some(action),
+            (false, true, action) => crate::command::released(action),
             _ => None,
         }
+    }
+
+    /// `throw` of `knob`'s travel as the turn it pays: a continuous knob by
+    /// the precision, a count banked up a whole step at a time.
+    fn pay(&mut self, knob: Knob, throw: f32, params: &Params) -> Option<Action> {
+        let limit = knob.limit(params);
+        let moved = throw * limit.travel();
+        let paid = match limit {
+            Limit::Whole(_) => {
+                let owed = &mut self.owed[knob as usize];
+                *owed += moved;
+                let paid = owed.round();
+                *owed -= paid;
+                paid
+            }
+            Limit::Clamp(..) | Limit::Ratio(..) | Limit::Wrap => moved * self.precision.gain(),
+        };
+        (paid != 0.0).then_some(Action::Turn(knob, paid))
     }
 }
 
@@ -1580,8 +1585,8 @@ mod tests {
                 button(37, Action::Quantize),
                 button(38, Action::Chroma),
                 button(39, Action::Shutter),
-                button(58, Action::Turn(Knob::Lens, -0.125)),
-                button(59, Action::Turn(Knob::Lens, 0.125)),
+                button(58, Action::Turn(Knob::Lens, -1.0 / 32.0)),
+                button(59, Action::Turn(Knob::Lens, 1.0 / 32.0)),
             ]
         );
         for cc in [53, 54, 55] {
@@ -1764,32 +1769,25 @@ mod tests {
     }
 
     #[test]
-    fn a_track_press_turns_the_lens_a_step_by_the_precision_and_a_release_nothing() {
+    fn a_track_press_throws_the_lens_as_a_fader_would_and_a_release_nothing() {
         let (mut midi, params) = surface();
+        let travel = Knob::Lens.limit(&params).travel();
         let press = |midi: &mut Midi, control: u8| {
             let mut wire = cc(control, 127);
             wire.extend(cc(control, 0));
-            feed(midi, &params, &wire)
+            match feed(midi, &params, &wire)[..] {
+                [Action::Turn(Knob::Lens, by)] => by / travel,
+                ref other => panic!("{other:?}"),
+            }
         };
+        let close = |have: f32, want: f32| (have - want).abs() < 1e-7;
         let gain = Precision::DEFAULT.gain();
-        assert_eq!(
-            press(&mut midi, 58),
-            [Action::Turn(Knob::Lens, -LENS_PRESS * gain)]
-        );
-        assert_eq!(
-            press(&mut midi, 59),
-            [Action::Turn(Knob::Lens, LENS_PRESS * gain)]
-        );
+        assert!(close(press(&mut midi, 58), -LENS_PRESS * gain));
+        assert!(close(press(&mut midi, 59), LENS_PRESS * gain));
         feed(&mut midi, &params, &cc(PRECISION, 0));
-        assert_eq!(
-            press(&mut midi, 59),
-            [Action::Turn(Knob::Lens, LENS_PRESS / 64.0)]
-        );
+        assert!(close(press(&mut midi, 59), LENS_PRESS / 64.0));
         feed(&mut midi, &params, &cc(PRECISION, 127));
-        assert_eq!(
-            press(&mut midi, 58),
-            [Action::Turn(Knob::Lens, -LENS_PRESS)]
-        );
+        assert!(close(press(&mut midi, 58), -LENS_PRESS));
     }
 
     #[test]

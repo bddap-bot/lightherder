@@ -258,48 +258,40 @@ fn transport_button(c: &mut Canvas, row: u8, col: u8, colour: [u8; 4]) {
     );
 }
 
+/// The middle of the transport columns `cols` span, if there are any.
+fn centre_over(cols: impl Iterator<Item = u8>) -> Option<i32> {
+    let (lo, hi) = cols.fold(None, |span: Option<(u8, u8)>, col| {
+        Some(span.map_or((col, col), |(lo, hi)| (lo.min(col), hi.max(col))))
+    })?;
+    Some((button_x(lo) + button_x(hi) + BUTTON_W) / 2)
+}
+
 fn group_labels(c: &mut Canvas) {
     for (i, t) in TRANSPORT.iter().enumerate() {
         let Some(name) = t.group else { continue };
         if TRANSPORT[..i].iter().any(|e| e.group == Some(name)) {
             continue;
         }
-        let (lo, hi) = TRANSPORT
-            .iter()
-            .filter(|e| e.group == Some(name))
-            .fold((t.col, t.col), |(lo, hi), e| (lo.min(e.col), hi.max(e.col)));
-        c.text_centred(
-            (button_x(lo) + button_x(hi) + BUTTON_W) / 2,
-            ROWS_Y[t.row as usize] - GROUP_LIFT,
-            name,
-            DIM,
-        );
+        let cols = TRANSPORT.iter().filter(|e| e.group == Some(name));
+        if let Some(x) = centre_over(cols.map(|e| e.col)) {
+            c.text_centred(x, ROWS_Y[t.row as usize] - GROUP_LIFT, name, DIM);
+        }
     }
 }
 
-/// A knob a pair of transport buttons turns has no needle or thumb to show
-/// where it stands, so its name and reading sit over the pair, on the line
-/// the rotaries are captioned on.
+/// A knob transport buttons turn has no needle or thumb to show where it
+/// stands, so its name and reading sit over them, on the line the rotaries
+/// are captioned on.
 fn stepped_readings(c: &mut Canvas, readout: &Readout) {
     for knob in Knob::ALL {
-        let span = BUTTONS
-            .iter()
-            .filter_map(|b| match (b.action, spot(b.cc)) {
-                (Action::Turn(turned, _), Some(Spot::Transport(t))) if turned == knob => {
-                    Some(t.col)
-                }
-                _ => None,
-            })
-            .fold(None, |span: Option<(u8, u8)>, col| {
-                Some(span.map_or((col, col), |(lo, hi)| (lo.min(col), hi.max(col))))
-            });
-        let Some((lo, hi)) = span else { continue };
-        c.text_centred(
-            (button_x(lo) + button_x(hi) + BUTTON_W) / 2,
-            ROTARY_CAPTION_Y,
-            &format!("{} {}", knob.name(), readout.reads(knob)),
-            LIT,
-        );
+        let cols = BUTTONS.iter().filter_map(|b| match (b.action, spot(b.cc)) {
+            (Action::Turn(turned, _), Some(Spot::Transport(t))) if turned == knob => Some(t.col),
+            _ => None,
+        });
+        if let Some(x) = centre_over(cols) {
+            let reading = format!("{} {}", knob.name(), readout.reads(knob));
+            c.text_centred(x, ROTARY_CAPTION_Y, &reading, LIT);
+        }
     }
 }
 

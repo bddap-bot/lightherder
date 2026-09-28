@@ -1602,7 +1602,8 @@ mod tests {
         let board = plugged(&mut app);
         let normal = Params::NORMAL_LENS;
         let step = |app: &App, c: usize| (app.params.lenses[c] / normal).ln();
-        let press_on = Precision::DEFAULT.gain() * LENS_PRESS;
+        let press_on =
+            Precision::DEFAULT.gain() * LENS_PRESS * Knob::Lens.limit(&app.params).travel();
         app.act(Action::Focus(Node::Camera, 1));
         press(&mut app, &board, 59);
         press(&mut app, &board, 59);
@@ -1614,7 +1615,7 @@ mod tests {
         app.act(Action::Focus(Node::Camera, 2));
         let before = app.params.clone();
         press(&mut app, &board, 58);
-        press(&mut app, &board, 59);
+        press(&mut app, &board, 58);
         assert_eq!(app.params, before, "camera 3's lens is fixed");
 
         app.act(Action::Focus(Node::Camera, 0));

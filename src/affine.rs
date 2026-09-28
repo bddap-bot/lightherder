@@ -68,9 +68,8 @@ impl Affine2 {
     }
 }
 
-/// How the image a camera sees is magnified and turned on its way back onto
-/// the monitor: where its shaft stands — a camera on a shaft slides and
-/// turns, and nothing on it pans — magnified again by its lens.
+/// How an image is magnified and turned on its way back onto the monitor:
+/// the rig's two freedoms and no others, since nothing on it pans.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Framing {
     /// >1 magnifies the image once per pass.

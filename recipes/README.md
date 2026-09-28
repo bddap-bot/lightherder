@@ -412,7 +412,7 @@ control to a line —
 | `resolution WxH` | how big every monitor is, before the first pass |
 | `seed FORMAT:NAME` | what is on the switcher, as ffmpeg's `-f` and `-i` |
 | `cam N` / `mon N` / `sw N` | the S, M and R select rows; `cam N` also says which shaft a later `turn slide` or `turn rotation` lands on |
-| `turn KNOB THROW` | a fader or rotary moved `THROW` of its travel, signed |
+| `turn KNOB THROW` | a fader or rotary moved `THROW` of its travel, signed; a track press is `turn lens ±0.03125` |
 | `precision X` | rotary 5, where X is its travel: the precision is 2^-6(1-X) |
 | `select` / `reverse` / `flip x` / `flip y` | R8 / R5 / R6 / R7 |
 | `cut` / `release` | marker prev, down and up |

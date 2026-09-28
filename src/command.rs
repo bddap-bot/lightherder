@@ -79,9 +79,10 @@ impl Action {
     /// What the overlay captions a control with: two words at most.
     pub(crate) fn caption(self) -> String {
         match self {
-            Action::Turn(knob, by) => {
-                format!("{} {}", knob.name(), if by < 0.0 { "-" } else { "+" })
-            }
+            Action::Turn(_, by) => match by < 0.0 {
+                true => "-".into(),
+                false => "+".into(),
+            },
             Action::Focus(node, index) => format!("{} {}", node.short(), index + 1),
             Action::Reset => "reset".into(),
             Action::ResetLastKnob => "reset 1".into(),
