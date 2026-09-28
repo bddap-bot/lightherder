@@ -421,4 +421,4 @@ control to a line —
 | `solo` | ▶▶ |
 | `run N` | N passes of the rig's own sixty a second |
 
-Knob names are the ones the overlay shows, with a hyphen for a space: `cut-length`.
+Knob names are the ones the overlay shows; two-word knob names are hyphenated in a recipe.
