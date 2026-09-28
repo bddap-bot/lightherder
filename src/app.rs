@@ -17,7 +17,7 @@ use crate::command::{Action, Edge};
 use crate::feedback::Feedback;
 use crate::gpu::Gpu;
 use crate::input::Source;
-use crate::midi::{Midi, Shown};
+use crate::midi::{ControlChange, Midi, Shown};
 use crate::overlay::{Overlay, Readout};
 use crate::params::{Focus, Knob, Node, Params, Shutter};
 use crate::present::{Present, View};
@@ -756,12 +756,17 @@ impl App {
     /// own rather than the body of the redraw arm, because this half of a
     /// frame needs no window, and so can be played by a test.
     fn surface_frame(&mut self) {
-        for message in self.midi.poll() {
+        let messages = self.midi.poll();
+        self.play(messages);
+        self.midi.show(self.focus, self.shown());
+    }
+
+    fn play(&mut self, messages: Vec<ControlChange>) {
+        for message in messages {
             if let Some(action) = self.midi.action_for(message, &self.params) {
                 self.act(action);
             }
         }
-        self.midi.show(self.focus, self.shown());
     }
 }
 
@@ -826,6 +831,19 @@ impl ApplicationHandler for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, _: ()) {
         event_loop.exit();
+    }
+
+    /// A page's instrument is never dropped, so this is where its surface
+    /// is handed back; a page kept in the back-forward cache is suspended
+    /// instead, and finds the surface again when it is shown.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        let messages = self.midi.close();
+        self.play(messages);
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        let messages = self.midi.close();
+        self.play(messages);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -1170,7 +1188,7 @@ mod tests {
 
     fn plugged(app: &mut App) -> TestSurface {
         let mut surface = app.midi.plug_in_a_test_surface();
-        surface.wire.handshake(0);
+        surface.handshake(0, || app.surface_frame());
         surface
     }
 

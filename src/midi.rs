@@ -1,47 +1,35 @@
-//! The control surface: a Korg nanoKONTROL2 read off ALSA on a thread of its
-//! own, its messages turned into [`Action`]s. It is the whole of what plays
-//! this instrument — there is no keyboard.
+//! The control surface: a Korg nanoKONTROL2, read off ALSA on a thread of its
+//! own or off a page's Web MIDI, its messages turned into [`Action`]s. It is
+//! the whole of what plays this instrument — there is no keyboard.
 //!
 //! Two kinds of control, because a surface has two kinds of thing on it. A
 //! fader or a rotary names a [`Knob`] and turns it by how far it has moved,
 //! never to where it stands — the README says why. A button sends that it
 //! was pushed, so it names an [`Action`].
-//!
-//! ALSA raw MIDI and no library: a USB controller is `/dev/snd/midiC<card>D0`
-//! and reading it gives the wire bytes. Nothing here needs the sequencer's
-//! routing or its timestamps — the instrument acts on a message when it
-//! arrives — so libasound would be a dependency bought for a `File::open`.
-//!
-//! The same node is opened a second time for writing, which is what lights
-//! the focused camera's button — see [`crate::lamps`]. A second open rather
-//! than one read-write handle: a raw MIDI node's two directions are separate
-//! substreams, so the read this instrument has always depended on — the one
-//! that reports the unplug by ending — is left exactly as it was, and a
-//! surface whose output will not open is still a surface that plays.
 
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 use web_time::Instant;
 
 use crate::affine::Axis;
 use crate::command::{Action, Edge};
-use crate::lamps::{lamp, Lamplight, Lamps};
+use crate::lamps::{lamp, Lamplight, Panel};
 use crate::params::{Focus, Knob, Limit, Node, Params};
 
-/// Where ALSA puts its character devices.
-const DEV_SND: &str = "/dev/snd";
+#[cfg(not(target_arch = "wasm32"))]
+use alsa::{Host, Link, Out};
+#[cfg(target_arch = "wasm32")]
+use web_midi::{Host, Link, Out};
 
-/// The one file that says which card is which. `/dev/snd` names a card by
-/// number and nothing else, so a surface cannot be recognised without it.
-const CARDS: &str = "/proc/asound/cards";
-
-/// Matched, case-insensitively, against the lines of [`CARDS`]: the first
-/// sound card whose line contains it is the surface. A substring because the
-/// line carries the driver and the bus as well as the name.
+/// Matched, case-insensitively, against what the host calls each device —
+/// a sound card's line in ALSA's list, a MIDI port's name on a page: the
+/// first that contains it is the surface. A substring because the name
+/// carries the driver, the bus or the port as well.
 pub(crate) const DEVICE: &str = "nanoKONTROL";
+
+fn names_the_surface(name: &str) -> bool {
+    name.to_lowercase().contains(&DEVICE.to_lowercase())
+}
 
 /// How often an absent surface is looked for. Hot-plug with no netlink
 /// socket and no inotify: one small `/proc` read and a handful of stats once a
@@ -423,21 +411,71 @@ impl Precision {
     }
 }
 
-/// One control change, for a test in another module to play into the
-/// instrument. The fields stay private so that nothing outside this module
-/// can invent a message the decoder would never have produced.
-#[cfg(test)]
-pub(crate) fn change(control: u8, value: u8) -> ControlChange {
-    ControlChange { control, value }
+struct Port {
+    link: Link,
+    stream: Stream,
+    /// `None` for a surface that plays and does not light: one with nothing
+    /// to write to, or whose lights have nothing more to say — dropped then,
+    /// with the handle it writes through.
+    panel: Option<Panel<Out>>,
+}
+
+impl Port {
+    fn new(link: Link, out: Option<Out>) -> Port {
+        Port {
+            link,
+            stream: Stream::default(),
+            panel: out.map(|out| Panel::new(out, lamps(), Instant::now())),
+        }
+    }
+
+    /// Every control change heard since the last call, and whether the
+    /// surface is still there. What it says about itself goes to its lights.
+    fn drain(&mut self, into: &mut Vec<ControlChange>) -> bool {
+        let mut heard = Vec::new();
+        let there = self.link.take(&mut heard);
+        let now = Instant::now();
+        let mut messages = Vec::new();
+        for byte in heard {
+            self.stream.push(byte, &mut messages);
+        }
+        for message in messages {
+            match message {
+                Message::Control(cc) => into.push(cc),
+                Message::Sysex(frame) => {
+                    if let Some(panel) = &mut self.panel {
+                        panel.sysex(&frame, now);
+                    }
+                }
+            }
+        }
+        if let Some(panel) = &mut self.panel {
+            panel.tick(now);
+        }
+        if self.panel.as_ref().is_some_and(Panel::done) {
+            self.panel = None;
+        }
+        there
+    }
+
+    fn show(&mut self, want: Lamplight) {
+        if let Some(panel) = &mut self.panel {
+            panel.show(want);
+        }
+    }
+}
+
+impl Drop for Port {
+    fn drop(&mut self) {
+        if let Some(panel) = &mut self.panel {
+            panel.quit();
+        }
+    }
 }
 
 /// The surface, connected or not.
 pub struct Midi {
-    /// Where ALSA is looked for. Constant in the instrument; a parameter so
-    /// that discovery, the open and the decode can be run against a directory
-    /// the tests wrote.
-    snd: PathBuf,
-    cards: PathBuf,
+    host: Host,
     port: Option<Port>,
     /// Where each control was last seen, by control number rather than by
     /// binding: a page turn puts another knob under the same fader, and the
@@ -460,28 +498,30 @@ pub struct Midi {
     complaint: Option<String>,
 }
 
-struct Port {
-    path: PathBuf,
-    rx: Receiver<ControlChange>,
-    /// The surface's lights, when its output opened. `None` is a surface
-    /// that plays and does not light.
-    lamps: Option<Lamps>,
-}
-
 /// The device end of the surface [`Midi::plug_in_a_test_surface`] plugs in.
 #[cfg(test)]
 pub(crate) struct TestSurface {
     pub(crate) wire: crate::lamps::Wire,
-    /// The surface's controls. Held rather than dropped even by a test that
-    /// touches none of them, because a dropped sender is exactly what
+    /// The surface's end of the cable. Held rather than dropped even by a
+    /// test that touches none of it, because a dropped sender is exactly what
     /// [`Midi::poll`] reads as the cable coming out.
-    controls: std::sync::mpsc::Sender<ControlChange>,
+    cable: std::sync::mpsc::Sender<Vec<u8>>,
 }
 
 #[cfg(test)]
 impl TestSurface {
     pub(crate) fn send(&self, control: u8, value: u8) {
-        self.controls.send(change(control, value)).unwrap();
+        self.cable.send(vec![0xB0, control, value]).unwrap();
+    }
+
+    /// Answer the lights' handshake, with `frame` playing the instrument's
+    /// next frame after each answer.
+    pub(crate) fn handshake(&mut self, channel: u8, mut frame: impl FnMut()) {
+        let cable = &self.cable;
+        self.wire.handshake(channel, |answer| {
+            cable.send(answer).unwrap();
+            frame();
+        });
     }
 
     pub(crate) fn press(&self, control: u8) {
@@ -500,8 +540,7 @@ impl Default for Midi {
             owed: [0.0; Knob::ALL.len()],
             precision: Precision::DEFAULT,
             held: [false; 128],
-            snd: PathBuf::from(DEV_SND),
-            cards: PathBuf::from(CARDS),
+            host: Host::default(),
             port: None,
             next_scan: Instant::now(),
             complaint: None,
@@ -527,9 +566,8 @@ impl Midi {
 
     /// Look somewhere other than the real ALSA for the surface. Tests only.
     #[cfg(test)]
-    fn looking_in(mut self, snd: PathBuf, cards: PathBuf) -> Midi {
-        self.snd = snd;
-        self.cards = cards;
+    fn looking_in(mut self, snd: std::path::PathBuf, cards: std::path::PathBuf) -> Midi {
+        self.host = Host { snd, cards };
         self
     }
 
@@ -543,14 +581,14 @@ impl Midi {
     /// and the port is what says there is one.
     #[cfg(test)]
     pub(crate) fn plug_in_a_test_surface(&mut self) -> TestSurface {
-        let (lamps, wire) = crate::lamps::over_a_socket(lamps());
-        let (controls, rx) = std::sync::mpsc::channel();
-        self.port = Some(Port {
-            path: PathBuf::from("a test's surface"),
+        let (out, wire) = crate::lamps::over_a_socket();
+        let (cable, rx) = std::sync::mpsc::channel();
+        let link = Link {
+            path: "a test's surface".into(),
             rx,
-            lamps: Some(lamps),
-        });
-        TestSurface { wire, controls }
+        };
+        self.port = Some(Port::new(link, Some(out)));
+        TestSurface { wire, cable }
     }
 
     /// Every message the surface has sent since the last call, and the
@@ -565,35 +603,38 @@ impl Midi {
     pub fn poll(&mut self) -> Vec<ControlChange> {
         self.connect();
         let mut messages = Vec::new();
-        let mut gone = false;
-        if let Some(port) = &self.port {
-            loop {
-                match port.rx.try_recv() {
-                    Ok(message) => messages.push(message),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        log::info!("surface: {} went away", port.path.display());
-                        gone = true;
-                        break;
-                    }
-                }
+        if let Some(port) = &mut self.port {
+            if !port.drain(&mut messages) {
+                log::info!("surface: {} went away", port.link.name());
+                self.let_go(&mut messages);
             }
         }
-        // The messages already in hand are still this device's, and are
-        // returned; what the unplug takes is the state, not the backlog. Then
-        // every button is let go of, after that backlog, so a held mode ends
-        // the way a release would have ended it rather than outliving the
-        // surface that held it. Every button and not the held ones, because
-        // the backlog may still hold a press; a release of a button nobody
-        // is on is nothing.
-        if gone {
-            self.drop_port();
-            messages.extend(BUTTONS.iter().map(|b| ControlChange {
-                control: b.cc,
-                value: 0,
-            }));
+        messages
+    }
+
+    /// Everything the surface has sent, and then what an unplug hands over:
+    /// for an instrument that is going, or a page put away.
+    pub fn close(&mut self) -> Vec<ControlChange> {
+        let mut messages = Vec::new();
+        if let Some(port) = &mut self.port {
+            port.drain(&mut messages);
+            self.let_go(&mut messages);
         }
         messages
+    }
+
+    /// The messages already in hand are still this device's; what letting
+    /// go takes is the state, not the backlog. Then every button is let go
+    /// of, after that backlog, so a held mode ends the way a release would
+    /// have ended it rather than outliving the surface that held it. Every
+    /// button and not the held ones, because the backlog may still hold a
+    /// press; a release of a button nobody is on is nothing.
+    fn let_go(&mut self, messages: &mut Vec<ControlChange>) {
+        self.drop_port();
+        messages.extend(BUTTONS.iter().map(|b| ControlChange {
+            control: b.cc,
+            value: 0,
+        }));
     }
 
     /// Light the panel for `focus`: the select button of the camera the
@@ -609,10 +650,10 @@ impl Midi {
     /// catches a surface plugged in halfway through a piece, where no focus
     /// change follows to light it. Saying the same panel again costs nothing
     /// on the wire.
-    ///
-    pub fn show(&self, focus: Focus, shown: Shown) {
-        if let Some(lamps) = self.port.as_ref().and_then(|port| port.lamps.as_ref()) {
-            lamps.show(self.wanted(focus, shown));
+    pub fn show(&mut self, focus: Focus, shown: Shown) {
+        let want = self.wanted(focus, shown);
+        if let Some(port) = &mut self.port {
+            port.show(want);
         }
     }
 
@@ -650,9 +691,6 @@ impl Midi {
         want
     }
 
-    /// Let go of the surface. The buttons are not let go of here: `poll`
-    /// hands back the messages that were already in hand and the caller is
-    /// about to press them, so it appends the releases after that backlog.
     fn drop_port(&mut self) {
         self.port = None;
         // The next surface plugged in is standing wherever it was left.
@@ -669,30 +707,14 @@ impl Midi {
             return;
         }
         self.next_scan = Instant::now() + RESCAN;
-        let cards = match std::fs::read_to_string(&self.cards) {
-            Ok(cards) => cards,
-            // Not a missing surface but a missing card list, which is a
-            // different fault and would otherwise look like nothing plugged
-            // in for the whole session.
-            Err(e) => return self.complain(format!("{}: {e}", self.cards.display())),
-        };
-        let mut last = None;
-        for path in find(&self.snd, &cards) {
-            match open(&path, lamps()) {
-                Ok(port) => {
-                    log::info!("surface: {DEVICE} on {}", port.path.display());
-                    self.complaint = None;
-                    self.port = Some(port);
-                    return;
-                }
-                // Kept and tried in turn rather than committed to: two cards
-                // can match one name, and a card's lowest endpoint can be the
-                // one that is busy or output-only.
-                Err(why) => last = Some(why),
+        match self.host.open() {
+            Ok(Some(port)) => {
+                log::info!("surface: {DEVICE} on {}", port.link.name());
+                self.complaint = None;
+                self.port = Some(port);
             }
-        }
-        if let Some(why) = last {
-            self.complain(why);
+            Ok(None) => {}
+            Err(why) => self.complain(why),
         }
     }
 
@@ -741,110 +763,357 @@ impl Midi {
     }
 }
 
-/// The card lines of [`CARDS`]: `" 2 [nanoKONTROL2  ]: USB-Audio - nanoKONTROL2"`.
-/// Each card has a second, indented line as well, which has no number in
-/// front and so is not one of these. The number is the card's, not its place
-/// in the file — unloading a module leaves a gap.
-fn cards(text: &str) -> impl Iterator<Item = (u32, &str)> {
-    text.lines().filter_map(|line| {
-        let index = line.split_whitespace().next()?.parse().ok()?;
-        Some((index, line))
-    })
-}
-
-/// Every raw MIDI endpoint of every card whose line names [`DEVICE`], in
-/// the order to try them. All of them, not the first: two cards can match
-/// one name, and the lowest endpoint of a card can be the one that is busy
-/// or output-only — so the caller opens down the list rather than committing
-/// to a candidate it cannot get past.
-fn find<'a>(snd: &'a Path, cards_text: &'a str) -> impl Iterator<Item = PathBuf> + 'a {
-    let wanted = DEVICE.to_lowercase();
-    cards(cards_text)
-        .filter(move |(_, line)| line.to_lowercase().contains(&wanted))
-        .flat_map(|(card, _)| (0..8).map(move |d| (card, d)))
-        .map(|(card, d)| snd.join(format!("midiC{card}D{d}")))
-        .filter(|path| path.exists())
-}
-
-/// Open the device and read it on a thread, decoding as it goes — and open
-/// it a second time for writing, which is what lights its buttons.
+/// The surface on ALSA raw MIDI, with no library: a USB controller is
+/// `/dev/snd/midiC<card>D0` and reading it gives the wire bytes. Nothing here
+/// needs the sequencer's routing or its timestamps — the instrument acts on a
+/// message when it arrives — so libasound would be a dependency bought for a
+/// `File::open`.
 ///
-/// A thread rather than a non-blocking read polled from the frame loop: a
-/// blocking `read` on a device nobody is touching costs nothing, and it is
-/// the same `read` that reports the unplug. The channel is unbounded because
-/// a button press dropped for backpressure is a press that did not happen,
-/// and a surface sends a kilobyte a second at its very worst.
-///
-/// The write half is its own open, its own thread and its own failure: only
-/// the read decides whether there is a surface at all. A node that will not
-/// open for writing — its output substream already taken by something else —
-/// is a surface that plays without lights, said once and then played.
-fn open(path: &Path, buttons: Lamplight) -> Result<Port, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let lamps = std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .map_err(|e| e.to_string())
-        .and_then(|out| Lamps::spawn(out, buttons));
-    let lamps = match lamps {
-        Ok(lamps) => Some(lamps),
-        Err(why) => {
-            log::warn!(
-                "surface: {} has no lights for the instrument ({why}); its buttons light themselves",
-                path.display()
-            );
-            None
+/// The same node is opened a second time for writing, which is what lights
+/// the focused camera's button — see [`crate::lamps`]. A second open rather
+/// than one read-write handle: a raw MIDI node's two directions are separate
+/// substreams, so the read this instrument has always depended on — the one
+/// that reports the unplug by ending — is left exactly as it was, and a
+/// surface whose output will not open is still a surface that plays.
+#[cfg(not(target_arch = "wasm32"))]
+mod alsa {
+    use std::fs::File;
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc::{Receiver, TryRecvError};
+
+    use super::{names_the_surface, Port};
+
+    /// Where ALSA puts its character devices.
+    const DEV_SND: &str = "/dev/snd";
+
+    /// The one file that says which card is which. `/dev/snd` names a card by
+    /// number and nothing else, so a surface cannot be recognised without it.
+    const CARDS: &str = "/proc/asound/cards";
+
+    /// Where ALSA is looked for. Constant in the instrument; fields so that
+    /// discovery, the open and the decode can be run against a directory the
+    /// tests wrote.
+    pub(super) struct Host {
+        pub(super) snd: PathBuf,
+        pub(super) cards: PathBuf,
+    }
+
+    impl Default for Host {
+        fn default() -> Host {
+            Host {
+                snd: PathBuf::from(DEV_SND),
+                cards: PathBuf::from(CARDS),
+            }
         }
-    };
-    let frames = lamps.as_ref().map(Lamps::frames);
-    let (tx, rx) = std::sync::mpsc::channel();
-    let name = path.to_owned();
-    std::thread::Builder::new()
-        .name("midi".into())
-        .spawn(move || {
-            let mut stream = Stream::default();
-            let mut buf = [0u8; 64];
-            let mut out = Vec::new();
-            loop {
-                let read = match file.read(&mut buf) {
-                    // The device is gone. Dropping `tx` is how the frame loop
-                    // finds out, so there is nothing else to do about it.
-                    Ok(0) => return,
-                    Ok(read) => read,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => return,
-                };
-                for byte in &buf[..read] {
-                    stream.push(*byte, &mut out);
-                }
-                for message in out.drain(..) {
-                    match message {
-                        Message::Control(cc) => {
-                            if tx.send(cc).is_err() {
-                                return;
-                            }
-                        }
-                        Message::Sysex(frame) => {
-                            if let Some(frames) = &frames {
-                                frames.say(frame);
-                            }
-                        }
-                    }
+    }
+
+    impl Host {
+        /// The surface, if it is plugged in and opens. A card list that will
+        /// not read is not a missing surface but a different fault, which
+        /// would otherwise look like nothing plugged in for the whole session.
+        pub(super) fn open(&self) -> Result<Option<Port>, String> {
+            let cards = std::fs::read_to_string(&self.cards)
+                .map_err(|e| format!("{}: {e}", self.cards.display()))?;
+            let mut last = None;
+            for path in find(&self.snd, &cards) {
+                match open(&path) {
+                    Ok(port) => return Ok(Some(port)),
+                    // Kept and tried in turn rather than committed to: two
+                    // cards can match one name, and a card's lowest endpoint
+                    // can be the one that is busy or output-only.
+                    Err(why) => last = Some(why),
                 }
             }
+            last.map_or(Ok(None), Err)
+        }
+    }
+
+    /// The device node opened for writing, non-blocking because the frame
+    /// loop writes it: a wire that is full fails the write, and the lights
+    /// give up, rather than the frame waiting on it.
+    pub(super) type Out = File;
+
+    pub(super) struct Link {
+        pub(super) path: PathBuf,
+        pub(super) rx: Receiver<Vec<u8>>,
+    }
+
+    impl Link {
+        pub(super) fn name(&self) -> String {
+            self.path.display().to_string()
+        }
+
+        /// Whether the device is still there, after handing over what it sent.
+        pub(super) fn take(&mut self, into: &mut Vec<u8>) -> bool {
+            loop {
+                match self.rx.try_recv() {
+                    Ok(bytes) => into.extend(bytes),
+                    Err(TryRecvError::Empty) => return true,
+                    Err(TryRecvError::Disconnected) => return false,
+                }
+            }
+        }
+    }
+
+    /// The card lines of [`CARDS`]: `" 2 [nanoKONTROL2  ]: USB-Audio - nanoKONTROL2"`.
+    /// Each card has a second, indented line as well, which has no number in
+    /// front and so is not one of these. The number is the card's, not its place
+    /// in the file — unloading a module leaves a gap.
+    pub(super) fn cards(text: &str) -> impl Iterator<Item = (u32, &str)> {
+        text.lines().filter_map(|line| {
+            let index = line.split_whitespace().next()?.parse().ok()?;
+            Some((index, line))
         })
-        .map_err(|e| format!("{}: {e}", name.display()))?;
-    Ok(Port {
-        path: name,
-        rx,
-        lamps,
-    })
+    }
+
+    /// Every raw MIDI endpoint of every card whose line names [`super::DEVICE`], in
+    /// the order to try them. All of them, not the first: two cards can match
+    /// one name, and the lowest endpoint of a card can be the one that is busy
+    /// or output-only — so the caller opens down the list rather than committing
+    /// to a candidate it cannot get past.
+    pub(super) fn find<'a>(
+        snd: &'a Path,
+        cards_text: &'a str,
+    ) -> impl Iterator<Item = PathBuf> + 'a {
+        cards(cards_text)
+            .filter(|(_, line)| names_the_surface(line))
+            .flat_map(|(card, _)| (0..8).map(move |d| (card, d)))
+            .map(|(card, d)| snd.join(format!("midiC{card}D{d}")))
+            .filter(|path| path.exists())
+    }
+
+    /// Open the device and read it on a thread — and open it a second time
+    /// for writing, which is what lights its buttons.
+    ///
+    /// A thread rather than a non-blocking read polled from the frame loop: a
+    /// blocking `read` on a device nobody is touching costs nothing, and it is
+    /// the same `read` that reports the unplug. The channel is unbounded because
+    /// a button press dropped for backpressure is a press that did not happen,
+    /// and a surface sends a kilobyte a second at its very worst.
+    ///
+    /// The write half is its own open and its own failure: only the read
+    /// decides whether there is a surface at all. A node that will not open
+    /// for writing — its output substream already taken by something else —
+    /// is a surface that plays without lights, said once and then played.
+    fn open(path: &Path) -> Result<Port, String> {
+        let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let out = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .inspect_err(|why| {
+                log::warn!(
+                    "surface: {} has no lights for the instrument ({why}); its buttons light themselves",
+                    path.display()
+                )
+            })
+            .ok();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("midi".into())
+            .spawn(move || {
+                let mut buf = [0u8; 64];
+                loop {
+                    let read = match file.read(&mut buf) {
+                        // The device is gone. Dropping `tx` is how the frame loop
+                        // finds out, so there is nothing else to do about it.
+                        Ok(0) => return,
+                        Ok(read) => read,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => return,
+                    };
+                    if tx.send(buf[..read].to_vec()).is_err() {
+                        return;
+                    }
+                }
+            })
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let link = Link {
+            path: path.to_owned(),
+            rx,
+        };
+        Ok(Port::new(link, out))
+    }
+}
+
+/// The surface on a page: Web MIDI, asked for with system exclusive, which is
+/// what the lights' handshake speaks.
+#[cfg(target_arch = "wasm32")]
+mod web_midi {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::js_sys::{Function, Iterator, Uint8Array};
+    use web_sys::{
+        MidiAccess, MidiInput, MidiMessageEvent, MidiOptions, MidiOutput, MidiPort,
+        MidiPortDeviceState,
+    };
+
+    use super::{names_the_surface, Port};
+
+    fn js(e: JsValue) -> String {
+        format!("{e:?}")
+    }
+
+    enum Access {
+        Asking,
+        Granted(MidiAccess),
+        Refused(String),
+    }
+
+    pub(super) struct Host(Rc<RefCell<Access>>);
+
+    impl Default for Host {
+        fn default() -> Host {
+            let access = Rc::new(RefCell::new(Access::Asking));
+            let answer = access.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                *answer.borrow_mut() = match ask().await {
+                    Ok(access) => Access::Granted(access),
+                    Err(why) => Access::Refused(why),
+                };
+            });
+            Host(access)
+        }
+    }
+
+    async fn ask() -> Result<MidiAccess, String> {
+        let options = MidiOptions::new();
+        options.set_sysex(true);
+        let asked = web_sys::window()
+            .ok_or("no window")?
+            .navigator()
+            .request_midi_access_with_options(&options)
+            .map_err(|e| format!("this browser has no Web MIDI: {}", js(e)))?;
+        JsFuture::from(asked)
+            .await
+            .map(JsCast::unchecked_into)
+            .map_err(|e| format!("the page may not use MIDI: {}", js(e)))
+    }
+
+    impl Host {
+        pub(super) fn open(&self) -> Result<Option<Port>, String> {
+            let access = match &*self.0.borrow() {
+                Access::Asking => return Ok(None),
+                Access::Refused(why) => return Err(why.clone()),
+                Access::Granted(access) => access.clone(),
+            };
+            let Some(input) = find::<MidiInput>(access.inputs().values()) else {
+                return Ok(None);
+            };
+            let out = find::<MidiOutput>(access.outputs().values()).map(Out);
+            if out.is_none() {
+                log::warn!(
+                    "surface: {} has no output port; its buttons light themselves",
+                    input.name().unwrap_or_default()
+                );
+            }
+            Ok(Some(Port::new(Link::open(input), out)))
+        }
+    }
+
+    /// The first port of a map that is plugged in and names the surface. An
+    /// input and an output are paired by that alone: a browser does not say
+    /// which of its ports are one device, and names them differently on
+    /// different systems.
+    fn find<T: JsCast>(ports: Iterator) -> Option<T> {
+        ports
+            .into_iter()
+            .filter_map(Result::ok)
+            .map(JsCast::unchecked_into::<MidiPort>)
+            .find(|port| {
+                port.state() == MidiPortDeviceState::Connected
+                    && port.name().is_some_and(|name| names_the_surface(&name))
+            })
+            .map(JsCast::unchecked_into)
+    }
+
+    pub(super) struct Out(MidiOutput);
+
+    impl std::io::Write for Out {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .send(&Uint8Array::from(bytes))
+                .map_err(|e| std::io::Error::other(js(e)))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A disconnection is latched as it happens: the frame loop pauses with
+    /// a hidden tab, and a board unplugged and plugged back in by then would
+    /// otherwise never have gone.
+    pub(super) struct Link {
+        input: MidiInput,
+        heard: Rc<RefCell<Vec<u8>>>,
+        gone: Rc<Cell<bool>>,
+        _heard: Closure<dyn FnMut(MidiMessageEvent)>,
+        _gone: Closure<dyn FnMut(JsValue)>,
+    }
+
+    impl Link {
+        fn open(input: MidiInput) -> Link {
+            let heard = Rc::new(RefCell::new(Vec::new()));
+            let gone = Rc::new(Cell::new(false));
+            let on_message = Closure::<dyn FnMut(MidiMessageEvent)>::new({
+                let heard = heard.clone();
+                move |event: MidiMessageEvent| {
+                    if let Ok(bytes) = event.data() {
+                        heard.borrow_mut().extend(bytes);
+                    }
+                }
+            });
+            let on_state = Closure::<dyn FnMut(JsValue)>::new({
+                let (gone, input) = (gone.clone(), input.clone());
+                move |_: JsValue| {
+                    if input.state() == MidiPortDeviceState::Disconnected {
+                        gone.set(true);
+                    }
+                }
+            });
+            input.set_onmidimessage(Some(on_message.as_ref().unchecked_ref::<Function>()));
+            input.set_onstatechange(Some(on_state.as_ref().unchecked_ref::<Function>()));
+            Link {
+                input,
+                heard,
+                gone,
+                _heard: on_message,
+                _gone: on_state,
+            }
+        }
+
+        pub(super) fn name(&self) -> String {
+            self.input.name().unwrap_or_default()
+        }
+
+        pub(super) fn take(&mut self, into: &mut Vec<u8>) -> bool {
+            into.extend(self.heard.take());
+            !self.gone.get() && self.input.state() == MidiPortDeviceState::Connected
+        }
+    }
+
+    impl Drop for Link {
+        fn drop(&mut self) {
+            self.input.set_onmidimessage(None);
+            self.input.set_onstatechange(None);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::alsa::{cards, find};
     use super::*;
     use std::io::Write;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn the_transport_grid_is_arranged_the_way_the_device_is() {
@@ -1195,6 +1464,24 @@ mod tests {
     }
 
     #[test]
+    fn a_surface_that_is_there_and_will_not_open_is_a_fault_and_not_an_absence() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("unopenable");
+        let cards = dir.join("cards");
+        std::fs::write(&cards, SAMPLE_CARDS).unwrap();
+        let node = dir.join("midiC5D0");
+        std::fs::write(&node, "").unwrap();
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let opened = alsa::Host {
+            snd: dir.clone(),
+            cards,
+        }
+        .open();
+        assert!(matches!(&opened, Err(why) if why.contains("midiC5D0")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_card_with_no_raw_midi_device_is_not_a_surface() {
         let dir = scratch("no-device");
         assert!(found(&dir, SAMPLE_CARDS).is_empty());
@@ -1518,6 +1805,28 @@ mod tests {
     }
 
     #[test]
+    fn closing_lets_go_of_the_surface_as_an_unplug_does_after_what_it_said() {
+        let (mut midi, params) = surface();
+        let surface = midi.plug_in_a_test_surface();
+        surface.press(45);
+        let pressed: Vec<Action> = midi
+            .poll()
+            .into_iter()
+            .filter_map(|m| midi.action_for(m, &params))
+            .collect();
+        assert_eq!(pressed, [Action::Record(Edge::Down)]);
+        surface.press(60);
+        let closed: Vec<Action> = midi
+            .close()
+            .into_iter()
+            .filter_map(|m| midi.action_for(m, &params))
+            .collect();
+        assert_eq!(closed, [Action::Screencap, Action::Record(Edge::Up)]);
+        assert!(midi.port.is_none());
+        assert!(midi.held.iter().all(|held| !held));
+    }
+
+    #[test]
     fn a_button_acts_when_it_goes_down_and_not_when_it_comes_up() {
         let (mut midi, params) = surface();
         assert_eq!(feed(&mut midi, &params, &cc(SELECT, 127)), [Action::Select]);
@@ -1666,7 +1975,9 @@ mod tests {
     fn the_focused_node_s_lamp_reaches_the_wire() {
         let mut midi = Midi::default();
         let mut surface = midi.plug_in_a_test_surface();
-        surface.wire.handshake(0);
+        surface.handshake(0, || {
+            midi.poll();
+        });
         let home = lamp(S_ROW) | lamp(M_ROW) | lamp(R_ROW);
         midi.show(Focus::default(), Shown::default());
         assert!(
