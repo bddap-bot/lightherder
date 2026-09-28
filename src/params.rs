@@ -1048,6 +1048,9 @@ mod tests {
     fn a_monitor_stands_where_its_mount_lets_it() {
         let mut params = crate::config::instrument();
         let at = |m| Focus::default().with(Node::Monitor, m);
+        let before = params.clone();
+        params.set(Knob::Height, 0.25, at(4));
+        assert_eq!(params, before, "the rotating monitor has no height");
         let heights = [0.125, -0.25, 0.375, -0.5, 0.25];
         for (m, height) in heights.into_iter().enumerate() {
             params.set(Knob::Height, height, at(m));
