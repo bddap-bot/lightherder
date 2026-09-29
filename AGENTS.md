@@ -15,7 +15,7 @@ is an unfinished landing, not a done one.
 3. No code comments. Prose lives here or in the README.
 
 `scripts/landing check` proves 1 and 2; it is the `landing` entry of `test-map.json`, which
-the botq gate runs before it accepts a `done`.
+the landing gate runs before it accepts a change.
 
 ## Boundaries
 

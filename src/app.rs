@@ -258,11 +258,11 @@ impl Live {
         // frame in a piece whose look is the whole point, and Immediate buys
         // nothing here now that the display no longer keeps the pass clock
         // (#16). It is not the clock — [`Clock`] is — because the vertical blank
-        // Fifo stands in for is the compositor's to invent, and the TV's
-        // nested gamescope invents a grid of about 72 Hz (#11).
+        // Fifo stands in for is the compositor's to invent, and a nested
+        // compositor can invent a grid of about 72 Hz (#11).
         config.present_mode = wgpu::PresentMode::Fifo;
-        // Focused under that same gamescope a presented buffer comes back one
-        // composite hop late (app → Xwayland → gamescope 4K → GNOME), and at
+        // Focused under that same nesting a presented buffer comes back one
+        // composite hop late (app → Xwayland → nested compositor → host), and at
         // the default latency of two the acquire blocks for a whole slot: the
         // piece is shown 40 times a second instead of 60 (#11 — measured; GPU
         // and compositor were both idle-fast, the main thread sat in DRM
