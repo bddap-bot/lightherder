@@ -2,26 +2,26 @@
 
 Edit by subtraction: resolve a problem by deleting code; a tactical patch over a symptom is not accepted. One implementation per thing, never two alive.
 
-Every push to `main` has two deploy targets, and a landing is complete only when both hold.
-This binds EVERY landing, test-only and doc-only changes included: the TV binary must equal
-the release build of HEAD, not merely behave like it. Both or neither — a lagging TV binary
-is an unfinished landing, not a done one.
+Delete code comments; keep only a why the code cannot show.
 
-1. The TV binary equals `cargo build --release` of `main` HEAD (same sha256). Its install
-   path belongs to the landing machine: `scripts/landing` reads it from
-   `${XDG_CONFIG_HOME:-~/.config}/lightherder/tv-binary`, one absolute path, and refuses to
-   run without it. `scripts/landing deploy` installs the binary by rename swap and launches
-   nothing; the TV picks it up on its next start.
-2. The `pages` workflow is green on that same sha. It runs on push; if it is red, say so
-   rather than re-triggering blindly.
-3. No code comments. Prose lives here or in the README.
+Every landing, including prose and tests, has two deployment requirements:
 
-`scripts/landing check` proves 1 and 2; it is the `landing` entry of `test-map.json`, which
-the landing gate runs before it accepts a change.
+1. The installed TV binary has the same SHA-256 as `cargo build --release` of
+   `main` HEAD. Configure its destination as described by
+   [scripts/landing](scripts/landing). `scripts/landing deploy` installs by rename
+   swap without launching; the TV picks it up on its next start.
+2. The `pages` workflow succeeds on that commit. Report a failure before retrying.
+
+`scripts/landing check`, the landing entry in [test-map.json](test-map.json),
+checks both requirements.
 
 ## Boundaries
 
-This lightherder repository names only its own components. Name another project only as a declared, versioned dependency, never through its internals. Give a needed shared service a neutral name owned by this project. Do not import the environment of machines running agents: hostnames, addresses, paths outside the repository, service or queue names, credentials, camera frames, or renders of private places. No person's name, schedule or presence enters the repository. Before landing, grep the diff for other projects' names and host details. Remove host details and undeclared project references; dependency declarations expose only the dependency's name and version.
+Keep this project independent. Reference other projects only as declared, versioned
+dependencies, exposing names and versions rather than internals. Give shared services
+neutral project-owned names. Exclude deployment-specific paths, addresses, service
+or queue names, credentials, camera frames and private renders. Before landing,
+inspect the diff for undeclared project references and deployment details.
 
 ## Build and test details
 
